@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Henry">
+  <!-- Direction C — "Meridian": the indigo glass orb crossed by one luminous meridian ring,
+       amber (the user) meeting green (Henry) in a bright point of light at the front. -->
+  <defs>
+    <radialGradient id="c-bg" cx="50%" cy="44%" r="78%">
+      <stop offset="0" stop-color="#0a0d1b"/>
+      <stop offset=".55" stop-color="#070812"/>
+      <stop offset="1" stop-color="#060710"/>
+    </radialGradient>
+    <radialGradient id="c-field" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="250">
+      <stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>
+      <stop offset=".55" stop-color="#6366f1" stop-opacity=".22"/>
+      <stop offset=".72" stop-color="#6f5cf4" stop-opacity=".08"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="c-core" cx="36%" cy="31%" r="92%">
+      <stop offset="0" stop-color="#9aa5ff"/>
+      <stop offset=".28" stop-color="#6873f2"/>
+      <stop offset=".58" stop-color="#3a3f9e"/>
+      <stop offset=".84" stop-color="#191d4a"/>
+      <stop offset="1" stop-color="#0e1130"/>
+    </radialGradient>
+    <radialGradient id="c-depth" cx="50%" cy="112%" r="95%">
+      <stop offset="0" stop-color="#05060f" stop-opacity=".72"/>
+      <stop offset=".55" stop-color="#05060f" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#05060f" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="c-spec" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".92"/>
+      <stop offset=".5" stop-color="#ffffff" stop-opacity=".30"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="c-rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b4bcff" stop-opacity=".95"/>
+      <stop offset=".5" stop-color="#8b93f7" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#8b93f7" stop-opacity=".10"/>
+    </linearGradient>
+    <!-- amber (user) -> bright meeting point -> green (Henry), along the ring -->
+    <linearGradient id="c-ring" gradientUnits="userSpaceOnUse" x1="-184" y1="0" x2="184" y2="0">
+      <stop offset="0" stop-color="#f2ac46"/>
+      <stop offset=".40" stop-color="#ffcf7a"/>
+      <stop offset=".50" stop-color="#fff1cf"/>
+      <stop offset=".60" stop-color="#8fe9c0"/>
+      <stop offset="1" stop-color="#3ecf9a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#c-bg)"/>
+  <circle cx="256" cy="256" r="250" fill="url(#c-field)"/>
+
+  <!-- back of the ring (dimmer; the sphere occludes its middle) -->
+  <g transform="translate(256 256) rotate(-22)" fill="none">
+    <ellipse rx="184" ry="58" stroke="url(#c-ring)" stroke-width="20" stroke-opacity=".08"/>
+    <ellipse rx="184" ry="58" stroke="url(#c-ring)" stroke-width="8"  stroke-opacity=".30"/>
+  </g>
+
+  <!-- glass core -->
+  <circle cx="256" cy="256" r="134" fill="url(#c-core)"/>
+  <circle cx="256" cy="256" r="134" fill="url(#c-depth)"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#9aa5ff" stroke-opacity=".10" stroke-width="6"/>
+  <ellipse cx="213" cy="209" rx="60" ry="41" transform="rotate(-27 213 209)" fill="url(#c-spec)"/>
+  <circle cx="256" cy="256" r="134" fill="none" stroke="url(#c-rim)" stroke-width="3.5"/>
+
+  <!-- front of the ring, passing across the sphere (soft glow under a crisp stroke) -->
+  <g transform="translate(256 256) rotate(-22)" fill="none" stroke-linecap="round">
+    <path d="M -184 0 A 184 58 0 0 0 184 0" stroke="url(#c-ring)" stroke-width="32" stroke-opacity=".17"/>
+    <path d="M -184 0 A 184 58 0 0 0 184 0" stroke="url(#c-ring)" stroke-width="13"/>
+  </g>
+</svg>

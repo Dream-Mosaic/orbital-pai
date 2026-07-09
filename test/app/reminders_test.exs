@@ -1,0 +1,144 @@
+defmodule App.RemindersTest do
+  use App.DataCase, async: false
+  alias App.Reminders
+  alias App.Reminders.Scheduler
+  alias App.Users
+
+  setup do
+    Application.put_env(:app, :allowed_users, [
+      %{email: "d@x.com", name: "Alice"},
+      %{email: "t@x.com", name: "Bob"}
+    ])
+
+    on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+    {:ok, d} = Users.upsert_allowed("d@x.com")
+    {:ok, t} = Users.upsert_allowed("t@x.com")
+    %{d: d.id, t: t.id}
+  end
+
+  defp at(offset_s) do
+    DateTime.utc_now() |> DateTime.add(offset_s, :second) |> DateTime.truncate(:second)
+  end
+
+  test "create + list_upcoming returns unfired future reminders, soonest first", %{d: d} do
+    {:ok, _} = Reminders.create(%{body: "later", due_at: at(7200), user_id: d})
+    {:ok, _} = Reminders.create(%{body: "soon", due_at: at(3600), user_id: d})
+
+    assert ["soon", "later"] = Reminders.list_upcoming(d) |> Enum.map(& &1.body)
+  end
+
+  test "list_upcoming is scoped to the owning user", %{d: d, t: t} do
+    {:ok, _} = Reminders.create(%{body: "mine", due_at: at(3600), user_id: d})
+    {:ok, _} = Reminders.create(%{body: "theirs", due_at: at(3600), user_id: t})
+
+    assert Enum.map(Reminders.list_upcoming(d), & &1.body) == ["mine"]
+    assert Enum.map(Reminders.list_upcoming(t), & &1.body) == ["theirs"]
+  end
+
+  test "due_now returns past-due unfired reminders, not future ones", %{d: d} do
+    {:ok, past} = Reminders.create(%{body: "now", due_at: at(-60), user_id: d})
+    {:ok, _future} = Reminders.create(%{body: "tomorrow", due_at: at(3600), user_id: d})
+
+    due = Reminders.due_now()
+    assert Enum.map(due, & &1.id) == [past.id]
+  end
+
+  test "mark_fired stamps fired_at and removes it from due_now", %{d: d} do
+    {:ok, r} = Reminders.create(%{body: "ping", due_at: at(-10), user_id: d})
+    assert {:ok, fired} = Reminders.mark_fired(r)
+    assert fired.fired_at != nil
+    assert Reminders.due_now() == []
+  end
+
+  test "acknowledged_at persists (schema cast + migration column)", %{d: d} do
+    {:ok, r} = Reminders.create(%{body: "x", due_at: at(-10), user_id: d})
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, _updated} =
+      r |> App.Reminders.Reminder.changeset(%{acknowledged_at: now}) |> App.Repo.update()
+
+    assert App.Repo.reload!(r).acknowledged_at == now
+  end
+
+  test "list_unacknowledged returns fired-but-unacknowledged, excludes unfired + acknowledged", %{
+    d: d
+  } do
+    {:ok, _unfired} = Reminders.create(%{body: "future", due_at: at(3600), user_id: d})
+    {:ok, f} = Reminders.create(%{body: "fired", due_at: at(-60), user_id: d})
+    {:ok, fired} = Reminders.mark_fired(f)
+    {:ok, a} = Reminders.create(%{body: "acked", due_at: at(-90), user_id: d})
+    {:ok, acked} = Reminders.mark_fired(a)
+    {:ok, _} = Reminders.acknowledge(acked)
+
+    assert Enum.map(Reminders.list_unacknowledged(d), & &1.body) == ["fired"]
+    assert hd(Reminders.list_unacknowledged(d)).id == fired.id
+  end
+
+  test "list_unacknowledged is scoped to the owning user", %{d: d, t: t} do
+    {:ok, mine} = Reminders.create(%{body: "mine", due_at: at(-60), user_id: d})
+    {:ok, _} = Reminders.mark_fired(mine)
+    {:ok, theirs} = Reminders.create(%{body: "theirs", due_at: at(-60), user_id: t})
+    {:ok, _} = Reminders.mark_fired(theirs)
+
+    assert Enum.map(Reminders.list_unacknowledged(d), & &1.body) == ["mine"]
+    assert Enum.map(Reminders.list_unacknowledged(t), & &1.body) == ["theirs"]
+  end
+
+  test "acknowledge stamps acknowledged_at and drops it from list_unacknowledged", %{d: d} do
+    {:ok, r} = Reminders.create(%{body: "a", due_at: at(-120), user_id: d})
+    {:ok, fired} = Reminders.mark_fired(r)
+    assert [%{body: "a"}] = Reminders.list_unacknowledged(d)
+
+    assert {:ok, ack} = Reminders.acknowledge(fired)
+    assert ack.acknowledged_at != nil
+    assert Reminders.list_unacknowledged(d) == []
+  end
+
+  test "acknowledge with a non-persisted struct is a no-op (no DB write)" do
+    assert Reminders.acknowledge(%Reminders.Reminder{id: nil, body: "x"}) == :ok
+  end
+
+  test "create requires a user_id" do
+    assert {:error, %Ecto.Changeset{} = cs} = Reminders.create(%{body: "b", due_at: at(60)})
+    assert %{user_id: ["can't be blank"]} = errors_on(cs)
+  end
+
+  test "create/acknowledge/delete each broadcast {:reminders_changed} on the user topic", %{d: d} do
+    Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{d}")
+
+    {:ok, r} = Reminders.create(%{body: "b", due_at: at(-30), user_id: d})
+    assert_receive {:reminders_changed}
+
+    {:ok, fired} = Reminders.mark_fired(r)
+    {:ok, _} = Reminders.acknowledge(fired)
+    assert_receive {:reminders_changed}
+
+    {:ok, _} = Reminders.delete(fired)
+    assert_receive {:reminders_changed}
+  end
+
+  test "Scheduler.tick fires due reminders and broadcasts {:reminder_due} on the owner topic", %{
+    d: d
+  } do
+    Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{d}")
+    {:ok, _} = Reminders.create(%{body: "call mom", due_at: at(-5), user_id: d})
+
+    Scheduler.tick()
+
+    assert_receive {:reminder_due, %App.Reminders.Reminder{body: "call mom", user_id: ^d}}
+  end
+
+  test "Scheduler.tick routes each user's due reminder to only its own topic", %{d: d, t: t} do
+    {:ok, _} = Reminders.create(%{body: "d-rem", due_at: at(-60), user_id: d})
+    {:ok, _} = Reminders.create(%{body: "t-rem", due_at: at(-60), user_id: t})
+
+    # subscribe AFTER the creates so we only capture the tick's {:reminder_due}, not {:reminders_changed}
+    Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{d}")
+
+    Scheduler.tick()
+
+    # Alice's topic receives ONLY Alice's reminder, never Bob's
+    assert_receive {:reminder_due, %App.Reminders.Reminder{body: "d-rem", user_id: ^d}}, 1000
+    refute_receive {:reminder_due, %App.Reminders.Reminder{body: "t-rem"}}, 200
+  end
+end

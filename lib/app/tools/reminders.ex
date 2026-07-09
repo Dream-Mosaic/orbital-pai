@@ -1,0 +1,77 @@
+defmodule App.Tools.Reminders do
+  @moduledoc """
+  The reminders tool: two functions the brain can call. `create_reminder` takes an ISO8601
+  UTC `due_at` (the model resolves relative times from the 'Current time' line in its
+  prompt — we do no NL date parsing). `list_reminders` reads upcoming ones.
+  """
+  @behaviour App.Tools.Tool
+
+  alias App.Reminders
+
+  @impl true
+  def declarations do
+    [
+      %{
+        name: "create_reminder",
+        description: "Create a reminder that fires at a specific time.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            body: %{
+              type: "string",
+              description:
+                "A short task phrase for what to remind the user to DO, as an imperative " <>
+                  "(e.g. \"call mom\", \"check the weather\", \"take out the trash\") — not a " <>
+                  "verbatim quote of what they said."
+            },
+            due_at: %{
+              type: "string",
+              description: "When to fire, ISO8601 UTC (e.g. 2026-06-16T22:00:00Z)."
+            }
+          },
+          required: ["body", "due_at"]
+        }
+      },
+      %{
+        name: "list_reminders",
+        description: "List the user's upcoming (not-yet-fired) reminders.",
+        parameters: %{type: "object", properties: %{}, required: []}
+      }
+    ]
+  end
+
+  @impl true
+  def execute("create_reminder", _args, %{user_id: nil}),
+    do: {:ok, %{note: "no user session — reminder not saved"}}
+
+  def execute("create_reminder", %{"body" => body, "due_at" => due_at}, ctx) do
+    with {:ok, dt, _offset} <- DateTime.from_iso8601(due_at),
+         {:ok, r} <-
+           Reminders.create(%{
+             user_id: uid(ctx),
+             body: body,
+             due_at: DateTime.truncate(dt, :second)
+           }) do
+      {:ok, %{body: r.body, due_at: DateTime.to_iso8601(r.due_at)}}
+    else
+      {:error, %Ecto.Changeset{}} -> {:error, :invalid_reminder}
+      _ -> {:error, :invalid_due_at}
+    end
+  end
+
+  def execute("create_reminder", _args, _ctx), do: {:error, :missing_args}
+
+  def execute("list_reminders", _args, %{user_id: nil}), do: {:ok, %{reminders: []}}
+
+  def execute("list_reminders", _args, ctx) do
+    items =
+      ctx
+      |> uid()
+      |> Reminders.list_upcoming()
+      |> Enum.map(&%{body: &1.body, due_at: DateTime.to_iso8601(&1.due_at)})
+
+    {:ok, %{reminders: items}}
+  end
+
+  defp uid(%{user_id: uid}), do: uid
+end

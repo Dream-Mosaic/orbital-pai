@@ -1,0 +1,1187 @@
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+@import "phoenix-colocated/app/colocated.css";
+@source "../css";
+@source "../js";
+@source "../../lib/app_web";
+/* Required for Tailwind to automatically pick up changes in colocated CSS files in dev */
+@source "../../_build/dev/phoenix-colocated/app/*/";
+
+/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
+   The heroicons installation itself is managed by your mix.exs */
+@plugin "../vendor/heroicons";
+
+/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
+   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
+   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* daisyUI theme plugin. You can update this file by fetching the latest version with:
+  curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui-theme.js
+  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
+  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
+@plugin "../vendor/daisyui-theme" {
+  name: "dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(30.33% 0.016 252.42);
+  --color-base-200: oklch(25.26% 0.014 253.1);
+  --color-base-300: oklch(20.15% 0.012 254.09);
+  --color-base-content: oklch(97.807% 0.029 256.847);
+  --color-primary: oklch(58% 0.233 277.117);
+  --color-primary-content: oklch(96% 0.018 272.314);
+  --color-secondary: oklch(58% 0.233 277.117);
+  --color-secondary-content: oklch(96% 0.018 272.314);
+  --color-accent: oklch(60% 0.25 292.717);
+  --color-accent-content: oklch(96% 0.016 293.756);
+  --color-neutral: oklch(37% 0.044 257.287);
+  --color-neutral-content: oklch(98% 0.003 247.858);
+  --color-info: oklch(58% 0.158 241.966);
+  --color-info-content: oklch(97% 0.013 236.62);
+  --color-success: oklch(60% 0.118 184.704);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(66% 0.179 58.318);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(58% 0.253 17.585);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(98% 0 0);
+  --color-base-200: oklch(96% 0.001 286.375);
+  --color-base-300: oklch(92% 0.004 286.32);
+  --color-base-content: oklch(21% 0.006 285.885);
+  --color-primary: oklch(70% 0.213 47.604);
+  --color-primary-content: oklch(98% 0.016 73.684);
+  --color-secondary: oklch(55% 0.027 264.364);
+  --color-secondary-content: oklch(98% 0.002 247.839);
+  --color-accent: oklch(0% 0 0);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(44% 0.017 285.786);
+  --color-neutral-content: oklch(98% 0 0);
+  --color-info: oklch(62% 0.214 259.815);
+  --color-info-content: oklch(97% 0.014 254.604);
+  --color-success: oklch(70% 0.14 182.503);
+  --color-success-content: oklch(98% 0.014 180.72);
+  --color-warning: oklch(66% 0.179 58.318);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(58% 0.253 17.585);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* --- Self-hosted fonts (served from priv/static/fonts, see AppWeb.static_paths) --- */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-latin-wght-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/space-grotesk-latin-wght-normal.woff2") format("woff2");
+}
+
+/* Inter is the body/UI font (font-sans default); Space Grotesk is the display font (font-display). */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, sans-serif;
+}
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Use the data attribute for dark mode  */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* This file is for your main application CSS */
+
+/* Rendered markdown inside brain feed lines — compact so lists/paragraphs aren't huge. */
+.voice-md { display: inline-block; vertical-align: top; }
+.voice-md > :first-child { margin-top: 0; }
+.voice-md > :last-child { margin-bottom: 0; }
+.voice-md p { margin: 0.25rem 0; }
+.voice-md ul, .voice-md ol { margin: 0.25rem 0; padding-left: 1.25rem; }
+.voice-md ul { list-style: disc; }
+.voice-md ol { list-style: decimal; }
+.voice-md li { margin: 0.1rem 0; }
+.voice-md strong { font-weight: 600; }
+.voice-md code { font-family: ui-monospace, monospace; }
+
+/* ============================================================
+   MERIDIAN — voice-screen dark-glass chrome (Direction C).
+   Ported from lib/app_web/live/chrome_lab_live.ex (`#chrome-lab` / `.device#dev-c`, the dev-only
+   `/dev/chrome-lab` design lab — the visual source of truth), rescoped onto the real screen per the
+   Task-1 selector-remap table: `#chrome-lab`/`.device#dev-c` -> `#voice-shell.meridian` (page surface)
+   / `main:has(#voice)` (the "device" card frame + orb-light bleed). Forced dark independent of the
+   global `data-theme` (which lives on <html>, user/system-driven) via the `#voice-shell[data-theme=
+   dark]` wrapper (see conversation_live.ex render/1).
+   ============================================================ */
+
+/* Live-recolor tokens: written by the Voice hook's setOrbState() straight onto :root
+   (document.documentElement), so every update flows into #voice-shell via ordinary custom-property
+   inheritance. MUST stay on :root, not on #voice-shell — a wrapper-scoped default would shadow the
+   hook's writes and the recolor would silently no-op. Defaulted to the lab's "listening" (amber)
+   state so first paint (before the hook's first setOrbState call) is warm, not grey. */
+:root {
+  --orb-glow: #f59e0b;
+  --orb-hi: #f9b03a;
+  --orb-lo: #231c11;
+  --orb-rim: #fbbf24;
+  --m-glow-o: 1;
+}
+
+/* Static Meridian tokens (page-level palette) + the deep-black page surface + top gradient — the
+   backdrop visible around the card on desktop (@media below); on mobile/kiosk <main> covers it
+   entirely. Verbatim color stops from #chrome-lab's root block. */
+#voice-shell.meridian {
+  --m-bg: #020309;
+  --m-shell: #07080f;
+  --m-ink: #e8ebf4;
+  --m-ink-dim: #9aa1b6;
+  --m-ink-faint: #5d647a;
+  --you: #f2ac46;
+  --you-soft: #f6c37a;
+  --henry: #3ecf9a;
+  --m-conn: #34d399;
+  --m-hairline: rgba(255, 255, 255, 0.07);
+
+  position: relative;
+  min-height: 100dvh;
+  color: var(--m-ink);
+  background:
+    radial-gradient(120% 90% at 50% -10%, #0a0c16 0%, var(--m-bg) 55%),
+    var(--m-bg);
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The "device" card frame — #dev-c's own background (overrides the lab's shared `.device` fill) +
+   the shared `.device`'s `--bx`/`--by` bleed origin. Unconditional (all viewports): on mobile/kiosk
+   <main> IS the device, edge-to-edge; on desktop it becomes the smaller centered card via the
+   @media block below. `overflow: hidden` contains the oversized bleed pseudo-element (inset: -28%). */
+main:has(#voice) {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0) 35%),
+    radial-gradient(140% 100% at 50% 0%, #090a12 0%, #060710 60%);
+  --bx: 50%;
+  --by: 27%;
+}
+
+/* Orb-light bleed: a soft radial glow seated at (--bx, --by) tinted by the live --orb-glow var, so
+   the whole card looks lit by the orb. Breathes gently; opacity driven by --m-glow-o (per orb state,
+   set in index.js). */
+main:has(#voice)::before {
+  content: "";
+  position: absolute;
+  inset: -28%;
+  background: radial-gradient(
+    circle at var(--bx) var(--by),
+    color-mix(in srgb, var(--orb-glow) 20%, transparent) 0%,
+    color-mix(in srgb, var(--orb-glow) 7%, transparent) 32%,
+    transparent 62%
+  );
+  opacity: var(--m-glow-o);
+  transform-origin: var(--bx) var(--by);
+  animation: bleed-breathe 9s ease-in-out infinite;
+  pointer-events: none;
+  transition: opacity 0.8s ease;
+}
+
+@keyframes bleed-breathe {
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* Sheen: a subtle top inner highlight + bottom inner shadow so the card reads as glass, not a flat
+   rectangle. */
+main:has(#voice)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    inset 0 -40px 70px -50px rgba(0, 0, 0, 0.85);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #voice-shell.meridian,
+  #voice-shell.meridian *,
+  /* pseudo-elements too: the orb-light bleed + bezel lit-arc animate on ::before/::after,
+     which a universal `*` selector cannot match */
+  #voice-shell.meridian *::before,
+  #voice-shell.meridian *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* --- Header: wordmark + breathing connection dot + kiosk icon strip + quiet meta line. Ported
+   from #chrome-lab #dev-c's .hd/.hd-l/.hd-r/.wordmark/.dot/.meta/.strip/.sbtn (chrome_lab_live.ex),
+   rescoped per the Task-1 remap (`.hd` -> `main:has(#voice) > header`). The lab's dev-only `.clock`
+   isn't ported here: the real kiosk clock is a JS-appended `#kiosk-clock` fixed overlay outside the
+   header entirely (see index.js + the existing `#kiosk-clock` rules below), left as-is by design. --- */
+main:has(#voice) > header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  flex: none;
+}
+main:has(#voice) > header .hd-l {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+main:has(#voice) > header .hd-r {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+main:has(#voice) > header .wordmark {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: rgba(214, 220, 233, 0.82);
+  text-shadow:
+    0 -1px 0 rgba(0, 0, 0, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Base look lives on the ID (not just a utility class) because the Voice hook's setConnStatus()
+   rewrites #state-dot's whole className to a bare `size-2.5 rounded-full bg-{color}-500` string on
+   every status change — a class="dot" here would just get wiped. The hook's bg-* utility still
+   supplies the actual fill color; data-conn is descriptive only (unchanged). */
+#state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* --dot is the status color; the hook's data-conn drives it (see rules below) so the glow tracks
+     the fill instead of a hardcoded green. Steady when connected — the dot only animates while
+     RECONNECTING, so the movement is informative, not a constant idle distraction. */
+  --dot: var(--m-conn);
+  box-shadow:
+    0 0 9px color-mix(in srgb, var(--dot) 75%, transparent),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+}
+#state-dot[data-conn="connecting"] {
+  --dot: #f59e0b;
+  animation: a-breathe 1.4s ease-in-out infinite;
+}
+#state-dot[data-conn="offline"] {
+  --dot: #ef4444;
+}
+
+@keyframes a-breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+main:has(#voice) > header .meta {
+  text-align: right;
+  line-height: 1.5;
+}
+main:has(#voice) > header .meta .v,
+main:has(#voice) > header .meta .u {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 0.52rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(200, 206, 220, 0.34);
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.7);
+}
+
+main:has(#voice) > header .strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+main:has(#voice) > header .sbtn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: radial-gradient(circle at 40% 32%, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 70%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 2px 6px -2px rgba(0, 0, 0, 0.8);
+  color: rgba(214, 220, 233, 0.5);
+  transition:
+    color 0.2s,
+    border-color 0.2s;
+}
+main:has(#voice) > header .sbtn:hover {
+  color: rgba(230, 235, 245, 0.95);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+main:has(#voice) > header .duedot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--you);
+  box-shadow: 0 0 8px var(--you);
+}
+
+/* --- Orb bezel + detents + caption ("the hero"). Ported from #chrome-lab #dev-c's .bezel
+   (+ ::before well, ::after lit arc), the orb-canvas-wrap sizing rule (folded directly onto
+   #orb-canvas here — no separate wrapper div needed), .detent (+ .on) and its four .d-* diagonal
+   positions, and .caption (chrome_lab_live.ex — the visual source of truth for Direction C).
+   Tuned numbers baked in: --orb-scale: 1.55 (the real orb draws its sphere at 60% of the canvas
+   box, per orb.js — the canvas is oversized + centered so the sphere fills the bezel's well and
+   its halos spill onto the rim on purpose); detents at 8%/92% (pushed past the on-ring position so
+   they clear the bigger real sphere + glow bleed); caption at top:58%;left/right:-4%. Nothing here
+   clips (overflow: visible). --- */
+#orb-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+#orb-pane .bezel {
+  position: relative;
+  width: min(272px, 74%);
+  aspect-ratio: 1;
+  flex: none;
+  overflow: visible;
+  --orb-scale: 1.55;
+}
+#orb-pane .bezel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  box-shadow:
+    inset 0 10px 26px -18px rgba(0, 0, 0, 0.9),
+    inset 0 0 46px -24px color-mix(in srgb, var(--orb-glow) 30%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+}
+#orb-pane .bezel::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 215deg,
+    transparent 0deg,
+    color-mix(in srgb, var(--orb-glow) 85%, transparent) 55deg,
+    transparent 130deg
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 1px));
+  opacity: 0.65;
+  filter: drop-shadow(0 0 5px var(--orb-glow));
+  transition: opacity 0.8s ease;
+  pointer-events: none;
+}
+
+/* The real orb's canvas is oversized + centered so the sphere (drawn at 60% of the canvas box by
+   orb.js) fills the well, its halos spilling onto the rim on purpose — nothing here clips. */
+#orb-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--orb-scale) * 100%);
+  height: calc(var(--orb-scale) * 100%);
+  transform: translate(-50%, -50%);
+  display: block;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Detents pushed outward along the bezel's diagonals so they clear the bigger real sphere + halo
+   bleed (the mockup's on-ring position sat inside the glow). */
+#orb-pane .detent {
+  position: absolute;
+  width: 37px;
+  height: 37px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  background:
+    radial-gradient(circle at 38% 30%, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01) 65%),
+    #0a0c14;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 3px 9px -3px rgba(0, 0, 0, 0.9);
+  transition:
+    color 0.2s,
+    border-color 0.25s,
+    box-shadow 0.25s;
+  z-index: 2;
+}
+/* Icon color set via :where() so its zero specificity always LOSES to the hook's `.text-success` /
+   `.opacity-50` Tailwind toggles on #power-btn (setPower() in index.js) — a plain `#orb-pane
+   .detent { color }` rule would tie those utilities on specificity and then beat them on source
+   order, silently blocking the green-on / dim-off read. */
+:where(#orb-pane .detent) {
+  color: rgba(214, 220, 233, 0.55);
+}
+:where(#orb-pane .detent:hover) {
+  color: #fff;
+}
+#orb-pane .detent:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+#orb-pane .detent svg,
+#orb-pane .detent span[class^="hero-"] {
+  width: 15px;
+  height: 15px;
+}
+#orb-pane .detent .dlabel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.46rem;
+  font-weight: 650;
+  letter-spacing: 0.3em;
+  color: rgba(200, 206, 220, 0.36);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* PTT/ABI "on" glow driven straight off the wrapped checkbox's :checked state — no JS class
+   needed. Mirrors the lab's static `.detent.on`. */
+:where(#orb-pane .detent:has(input:checked)) {
+  color: var(--you);
+}
+#orb-pane .detent:has(input:checked) {
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 16px -4px color-mix(in srgb, var(--you) 80%, transparent),
+    0 3px 9px -3px rgba(0, 0, 0, 0.9);
+}
+#orb-pane .detent:has(input:checked) .dlabel {
+  color: color-mix(in srgb, var(--you) 70%, transparent);
+}
+
+#orb-pane .d-power {
+  left: 8%;
+  top: 8%;
+}
+#orb-pane .d-clear {
+  left: 92%;
+  top: 8%;
+}
+#orb-pane .d-ptt {
+  left: 8%;
+  top: 92%;
+}
+#orb-pane .d-abi {
+  left: 92%;
+  top: 92%;
+}
+
+/* Light-pipe "elbow": a thin SVG wire bridging the bezel's glow down toward the transcript spine,
+   so the two chrome pieces read as one continuous circuit. Ported from #chrome-lab #dev-c's .elbow
+   (last child of .orb-pane there too, hence #orb-pane switching to flex-direction: column above).
+   Portrait only — hidden in kiosk's side-by-side layout, where there's no "down" to bridge. */
+#orb-pane .elbow {
+  flex: none;
+  width: 100%;
+  height: 30px;
+  display: block;
+  margin-top: -6px;
+  overflow: visible;
+}
+#orb-pane .elbow path {
+  stroke: var(--orb-glow);
+  stroke-width: 1.5;
+  fill: none;
+  opacity: 0.6;
+  filter: drop-shadow(0 0 5px var(--orb-glow));
+  vector-effect: non-scaling-stroke;
+  transition: stroke 0.8s ease;
+}
+.kiosk #orb-pane .elbow {
+  display: none;
+}
+
+/* --- Voice main screen --- */
+@media (min-width: 480px) {
+  /* phone-width card, centered, with a subtle frame on desktop. Excludes kiosk (.kiosk on <main>),
+     which is edge-to-edge full-screen — otherwise this higher-specificity rule caps it at 820px
+     with a bordered card frame. Border/shadow restyled to the Meridian dark-glass shell (dark
+     hairline border, deeper black shadow + the live orb-glow bleed), ported from #dev-c's shared
+     `.device` frame. */
+  main:not(.kiosk):has(#voice) {
+    margin-block: 1.5rem;
+    border: 1px solid var(--m-hairline);
+    border-radius: 1.5rem;
+    box-shadow:
+      0 40px 90px -35px rgba(0, 0, 0, 0.95),
+      0 0 0 1px rgba(0, 0, 0, 0.65),
+      0 0 120px -40px color-mix(in srgb, var(--orb-glow) 22%, transparent);
+    height: min(90vh, 820px);
+    min-height: 0;
+  }
+}
+
+/* Ported from #chrome-lab #dev-c's .caption, repositioned clear of the bezel's detents. The
+   font-size is set inline by the hook (length-based) — just position + tidy wrapping here. */
+#orb-caption {
+  position: absolute;
+  top: 58%;
+  left: -4%;
+  right: -4%;
+  text-align: center;
+  font-weight: 500;
+  line-height: 1.22;
+  color: var(--you-soft);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  text-shadow:
+    0 0 16px color-mix(in srgb, var(--you) 40%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.7);
+  z-index: 1;
+}
+
+/* --- Transcript "meridian": a glowing spine on the left rail, "you" turns rail-aligned to its
+   left, Henry's (green) answers in the field to its right, reflex asides as a hollow node between
+   them. Ported from #chrome-lab #dev-c's .log/.spine/.turns/.turn/.who/.tt/.body +
+   .who-you/.who-brain/.who-reflex (chrome_lab_live.ex), rescoped onto the real DOM: `.turns` folds
+   directly onto #voice-log (the Voice hook's actual scroller — unchanged), and `.turn` becomes
+   `.voice-line` (the class the hook's addLine/appendBrainDelta/showThinking actually emit). `.spine`
+   is a decorative absolutely-positioned SIBLING of #voice-log inside the shared `.log` wrapper (see
+   conversation_live.ex) — not a child — so it stays put while the transcript scrolls past it. --- */
+#voice .log {
+  padding: 0 4px;
+  --rail: 36%;
+}
+.kiosk #voice .log {
+  --rail: 28%;
+}
+#voice .spine {
+  position: absolute;
+  left: var(--rail);
+  top: -12px ;
+  bottom: 4px;
+  width: 1.5px;
+  z-index: 0;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--orb-glow) 65%, transparent),
+    rgba(255, 255, 255, 0.09) 30%,
+    rgba(255, 255, 255, 0.09) 88%,
+    transparent
+  );
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--orb-glow) 40%, transparent));
+  pointer-events: none;
+}
+#voice-log {
+  position: relative;
+  z-index: 1;
+  padding: 16px 2px 10px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 9%);
+  mask-image: linear-gradient(to bottom, transparent, #000 9%);
+}
+
+.voice-line {
+  position: relative;
+  margin: 1.05rem 0;
+}
+.voice-line:first-child {
+  margin-top: 0.2rem;
+}
+.voice-line .who,
+.voice-line .tt {
+  display: inline-block;
+  font-size: 0.54rem;
+  font-weight: 650;
+  letter-spacing: 0.24em;
+  text-transform: lowercase;
+}
+.voice-line .tt {
+  font-family: var(--font-display);
+  color: rgba(200, 206, 220, 0.3);
+  letter-spacing: 0.12em;
+  margin-left: 7px;
+  font-variant-numeric: tabular-nums;
+}
+.voice-line .body {
+  display: block;
+  margin-top: 0.22rem;
+  line-height: 1.5;
+}
+
+/* "you" — amber, right-aligned on the rail to the spine's left. */
+.who-you {
+  width: calc(var(--rail) - 18px);
+  text-align: right;
+}
+.who-you .who {
+  color: var(--you);
+}
+.who-you .body {
+  font-size: 0.84rem;
+  color: #d7cbb2;
+}
+.who-you::before {
+  content: "";
+  position: absolute;
+  right: -22px;
+  top: 0.32em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--you);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--you) 80%, transparent);
+}
+
+/* Henry's (green) answers + reflex asides both live in the field to the spine's right. */
+.who-brain,
+.who-reflex {
+  margin-left: calc(var(--rail) + 18px);
+}
+.who-brain .who {
+  color: var(--henry);
+}
+.who-brain .body {
+  font-size: 0.93rem;
+  color: #e2e6f0;
+}
+.who-brain::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 0.32em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--henry);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--henry) 80%, transparent);
+}
+
+/* reflex — a hollow (unlit) node on the spine; quieter than a real answer. */
+.who-reflex {
+  margin-top: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+.who-reflex .who {
+  color: rgba(200, 206, 220, 0.34);
+}
+.who-reflex .body {
+  margin-top: 0.1rem;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: rgba(200, 206, 220, 0.42);
+}
+.who-reflex::before {
+  content: "";
+  position: absolute;
+  left: -21.5px;
+  top: 0.38em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid rgba(200, 206, 220, 0.35);
+}
+
+/* The output-side "thinking" filler (showThinking()): same shape/indent as a brain answer — Henry's
+   field — but faint + italic so it reads as a placeholder, not a real answer. */
+.voice-line.who-brain.thinking .body {
+  font-style: italic;
+  color: rgba(200, 206, 220, 0.42);
+}
+
+/* --- PTT hold tray: engraved slit + label. Ported from #chrome-lab #dev-c's .ptt-bar/.slit/
+   .plabel (chrome_lab_live.ex) onto the real #ptt-hold button — the Voice hook still owns the
+   `disabled` attr (PTT mode off/on) and toggles `.ptt-held` while the button is physically held;
+   only the look changes here. --- */
+#ptt-hold {
+  width: 100%;
+  padding: 9px 0 11px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255, 255, 255, 0.016);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    border-color 0.2s,
+    background-color 0.2s,
+    box-shadow 0.2s;
+}
+#ptt-hold:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--you) 35%, rgba(255, 255, 255, 0.08));
+}
+#ptt-hold .slit {
+  width: 42%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, transparent, var(--you) 22%, var(--you) 78%, transparent);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--you) 65%, transparent);
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+}
+#ptt-hold .plabel {
+  font-family: var(--font-display);
+  font-size: 0.52rem;
+  font-weight: 600;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: rgba(200, 206, 220, 0.38);
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.7);
+  transition: color 0.2s;
+}
+
+/* Inert look while PTT mode is off (button disabled) — the slit dims to a plain hairline, no glow,
+   mirroring the unlit `.detent` look above rather than a generic opacity fade. */
+#ptt-hold:disabled {
+  cursor: default;
+}
+#ptt-hold:disabled .slit {
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(255, 255, 255, 0.14) 22%,
+    rgba(255, 255, 255, 0.14) 78%,
+    transparent
+  );
+  box-shadow: none;
+}
+#ptt-hold:disabled .plabel {
+  color: rgba(200, 206, 220, 0.2);
+}
+
+/* Held (the hook toggles this class on pointerdown/up) — the slit brightens into a hot amber glow,
+   mirroring the `.detent:has(input:checked)` "on" recipe above. */
+#ptt-hold.ptt-held {
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 20px -4px color-mix(in srgb, var(--you) 80%, transparent);
+}
+#ptt-hold.ptt-held .slit {
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--you-soft) 22%,
+    var(--you-soft) 78%,
+    transparent
+  );
+  box-shadow: 0 0 16px color-mix(in srgb, var(--you) 85%, transparent);
+}
+#ptt-hold.ptt-held .plabel {
+  color: var(--you-soft);
+}
+
+/* --- Bottom nav: engraved stations (Settings/Memory/Reminders/Connectors). Ported from
+   #chrome-lab #dev-c's .bnav/.nbtn/.nlabel (chrome_lab_live.ex) onto the real #bottom-nav
+   `open_modal` buttons — phx-click/phx-value-modal + the reminders due-dot are unchanged; only
+   the button chrome + iconography restyle. --- */
+#bottom-nav {
+  display: flex;
+  justify-content: space-around;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  padding: 9px 12px 4px;
+  margin-top: 2px;
+}
+#bottom-nav .nbtn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  color: rgba(200, 206, 220, 0.42);
+  transition: color 0.2s;
+}
+#bottom-nav .nbtn:hover {
+  color: rgba(230, 235, 245, 0.95);
+}
+#bottom-nav .nbtn span[class^="hero-"] {
+  width: 18px;
+  height: 18px;
+}
+#bottom-nav .nbtn .nlabel {
+  font-family: var(--font-display);
+  font-size: 0.44rem;
+  font-weight: 600;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: rgba(200, 206, 220, 0.3);
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.7);
+}
+#bottom-nav .nbtn .duedot {
+  position: absolute;
+  top: 1px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--you);
+  box-shadow: 0 0 8px var(--you);
+}
+
+#kiosk-clock {
+  position: fixed; /* pinned to the screen bottom; #voice has no positioned ancestor to anchor to */
+  inset-inline: 0;
+  bottom: 0.5rem;
+  text-align: center;
+  font-size: 1.1rem;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  pointer-events: none;
+}
+#kiosk-clock.hidden {
+  display: none;
+}
+
+#kiosk-tap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1b2230;
+  color: #e5e7eb;
+  font-size: 1.5rem;
+  z-index: 50;
+}
+#kiosk-tap.hidden {
+  display: none;
+}
+
+/* Landscape kiosk: full-screen two-pane (orb left / transcript right). Scoped to .kiosk on <main>
+   (set by conversation_live.ex's render/1 when params["kiosk"] == "1"); the row layout itself is
+   further gated to @media (orientation: landscape) below — a kiosk physically in portrait still
+   gets the full-bleed shell but keeps the single-column stack, since there's no "wide" to lay two
+   panes across. Ported from #chrome-lab's `[data-view="kiosk"]` rules (chrome_lab_live.ex, the
+   visual source of truth) onto the real DOM's #voice/#orb-pane/#voice-log/.bezel/#kiosk-clock.
+   Two more kiosk overrides from earlier tasks live elsewhere, next to what they override, rather
+   than here: the light-pipe `.elbow` hide above (by the .elbow rules — a portrait-only bridge,
+   meaningless once the layout goes side-by-side) and the transcript rail width `.kiosk #voice .log
+   { --rail: 28% }` above (by the .log rail). #bottom-nav needs no CSS hide at all — it's only
+   rendered `:if={!@kiosk}` in the template in the first place. */
+
+/* Only the PTT controls are meaningless on a hands-free wall — hide the whole d-ptt detent (the
+   #ptt-toggle checkbox stays in the DOM, just visually hidden with it, for the hook) and the PTT
+   hold tray. Power, trash (clear), and ABI stay so the wall is still operable. Unconditional (not
+   orientation-gated): a kiosk in portrait is still hands-free. */
+.kiosk #orb-pane .d-ptt,
+.kiosk #ptt-hold {
+  display: none;
+}
+
+@media (orientation: landscape) {
+  /* #voice is already a flex container; lay its two visible children out as side-by-side panes. */
+  .kiosk #voice {
+    flex-direction: row;
+    gap: 22px;
+    align-items: stretch;
+  }
+  /* The orb now sits at the pane's left-center, not top-center — re-seat the bleed's light origin
+     to match (ported from #chrome-lab's kiosk `.device` --bx/--by; deferred from Task 1). Needs the
+     `:has(#voice)` id-level specificity to beat the base main:has(#voice) rule above. */
+  main:has(#voice).kiosk {
+    --bx: 26%;
+    --by: 50%;
+  }
+  .kiosk #orb-pane,
+  .kiosk .log {
+    flex: 1 1 0; /* equal halves; overrides .log's flex-1 and orb-pane's content width */
+    width: auto;
+    height: 100%;
+    min-width: 0;
+  }
+  /* #orb-pane carries no aspect constraint of its own — that lives on .bezel, which stays a fixed
+     square at every breakpoint — so this just lifts the portrait card's max-w-[20rem] cap to let
+     the pane fill its half of the row. */
+  .kiosk #orb-pane {
+    max-width: none;
+    margin: 0;
+  }
+  /* The wide kiosk pane can afford a bigger bezel than the portrait card's 272px/74% cap. */
+  .kiosk #orb-pane .bezel {
+    width: min(330px, 62%);
+  }
+  /* The clock is position:fixed (appended to #voice by the hook). Move it to the TOP, kept centered
+     (inherits inset-inline:0 + text-align:center) so it sits in the header's empty middle, clear of
+     the Henry/dot on the left and the modal strip + version on the right. */
+  .kiosk #kiosk-clock {
+    top: 0.5rem;
+    bottom: auto;
+  }
+}
+
+/* ============================================================
+   MERIDIAN — slide-in modal drawer + panel controls (Task 7).
+   Re-skins AppWeb.VoiceModals (the drawer shell + the four reminders/connectors/memory/settings
+   panels) WITHOUT touching a single binding in the template: every selector below hooks the
+   daisyUI/Tailwind classes already present in the markup (`bg-base-100`/`bg-base-300`/
+   `border-base-300` for the shell; `.btn`/`.badge`/`.toggle`/`.radio`/`.range`/`.select`/
+   `.textarea`/`.input`/`.label-text`/`.form-control`/`.rounded-box` for the panels), scoped under
+   `#voice-modal` so nothing here can leak onto the orb/transcript/bottom-nav chrome above. The
+   drawer renders inside `#voice-shell.meridian[data-theme=dark]` (conversation_live.ex render/1),
+   so the --m-*, --you, --henry tokens are already in scope via ordinary inheritance — no new tokens
+   needed here. daisyUI's own "dark" theme (see the @plugin block up top) is indigo/purple, not
+   Meridian amber/green, hence the explicit recolor of every control below. */
+
+/* Scrim: a touch darker + softly blurred so the frosted drawer reads as glass floating above the
+   shell rather than a flat rectangle over a plain dim. `:first-child` (not a class hook) because
+   Tailwind's `bg-black/40` compiles to an escaped `.bg-black\/40` selector — messier to target than
+   just addressing "the scrim, #voice-modal's first child" structurally. */
+#voice-modal > div:first-child {
+  background: rgba(2, 3, 9, 0.6);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+/* Drawer shell: bg-base-100 -> frosted dark glass (blur + hairline left edge + inner sheen instead
+   of a flat fill + shadow-2xl); bg-base-300 (the small decorative left-edge tab) -> an amber glow
+   bar, echoing the "you" rail used elsewhere; border-base-300 (header rule + the grant-form
+   rounded-box) -> the shared hairline. */
+#voice-modal .bg-base-100 {
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 40%),
+    color-mix(in srgb, var(--m-shell) 94%, transparent);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border-left: 1px solid var(--m-hairline);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    -28px 0 60px -28px rgba(0, 0, 0, 0.75);
+  color: var(--m-ink);
+}
+#voice-modal .bg-base-300 {
+  background: linear-gradient(var(--you-soft), var(--you));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--you) 55%, transparent);
+  opacity: 0.9;
+}
+#voice-modal .border-base-300 {
+  border-color: var(--m-hairline);
+}
+#voice-modal .rounded-box {
+  background: rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(6px);
+}
+
+/* Headings: drawer title (h2, no color utility of its own -> safe to set color here) + the four
+   panels' section headings (h3 — leave color/opacity alone, those stay governed by each h3's own
+   `opacity-70`/`text-error` utility, e.g. the Danger zone heading must stay red). */
+#voice-modal h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--m-ink);
+}
+#voice-modal h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+/* Section sub-labels ("Needs your attention"/"Upcoming"/"Rolling summary"/"Profile facts") — scoped
+   to the `label` tag specifically (not just the `.text-xs.opacity-60` classes) so this doesn't also
+   catch the `font-mono` due-date/time `<span>`s that share those same two utility classes. */
+#voice-modal label.text-xs.opacity-60 {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-ink-faint);
+  opacity: 1;
+}
+
+/* Grant-form field labels (Connector/Account/Access) + the field-group wrapper. */
+#voice-modal .label-text {
+  font-family: var(--font-display);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--m-ink-faint);
+}
+#voice-modal .form-control {
+  gap: 0.25rem;
+}
+
+/* Buttons: every btn-* variant in the four panels + the drawer's own close button. Base = hairline
+   dark-glass chip; variants layer color on top (amber primary, red error, transparent ghost/outline). */
+#voice-modal .btn {
+  border-radius: 0.5rem;
+  border: 1px solid var(--m-hairline);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--m-ink-dim);
+  font-family: var(--font-display);
+  font-weight: 600;
+  transition:
+    border-color 0.2s,
+    color 0.2s,
+    background 0.2s,
+    box-shadow 0.2s;
+}
+#voice-modal .btn:hover {
+  color: var(--m-ink);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+}
+#voice-modal .btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+#voice-modal .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--m-hairline);
+}
+#voice-modal .btn-outline {
+  background: transparent;
+}
+#voice-modal .btn-primary {
+  background: color-mix(in srgb, var(--you) 18%, transparent);
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  color: var(--you-soft);
+}
+#voice-modal .btn-primary:hover {
+  background: color-mix(in srgb, var(--you) 28%, transparent);
+  border-color: var(--you);
+}
+#voice-modal .btn-primary:disabled,
+#voice-modal .btn-primary[disabled] {
+  opacity: 0.35;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--m-hairline);
+  color: var(--m-ink-faint);
+}
+#voice-modal .btn-error {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #f87171;
+}
+#voice-modal .btn-error:hover {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(248, 113, 113, 0.65);
+}
+
+/* Badges: the due-reminder chip (amber, "needs attention" reads as a warm accent), the default-
+   connector/user-fact chip (amber "primary" accent — the app's one accent color otherwise reserved
+   for "you"), and the neutral access-level/no-source chip. */
+#voice-modal .badge {
+  border: 1px solid var(--m-hairline);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--m-ink-dim);
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+#voice-modal .badge-warning {
+  background: color-mix(in srgb, var(--you) 20%, transparent);
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  color: var(--you-soft);
+}
+#voice-modal .badge-primary {
+  background: color-mix(in srgb, var(--you) 20%, transparent);
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  color: var(--you-soft);
+}
+#voice-modal .badge-ghost {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--m-ink-faint);
+}
+
+/* Recolor daisyUI's NATIVE toggle / radio / range to Meridian amber via daisyUI's OWN hooks — we do
+   NOT re-implement the controls. (An earlier pass repainted them from scratch with `appearance:none`
+   + a hand-rolled ::before knob, which fought daisyUI v4's inline-grid toggle and mispositioned the
+   handle — the "weird toggles" bug.) `--input-color` recolors the toggle + radio checked state;
+   `color` + `--range-thumb` recolor the range — exactly what daisyUI's own `-primary`/`-warning`
+   modifier classes do. daisyUI's mechanisms stay fully intact. */
+#voice-modal .toggle:checked,
+#voice-modal .radio:checked {
+  --input-color: var(--you);
+}
+#voice-modal .range {
+  color: var(--you);
+  --range-thumb: var(--you);
+}
+
+/* Select (grant-form Connector/Account) + textarea/input (summary + add-fact). */
+#voice-modal .select {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-color: var(--m-hairline);
+  color: var(--m-ink);
+}
+#voice-modal .select:focus {
+  border-color: color-mix(in srgb, var(--you) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--you) 40%, transparent);
+  outline: none;
+}
+#voice-modal .textarea,
+#voice-modal .input {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-color: var(--m-hairline);
+  color: var(--m-ink);
+}
+#voice-modal .textarea::placeholder,
+#voice-modal .input::placeholder {
+  color: var(--m-ink-faint);
+}
+#voice-modal .textarea:focus,
+#voice-modal .input:focus {
+  border-color: color-mix(in srgb, var(--you) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--you) 35%, transparent);
+  outline: none;
+}

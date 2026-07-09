@@ -1,0 +1,10 @@
+{
+  "name": "app-assets",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Boundary file: stops esbuild from inheriting the repo-root spike package.json (type:module), which would mis-parse vendored CommonJS like topbar.js.",
+  "dependencies": {
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.5"
+  }
+}

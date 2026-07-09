@@ -1,0 +1,42 @@
+# Coolify deployment via Docker Compose.
+#
+# Set the Coolify application's Build Pack to "Docker Compose" and point it at this file.
+# The only persistent state is the SQLite database (DATABASE_PATH=/data/app.db), kept on the
+# named `app-data` volume so redeploys never wipe users/connections/memory/reminders.
+#
+# Secrets + host come from Coolify's Environment Variables (referenced as ${VAR} below) — do NOT
+# hardcode them here. See docs/deploy-coolify.md for the full list + the Google console step.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # --- runtime config (non-secret) ---
+      PHX_SERVER: "true"
+      PHX_HOST: ${PHX_HOST}                               # e.g. assistant.example.com
+      PORT: "4000"
+      POOL_SIZE: "5"
+      DATABASE_PATH: /data/app.db                         # on the app-data volume below
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI}  # https://<host>/auth/google/callback
+      # --- secrets (set the values in Coolify, not here) ---
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    volumes:
+      - app-data:/data
+    # The deploy host has no working IPv6 egress — outbound IPv6 connects (Google OAuth, Gemini,
+    # Cartesia) are "network unreachable", which hangs/timeouts the HTTP client. Disable IPv6 in the
+    # container so DNS + all connects use IPv4. (Pairs with the IPv4 listener bind in runtime.exs.)
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
+    # Coolify's proxy routes your domain to this container port (set the domain in Coolify's UI).
+    expose:
+      - "4000"
+    restart: unless-stopped
+
+volumes:
+  app-data:
