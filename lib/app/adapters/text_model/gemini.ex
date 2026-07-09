@@ -220,16 +220,32 @@ defmodule App.Adapters.TextModel.Gemini do
   end
 
   defp with_time(system, cfg) do
-    now = DateTime.utc_now() |> DateTime.to_iso8601()
+    system <> grounding_line(DateTime.utc_now() |> DateTime.truncate(:second), cfg.timezone)
+  end
 
-    system <>
-      "\n\nCurrent time (UTC): #{now}. The user's local timezone is #{cfg.timezone}. " <>
+  @doc false
+  # Ground the brain in the user's LOCAL time (with its UTC offset) — calendar events arrive with
+  # a local offset (e.g. 2026-07-09T10:30:00-05:00), so 'now' must be in the same representation or
+  # the model compares wall-clock digits and mislabels upcoming events as past. UTC is given too,
+  # because the tool-arg contract is ISO8601 UTC (due_at / time_min / start). Injectable `utc` for
+  # deterministic tests. Falls back to UTC if the zone can't be resolved.
+  def grounding_line(utc, timezone) do
+    local =
+      case DateTime.shift_zone(utc, timezone) do
+        {:ok, dt} -> dt
+        _ -> utc
+      end
+
+    "\n\nCurrent time: #{DateTime.to_iso8601(local)} (#{timezone}). In UTC that is " <>
+      "#{DateTime.to_iso8601(utc)}. Calendar events are returned with their own UTC offset; to " <>
+      "decide whether an event is past or upcoming, compare it to the current time by absolute " <>
+      "instant (accounting for the offsets) — never by comparing wall-clock digits. " <>
       "When the user gives a relative or local time (\"in 20 minutes\", \"at 5pm\", \"today\", " <>
       "\"this week\"), compute the absolute moment(s) and pass ISO8601 UTC " <>
       "(e.g. 2026-06-16T22:00:00Z) — as due_at for create_reminder, as time_min/time_max for " <>
       "get_calendar_events, or as start/end for create_event. Conversely, when you tell the user " <>
-      "about a time (a calendar event, a reminder), convert it from UTC to their local timezone " <>
-      "and say it naturally (\"2pm\", \"tomorrow morning\") — never read out a UTC timestamp."
+      "about a time (a calendar event, a reminder), say it naturally in their local timezone " <>
+      "(\"2pm\", \"tomorrow morning\") — never read out a UTC timestamp."
   end
 
   defp error_string(reason) when is_binary(reason), do: reason

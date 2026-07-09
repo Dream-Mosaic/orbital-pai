@@ -187,4 +187,22 @@ defmodule App.Adapters.TextModel.GeminiTest do
 
     assert phrase in App.Tools.Weather.bridge("get_weather")
   end
+
+  test "grounding_line gives the LOCAL current time (with offset) so it matches event offsets" do
+    # 15:00Z is 10:00 CDT. Calendar events arrive with a local offset (e.g. ...-05:00), so the
+    # brain must see 'now' in the SAME representation — otherwise it compares wall-clock digits
+    # (10:30 vs 15:00) and wrongly calls an upcoming 10:30-05:00 event 'past'.
+    line = Gemini.grounding_line(~U[2026-07-09 15:00:00Z], "America/Chicago")
+
+    # local 'now' present, with its offset, tagged with the zone name
+    assert line =~ "2026-07-09T10:00:00-05:00"
+    assert line =~ "America/Chicago"
+    # UTC still available for the tool-arg contract (due_at / time_min / start are ISO8601 UTC)
+    assert line =~ "2026-07-09T15:00:00Z"
+  end
+
+  test "grounding_line falls back to UTC (no crash) on an unknown timezone" do
+    line = Gemini.grounding_line(~U[2026-07-09 15:00:00Z], "Not/AZone")
+    assert line =~ "2026-07-09T15:00:00Z"
+  end
 end
