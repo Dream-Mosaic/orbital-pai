@@ -97,6 +97,13 @@ if redirect = System.get_env("GOOGLE_OAUTH_REDIRECT_URI") do
   config :app, :google_redirect_uri, redirect
 end
 
+# One IANA timezone for the whole instance (grounds the brain's relative-time resolution and
+# local-time display). Unset → the config/config.exs default (America/Chicago). App.Config
+# validates it, so a bad value falls back rather than crashing.
+if tz = System.get_env("TIMEZONE") do
+  config :app, :timezone, tz
+end
+
 # Allowlisted users come from the environment (JSON) so no personal emails live in the repo.
 # Format (ordered — the first entry is the primary who owns pre-existing connections):
 #   ALLOWED_USERS='[{"email":"you@example.com","name":"You","aliases":["alt@example.com"]}]'

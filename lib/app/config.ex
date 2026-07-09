@@ -70,5 +70,22 @@ defmodule App.Config do
   @type t :: %__MODULE__{}
 
   @spec default() :: t()
-  def default, do: %__MODULE__{}
+  def default, do: %__MODULE__{timezone: timezone()}
+
+  @doc """
+  The instance timezone — one IANA zone for the whole instance, from the `TIMEZONE` env (wired to
+  `:app, :timezone` in config/runtime.exs) and validated against Tzdata. Falls back to
+  `"America/Chicago"` when unset or invalid, so a typo'd env can't crash local-time rendering
+  (`DateTime.shift_zone!`). Grounds the brain's relative-time resolution and the reminder display.
+  """
+  @spec timezone() :: String.t()
+  def timezone do
+    tz = Application.get_env(:app, :timezone, "America/Chicago")
+    if valid_zone?(tz), do: tz, else: "America/Chicago"
+  end
+
+  defp valid_zone?(tz) when is_binary(tz),
+    do: match?({:ok, _}, DateTime.shift_zone(~U[2024-01-01 00:00:00Z], tz))
+
+  defp valid_zone?(_), do: false
 end

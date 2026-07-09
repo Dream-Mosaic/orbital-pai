@@ -14,6 +14,10 @@ config :app,
 # Reminder times (and any other local-tz display) shift from stored UTC via this database.
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
+# Instance timezone (one IANA zone for the whole instance). Overridden at runtime by the
+# TIMEZONE env (see config/runtime.exs); resolved + validated via App.Config.timezone/0.
+config :app, :timezone, "America/Chicago"
+
 # SQLite: WAL so the hot read path and the writer (turn insert + memory updater)
 # don't block each other; busy_timeout retries brief writer contention.
 config :app, App.Repo,
