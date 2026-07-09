@@ -90,10 +90,35 @@ defmodule App.Users do
   @doc "Users with the morning briefing enabled."
   def list_briefing_users, do: Repo.all(from u in User, where: not is_nil(u.briefing_time))
 
+  @stamp_busy_attempts 3
+  @stamp_busy_backoff_ms 50
+
   @doc "Record that a user's briefing was delivered on `date` (the once/day claim, at delivery)."
   def stamp_briefing!(%User{} = user, %Date{} = date) do
-    user |> Ecto.Changeset.change(briefing_last_on: date) |> Repo.update!()
+    with_busy_retry(fn ->
+      user |> Ecto.Changeset.change(briefing_last_on: date) |> Repo.update!()
+    end)
   end
+
+  @doc false
+  # SQLite is single-writer; under contention a write can exhaust busy_timeout and raise "Database
+  # is busy". `stamp_briefing!` is the briefing's ONLY once/day claim (stamped at delivery, off the
+  # FSM in an ack task), so a lost stamp risks a repeated briefing — retry a few times before giving
+  # up. Non-busy errors reraise untouched. Runs where no user is blocked, so a few seconds is fine.
+  def with_busy_retry(fun, attempts \\ @stamp_busy_attempts) do
+    fun.()
+  rescue
+    e ->
+      if attempts > 1 and busy_error?(e) do
+        Process.sleep(@stamp_busy_backoff_ms)
+        with_busy_retry(fun, attempts - 1)
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp busy_error?(e),
+    do: e |> Exception.message() |> String.downcase() |> String.contains?("busy")
 
   @doc "The primary user (owner of pre-existing connections) = first allowlisted email."
   def primary do

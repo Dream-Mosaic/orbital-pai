@@ -114,4 +114,35 @@ defmodule App.UsersTest do
       assert stamped.briefing_last_on == ~D[2026-07-03]
     end
   end
+
+  describe "stamp_briefing! busy-retry (with_busy_retry/2)" do
+    # The briefing's once/day claim is stamped at delivery off the FSM in an ack task. SQLite is
+    # single-writer, so that stamp can transiently hit "Database is busy"; it's the briefing's ONLY
+    # cross-session dedup, so a lost stamp would risk a repeated briefing — hence the retry.
+    test "retries a transient SQLite 'Database is busy' then returns the success value" do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      result =
+        Users.with_busy_retry(fn ->
+          n = Agent.get_and_update(calls, &{&1, &1 + 1})
+          if n == 0, do: raise(%Exqlite.Error{message: "Database is busy"}), else: :stamped
+        end)
+
+      assert result == :stamped
+      assert Agent.get(calls, & &1) == 2
+    end
+
+    test "does not retry a non-busy error — reraises immediately" do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      assert_raise RuntimeError, "nope", fn ->
+        Users.with_busy_retry(fn ->
+          Agent.update(calls, &(&1 + 1))
+          raise "nope"
+        end)
+      end
+
+      assert Agent.get(calls, & &1) == 1
+    end
+  end
 end

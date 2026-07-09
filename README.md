@@ -5,10 +5,6 @@ answers out loud — fast — and it can actually *do things* (calendar, email, 
 search) through a tool-calling brain. It remembers what matters about you across conversations, works
 as an installable PWA, and has a "kiosk" wall mode.
 
-<p align="center">
-  <img src="docs/screenshots/pai_phone_henry_user_02.png" alt="Henry mid-conversation on a phone" width="300">
-</p>
-
 ## Screenshots
 
 | Conversation (phone) | Kiosk / wall mode | Powered off |
