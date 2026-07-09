@@ -1014,7 +1014,13 @@ defmodule App.Conversations.Conversation do
   end
 
   defp run_effect(:cancel_brain, {data, acts}) do
-    data = data |> clear_brain() |> cancel_reflex_tasks()
+    # A barge/watchdog abort tears down the interrupt window. UNDUCK the client here rather than
+    # just clearing the flag: the watchdog path (policy) emits no :stop_playback, so without an
+    # explicit unduck a duck armed in the final window would leave the client quiet (the pending
+    # timer's own unduck would no-op against the already-cleared flag). Also cancel the window
+    # timer so a stale expiry can't unduck a later turn. Clean completion routes through
+    # :turn_complete instead (no :cancel_brain) and lets its still-armed timer heal any residual duck.
+    data = data |> clear_brain() |> cancel_reflex_tasks() |> unduck()
 
     {%{
        data
@@ -1022,9 +1028,8 @@ defmodule App.Conversations.Conversation do
          agenda_turn: nil,
          speculative_reflex: nil,
          commit_speculative?: false,
-         interrupt_pending?: false,
-         ducked?: false
-     }, acts}
+         interrupt_pending?: false
+     }, [{{:timeout, :interrupt_pending}, :infinity, :cancel} | acts]}
   end
 
   defp run_effect({:arm_timer, :watchdog}, {data, acts}),

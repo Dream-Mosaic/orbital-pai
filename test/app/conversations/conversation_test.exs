@@ -772,6 +772,27 @@ defmodule App.Conversations.ConversationTest do
       Conversation.turn_start(pid)
       refute_receive {:to_client, :duck}, 300
     end
+
+    test "watchdog abort while ducked unducks the client (no stuck-quiet)" do
+      # brain never finishes generating before the short watchdog fires mid-stream while ducked.
+      Application.put_env(:app, :fake_brain_done_ms, 10_000)
+      on_exit(fn -> Application.delete_env(:app, :fake_brain_done_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      pid = start_conv(%Config{turn_max_ms: 800})
+      Conversation.set_allow_interruptions(pid, true)
+      Conversation.endpoint(pid, "tell me a story")
+      assert_receive {:to_client, {:speak_start, :reflex, _}}, 1000
+
+      Conversation.turn_start(pid)
+      assert_receive {:to_client, :duck}, 500
+
+      # The watchdog (800ms) aborts the stuck turn mid-stream, BEFORE the 2s interrupt window.
+      # Its teardown emits no stop_playback, so it must unduck the client itself — a :unduck
+      # within 1500ms proves it came from the watchdog path, not the 2000ms window expiry.
+      assert_receive {:to_client, :unduck}, 1500
+      refute_receive {:to_client, :stop_playback}, 100
+    end
   end
 
   defp start_conv_session(config \\ @config, session_id \\ "default") do
