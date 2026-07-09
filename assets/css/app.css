@@ -715,6 +715,11 @@ main:has(#voice) > header .duedot {
   box-shadow: 0 0 9px color-mix(in srgb, var(--henry) 80%, transparent);
 }
 
+/* briefing — a calm-blue lead line for the morning briefing, distinct from brain-green/you-amber. */
+.who-briefing .who {
+  color: oklch(0.72 0.12 230);
+}
+
 /* reflex — a hollow (unlit) node on the spine; quieter than a real answer. */
 .who-reflex {
   margin-top: 0.55rem;

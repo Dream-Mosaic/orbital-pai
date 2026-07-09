@@ -244,6 +244,7 @@ defmodule AppWeb.VoiceModals do
   attr :default_abi, :boolean, default: false
   attr :default_ptt, :boolean, default: false
   attr :voice_activation, :boolean, default: false
+  attr :briefing_time, :string, default: nil
   attr :relock_seconds, :integer, default: 15
   attr :app_version, :string, required: true
 
@@ -289,6 +290,28 @@ defmodule AppWeb.VoiceModals do
             phx-value-pref="voice_activation"
           />
         </label>
+        <label class="flex cursor-pointer items-center justify-between">
+          Morning briefing (spoken your first turn that morning)
+          <input
+            type="checkbox"
+            id="settings-briefing-toggle"
+            class="toggle toggle-sm"
+            checked={@briefing_time != nil}
+            phx-click="toggle_briefing"
+          />
+        </label>
+        <form :if={@briefing_time} id="briefing-time-form" phx-change="set_briefing_time">
+          <div class="flex items-center justify-between">
+            <span>Briefing time</span>
+            <input
+              type="time"
+              id="settings-briefing-time"
+              name="briefing_time"
+              value={@briefing_time}
+              class="input input-sm"
+            />
+          </div>
+        </form>
         <form id="lockdown-form" phx-change="set_relock" class="space-y-1">
           <div class="flex items-center justify-between">
             <span>Lockdown timeout (wall)</span>

@@ -470,6 +470,26 @@ defmodule AppWeb.ConversationLiveTest do
     assert render(lv) =~ ~r/\d+s/
   end
 
+  test "briefing toggle sets a default time, then clears it", %{conn: conn, user: user} do
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
+
+    lv |> element("#settings-briefing-toggle") |> render_click()
+    assert App.Users.get(user.id).briefing_time == "07:00"
+
+    lv |> element("#settings-briefing-toggle") |> render_click()
+    assert App.Users.get(user.id).briefing_time == nil
+  end
+
+  test "briefing time input updates the pref", %{conn: conn, user: user} do
+    {:ok, _} = App.Users.update_prefs(user, %{briefing_time: "07:00"})
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
+
+    lv |> element("#briefing-time-form") |> render_change(%{"briefing_time" => "06:30"})
+    assert App.Users.get(user.id).briefing_time == "06:30"
+  end
+
   test "connectors modal: a no-op grant (new account + none) closes the inline form without redirecting",
        %{conn: conn} do
     {:ok, lv, _} = live(conn, "/")

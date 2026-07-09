@@ -39,6 +39,7 @@ defmodule AppWeb.ConversationLive do
        default_abi: socket.assigns.current_user.default_abi,
        default_ptt: socket.assigns.current_user.default_ptt,
        voice_activation: socket.assigns.current_user.voice_activation,
+       briefing_time: socket.assigns.current_user.briefing_time,
        relock_seconds: socket.assigns.current_user.relock_seconds,
        assistant_name: App.Config.default().name
      )
@@ -207,6 +208,23 @@ defmodule AppWeb.ConversationLive do
   end
 
   def handle_event("update_pref", _params, socket), do: {:noreply, socket}
+
+  def handle_event("toggle_briefing", _params, socket) do
+    user = socket.assigns.current_user
+    new_value = if user.briefing_time, do: nil, else: "07:00"
+    {:ok, user} = App.Users.update_prefs(user, %{briefing_time: new_value})
+    {:noreply, assign(socket, current_user: user, briefing_time: user.briefing_time)}
+  end
+
+  def handle_event("set_briefing_time", %{"briefing_time" => hhmm}, socket) do
+    case App.Users.update_prefs(socket.assigns.current_user, %{briefing_time: hhmm}) do
+      {:ok, user} ->
+        {:noreply, assign(socket, current_user: user, briefing_time: user.briefing_time)}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
+  end
 
   def handle_event("set_relock", %{"seconds" => secs}, socket) do
     seconds = secs |> parse_seconds() |> max(10) |> min(30)
@@ -566,6 +584,7 @@ defmodule AppWeb.ConversationLive do
               default_abi={@default_abi}
               default_ptt={@default_ptt}
               voice_activation={@voice_activation}
+              briefing_time={@briefing_time}
               relock_seconds={@relock_seconds}
               app_version={@app_version}
             />
