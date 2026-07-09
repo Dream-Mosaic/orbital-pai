@@ -141,4 +141,38 @@ defmodule App.RemindersTest do
     assert_receive {:reminder_due, %App.Reminders.Reminder{body: "d-rem", user_id: ^d}}, 1000
     refute_receive {:reminder_due, %App.Reminders.Reminder{body: "t-rem"}}, 200
   end
+
+  describe "kind + context" do
+    test "kind defaults to reminder; followup kind and context are stored", %{d: d} do
+      {:ok, plain} =
+        Reminders.create(%{user_id: d, body: "call mom", due_at: at(3600)})
+
+      assert plain.kind == "reminder"
+      assert plain.context == nil
+
+      {:ok, fu} =
+        Reminders.create(%{
+          user_id: d,
+          body: "check whether Bob replied about the contract",
+          due_at: at(3600),
+          kind: "followup",
+          context: "I'm emailing Bob about the contract"
+        })
+
+      assert fu.kind == "followup"
+      assert fu.context == "I'm emailing Bob about the contract"
+    end
+
+    test "unknown kinds are rejected", %{d: d} do
+      assert {:error, changeset} =
+               Reminders.create(%{
+                 user_id: d,
+                 body: "x",
+                 due_at: at(3600),
+                 kind: "nag"
+               })
+
+      assert %{kind: _} = errors_on(changeset)
+    end
+  end
 end
