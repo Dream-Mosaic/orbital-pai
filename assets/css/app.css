@@ -720,6 +720,11 @@ main:has(#voice) > header .duedot {
   color: oklch(0.72 0.12 230);
 }
 
+/* followup — a lavender lead line for a fired open-loop ask, distinct from the other agenda kinds. */
+.who-followup .who {
+  color: oklch(0.75 0.12 300);
+}
+
 /* reflex — a hollow (unlit) node on the spine; quieter than a real answer. */
 .who-reflex {
   margin-top: 0.55rem;

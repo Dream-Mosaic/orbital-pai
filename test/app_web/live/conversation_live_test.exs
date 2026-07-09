@@ -112,6 +112,22 @@ defmodule AppWeb.ConversationLiveTest do
     assert render(lv) =~ "call mom"
   end
 
+  test "reminders modal: a follow-up reminder is badged", %{conn: conn, user: user} do
+    {:ok, _r} =
+      App.Reminders.create(%{
+        body: "check whether Bob replied about the contract",
+        due_at: past(3600),
+        user_id: user.id,
+        kind: "followup",
+        context: "I'm emailing Bob about the contract"
+      })
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
+
+    assert html =~ "follow-up"
+  end
+
   defp google_account(attrs) do
     base = %{refresh_token: "rt", user_id: Process.get(:test_user_id)}
 

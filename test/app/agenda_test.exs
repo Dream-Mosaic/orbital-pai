@@ -20,6 +20,42 @@ defmodule App.AgendaTest do
     assert item.expires_at == nil
   end
 
+  test "reminder_item/1 for a followup asks — with context, persisted" do
+    r = %App.Reminders.Reminder{
+      id: 9,
+      user_id: 3,
+      body: "check whether Bob replied about the contract",
+      kind: "followup",
+      context: "I'm emailing Bob about the contract"
+    }
+
+    item = App.Agenda.reminder_item(r)
+
+    assert item.kind == :followup
+    assert item.lead_idle == "By the way —"
+    assert item.lead_interjected == "Oh — while I think of it —"
+    assert item.deliver == :when_idle
+    assert item.persist_as == ~s|(follow-up: check whether Bob replied about the contract)|
+
+    assert item.prompt =~
+             ~s|You'd agreed to check back on: "check whether Bob replied about the contract"|
+
+    assert item.prompt =~ ~s|Context: "I'm emailing Bob about the contract"|
+    assert item.prompt =~ "Ask the user about it naturally and briefly"
+    assert item.ack == {App.Reminders, :acknowledge, [r]}
+  end
+
+  test "followup without context omits the context sentence" do
+    r = %App.Reminders.Reminder{
+      id: 9,
+      user_id: 3,
+      body: "check on the seedlings",
+      kind: "followup"
+    }
+
+    refute App.Agenda.reminder_item(r).prompt =~ "Context:"
+  end
+
   test "expired?/1" do
     refute Agenda.expired?(%Item{kind: :x, prompt: "p"})
     refute Agenda.expired?(%Item{kind: :x, prompt: "p", expires_at: minutes_from_now(5)})

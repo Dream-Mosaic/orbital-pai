@@ -76,6 +76,7 @@ defmodule AppWeb.VoiceModals do
         <ul class="space-y-1">
           <li :for={r <- @due} class="flex items-center gap-2">
             <span class="badge badge-sm badge-warning">due</span>
+            <span :if={r.kind == "followup"} class="badge badge-sm badge-ghost">follow-up</span>
             <span class="flex-1">{r.body}</span>
             <span class="text-xs opacity-60 font-mono">{fmt_due(r.due_at)}</span>
             <button
@@ -94,6 +95,7 @@ defmodule AppWeb.VoiceModals do
         <label class="text-xs opacity-60">Upcoming</label>
         <ul class="space-y-1">
           <li :for={r <- @upcoming} class="flex items-center gap-2">
+            <span :if={r.kind == "followup"} class="badge badge-sm badge-ghost">follow-up</span>
             <span class="flex-1">{r.body}</span>
             <span class="text-xs opacity-60 font-mono">{fmt_due(r.due_at)}</span>
             <button

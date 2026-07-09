@@ -14,7 +14,25 @@ defmodule App.Agenda do
     Phoenix.PubSub.broadcast(App.PubSub, "agenda:#{user_id}", {:agenda_due, item})
   end
 
-  @doc "A fired reminder as an agenda item (text identical to the old App.Reminders.Notice)."
+  @doc "A fired follow-up as an agenda item: Henry ASKS about the open loop; the exchange persists."
+  def reminder_item(%Reminder{kind: "followup"} = r) do
+    context_sentence = if r.context, do: ~s| Context: "#{r.context}".|, else: ""
+
+    %Item{
+      kind: :followup,
+      prompt:
+        ~s|A follow-up you set earlier is due. You'd agreed to check back on: "#{r.body}".| <>
+          context_sentence <>
+          " Ask the user about it naturally and briefly — did it get resolved? " <>
+          "Don't lecture and don't use tools unless they ask you to.",
+      lead_idle: "By the way —",
+      lead_interjected: "Oh — while I think of it —",
+      persist_as: "(follow-up: #{r.body})",
+      ack: {App.Reminders, :acknowledge, [r]}
+    }
+  end
+
+  # A fired reminder as an agenda item (text identical to the old App.Reminders.Notice).
   def reminder_item(%Reminder{} = r) do
     %Item{
       kind: :reminder,
