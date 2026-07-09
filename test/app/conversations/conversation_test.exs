@@ -1281,6 +1281,81 @@ defmodule App.Conversations.ConversationTest do
     end
   end
 
+  describe "heard-fraction persistence" do
+    test "truncate_heard/2 (pure)" do
+      text = "The quick brown fox jumps over the lazy dog and keeps on running home."
+
+      assert Conversation.truncate_heard(text, 1.0) == text
+      assert Conversation.truncate_heard(text, 0.96) == text
+
+      half = Conversation.truncate_heard(text, 0.5)
+      assert String.ends_with?(half, " —[interrupted]")
+      prefix = String.replace_suffix(half, " —[interrupted]", "")
+      assert String.starts_with?(text, prefix)
+      # snapped to a word boundary: the prefix must not end mid-word
+      refute String.ends_with?(prefix, ["qui", "bro", "fo"])
+      assert String.length(prefix) < String.length(text)
+
+      assert Conversation.truncate_heard(text, 0.0) == "—[interrupted]"
+    end
+
+    test "a barged answered turn waits for the played report and persists truncated" do
+      Application.put_env(:app, :fake_brain_done_ms, 150)
+      on_exit(fn -> Application.delete_env(:app, :fake_brain_done_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: session_id_for_test_user()
+        )
+
+      Conversation.set_allow_interruptions(pid, true)
+      Conversation.endpoint(pid, "tell me a story")
+      # wait until the brain has answered (draining) so the barge hits the answered path
+      assert_receive {:to_client, {:speak_start, :brain, _answer}}, 2000
+
+      Conversation.turn_start(pid)
+      Conversation.partial(pid, "wait stop that")
+      assert_receive {:to_client, :stop_playback}, 500
+
+      # client reports it played almost nothing of the brain audio
+      Conversation.played(pid, 1)
+      Process.sleep(300)
+
+      turns = App.Memory.recent_turns(user_id_for_test_user(), 3)
+      assert Enum.any?(turns, &(is_binary(&1.brain_text) and &1.brain_text =~ "—[interrupted]"))
+    end
+
+    test "no played report -> 500ms fallback persists the full text" do
+      Application.put_env(:app, :fake_brain_done_ms, 150)
+      on_exit(fn -> Application.delete_env(:app, :fake_brain_done_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: session_id_for_test_user()
+        )
+
+      Conversation.set_allow_interruptions(pid, true)
+      Conversation.endpoint(pid, "tell me a story")
+      assert_receive {:to_client, {:speak_start, :brain, answer}}, 2000
+
+      Conversation.turn_start(pid)
+      Conversation.partial(pid, "wait stop that")
+      assert_receive {:to_client, :stop_playback}, 500
+
+      Process.sleep(800)
+      turns = App.Memory.recent_turns(user_id_for_test_user(), 3)
+      assert Enum.any?(turns, &(&1.brain_text == answer))
+    end
+  end
+
   # Real user row (allowlisted + upserted), same pattern as the barge-in persistence test above —
   # session_id is `to_string(user.id)` so App.Users.id_from_session/1 resolves it back.
   defp user_id_for_test_user do

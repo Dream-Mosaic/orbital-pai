@@ -62,6 +62,11 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_in("played", %{"ms" => ms}, socket) when is_number(ms) do
+    Conversation.played(socket.assigns.conversation, ms)
+    {:noreply, socket}
+  end
+
   def handle_in("ptt", %{"enabled" => enabled}, socket) do
     Conversation.set_ptt(socket.assigns.conversation, enabled)
     {:noreply, socket}

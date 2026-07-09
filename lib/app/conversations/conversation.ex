@@ -37,6 +37,9 @@ defmodule App.Conversations.Conversation do
   def endpoint(pid, text), do: :gen_statem.cast(pid, {:stt_endpoint, text})
   def partial(pid, text), do: :gen_statem.cast(pid, {:stt_partial, text})
   def barge_in(pid), do: :gen_statem.cast(pid, :barge_in)
+
+  @doc "Client report: how many ms of this turn's audio actually played before stop_playback."
+  def played(pid, ms), do: :gen_statem.cast(pid, {:played, ms})
   def ptt_release(pid), do: :gen_statem.cast(pid, :ptt_release)
   def push_audio(pid, pcm16), do: :gen_statem.cast(pid, {:push_audio, pcm16})
   def set_ptt(pid, enabled), do: :gen_statem.cast(pid, {:set_ptt, enabled})
@@ -108,6 +111,11 @@ defmodule App.Conversations.Conversation do
       endpoint_at: nil,
       ttfa: nil,
       ttb: nil,
+      # per-turn pushed-audio durations (ms) by source — the denominator for heard-fraction
+      reflex_ms: 0,
+      brain_ms: 0,
+      # a barged answered turn awaiting the client's played report: {attrs, total_reflex_ms, total_brain_ms}
+      pending_interrupt_persist: nil,
       transcript: nil,
       # agenda items that fired mid-turn, queued to speak at the next clean turn completion
       pending_agenda: [],
@@ -223,8 +231,17 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :barge_in, _s, data) do
     Logger.info("[turn] ⏹ barge_in (during #{data.policy.phase})")
-    feed(:barge_in, on_barge_in(data))
+    barge_in_feed(on_barge_in(data))
   end
+
+  # Client report of how much of the current turn's audio actually played (arrives right after
+  # stop_playback). Only meaningful while a barged answered turn is stashed awaiting it.
+  def handle_event(:cast, {:played, ms}, _s, %{pending_interrupt_persist: {_, _, _}} = data),
+    do:
+      {:keep_state, flush_interrupt_persist(data, {:played, ms}),
+       [{{:timeout, :interrupt_persist}, :infinity, :cancel}]}
+
+  def handle_event(:cast, {:played, _ms}, _s, data), do: {:keep_state, data}
 
   def handle_event(
         :cast,
@@ -290,7 +307,7 @@ defmodule App.Conversations.Conversation do
   # (which is what merged "previous + current" speech onto a later release).
   def handle_event(:cast, :ptt_press, _s, %{ptt_mode: true} = data) do
     Logger.info("[turn] ⏹ PTT barge-in (press during #{data.policy.phase})")
-    feed(:barge_in, on_barge_in(%{data | holding: true, expecting_finalize: false}))
+    barge_in_feed(on_barge_in(%{data | holding: true, expecting_finalize: false}))
   end
 
   def handle_event(:cast, :ptt_press, _s, _data), do: :keep_state_and_data
@@ -327,6 +344,11 @@ defmodule App.Conversations.Conversation do
 
   def handle_event({:timeout, :interrupt_pending}, :expire, _s, data),
     do: {:keep_state, unduck(%{data | interrupt_pending?: false})}
+
+  # No played report arrived within the fallback window — persist the full (untruncated) text,
+  # never worse than the old immediate-persist behavior.
+  def handle_event({:timeout, :interrupt_persist}, :flush, _s, data),
+    do: {:keep_state, flush_interrupt_persist(data, :full)}
 
   def handle_event({:timeout, :relock}, :relock, _s, %{voice_activation: false} = data),
     do: {:keep_state, data}
@@ -617,7 +639,7 @@ defmodule App.Conversations.Conversation do
         Logger.info(~s|[wake] sleep: "#{t}"|)
         # halt + re-lock (vs the safety stop below, which halts but stays awake).
         data = lock_now(%{data | interrupt_pending?: false})
-        feed(:barge_in, %{on_barge_in(data) | pending_request: nil})
+        barge_in_feed(%{on_barge_in(data) | pending_request: nil})
 
       safety_stop?(t, data.config) ->
         Logger.info(~s|[wake] safety stop: "#{t}"|)
@@ -627,7 +649,7 @@ defmodule App.Conversations.Conversation do
         data = if data.locked, do: unlock(data), else: data
         # A stop is a discard, not a follow-up: null any carried-forward request so it can't fold
         # into the next turn's brain prompt. (Normal ABI barge-in carry-forward is untouched.)
-        feed(:barge_in, %{on_barge_in(data) | pending_request: nil})
+        barge_in_feed(%{on_barge_in(data) | pending_request: nil})
 
       data.locked ->
         :keep_state_and_data
@@ -677,7 +699,7 @@ defmodule App.Conversations.Conversation do
     case Backchannel.classify(t) do
       :interrupt ->
         Logger.info("[turn] ⏹ barge-in confirmed by interrupting speech: #{inspect(t)}")
-        feed(:barge_in, on_barge_in(%{data | interrupt_pending?: false, ducked?: false}))
+        barge_in_feed(on_barge_in(%{data | interrupt_pending?: false, ducked?: false}))
 
       :backchannel ->
         Logger.info("[turn] ~ backchannel (#{inspect(t)}) — continuing")
@@ -903,6 +925,17 @@ defmodule App.Conversations.Conversation do
     {:keep_state, data, actions}
   end
 
+  # feed(:barge_in, …) + (when an answered turn stashed attrs) the 500ms played-report fallback
+  # timer. Takes data that on_barge_in has ALREADY been applied to. pending_interrupt_persist
+  # survives feed (:cancel_brain doesn't reset it), so read it off the post-feed data.
+  defp barge_in_feed(data) do
+    {:keep_state, data, actions} = feed(:barge_in, data)
+
+    if data.pending_interrupt_persist,
+      do: {:keep_state, data, [{{:timeout, :interrupt_persist}, 500, :flush} | actions]},
+      else: {:keep_state, data, actions}
+  end
+
   # Tell the client when a turn begins / ends so it can gate the mic (half-duplex).
   defp notify_turn_state(:listening, new, client) when new != :listening,
     do: send(client, {:to_client, :speaking})
@@ -1028,7 +1061,9 @@ defmodule App.Conversations.Conversation do
          agenda_turn: nil,
          speculative_reflex: nil,
          commit_speculative?: false,
-         interrupt_pending?: false
+         interrupt_pending?: false,
+         reflex_ms: 0,
+         brain_ms: 0
      }, [{{:timeout, :interrupt_pending}, :infinity, :cancel} | acts]}
   end
 
@@ -1201,6 +1236,13 @@ defmodule App.Conversations.Conversation do
   defp push_audio_chunk(source, pcm, data) do
     now = System.monotonic_time(:millisecond)
     dur = trunc(byte_size(pcm) / (2 * data.config.tts_sample_rate) * 1000)
+
+    data =
+      case source do
+        :brain -> %{data | brain_ms: data.brain_ms + dur}
+        _ -> %{data | reflex_ms: data.reflex_ms + dur}
+      end
+
     data = %{data | audio_until: max(data.audio_until || now, now) + dur}
     data = record_metrics(source, data)
     send(data.client, {:to_client, {:audio, source, Base.encode64(pcm)}})
@@ -1317,8 +1359,10 @@ defmodule App.Conversations.Conversation do
 
   defp with_pending(_data, t), do: t
 
-  # Persist only — the next turn's completion runs the memory updater, which folds this in too.
-  # Skips agenda turns and sessionless/empty turns (same as complete_turn).
+  # The user barged after the brain answered. Persisting immediately would record the FULL
+  # answer even if they heard three words — so stash the attrs, ask time for the client's
+  # `played` report (it arrives right after stop_playback), and persist truncated. A missing
+  # report falls back to the full text after 500ms (never worse than today).
   defp persist_interrupted(%{session_id: sid, agenda_turn: nil, transcript: t} = data)
        when is_binary(sid) and is_binary(t) and t != "" do
     case App.Users.id_from_session(sid) do
@@ -1326,6 +1370,8 @@ defmodule App.Conversations.Conversation do
         data
 
       user_id ->
+        data = flush_interrupt_persist(data, :full)
+
         attrs = %{
           user_id: user_id,
           user_text: t,
@@ -1335,17 +1381,58 @@ defmodule App.Conversations.Conversation do
           ttb_ms: data.ttb
         }
 
-        Task.Supervisor.start_child(App.Conversations.TaskSup, fn -> persist_turn(attrs) end)
-        data
+        %{data | pending_interrupt_persist: {attrs, data.reflex_ms, data.brain_ms}}
     end
   end
 
   defp persist_interrupted(data), do: data
 
+  # Persist the stashed interrupted turn. :full keeps the whole answer; {:played, ms} truncates
+  # brain_text to the heard fraction.
+  defp flush_interrupt_persist(%{pending_interrupt_persist: nil} = data, _how), do: data
+
+  defp flush_interrupt_persist(
+         %{pending_interrupt_persist: {attrs, reflex_ms, brain_ms}} = data,
+         how
+       ) do
+    attrs =
+      case how do
+        {:played, played_ms} when brain_ms > 0 and is_binary(attrs.brain_text) ->
+          heard = max(0, played_ms - reflex_ms)
+          %{attrs | brain_text: truncate_heard(attrs.brain_text, heard / brain_ms)}
+
+        _ ->
+          attrs
+      end
+
+    Task.Supervisor.start_child(App.Conversations.TaskSup, fn -> persist_turn(attrs) end)
+    %{data | pending_interrupt_persist: nil}
+  end
+
+  @doc false
+  # Cut `text` to `fraction` of its characters, snapped back to the last word boundary, with an
+  # explicit marker so the brain (which sees history) knows the user never heard the rest.
+  def truncate_heard(text, fraction) when fraction >= 0.95, do: text
+
+  def truncate_heard(text, fraction) do
+    keep = trunc(String.length(text) * max(fraction, 0.0))
+
+    prefix =
+      text
+      |> String.slice(0, keep)
+      |> String.replace(~r/\s+\S*\z/u, "")
+
+    case prefix do
+      "" -> "—[interrupted]"
+      p -> p <> " —[interrupted]"
+    end
+  end
+
   # Clear per-turn accumulators (metrics included, so stale values can't leak into the
   # next turn or re-trigger the brain fallback).
   # NOTE: ptt_mode/holding/expecting_finalize are intentionally NOT reset here — they persist
-  # across turns and are cleared only on press/release/set_ptt.
+  # across turns and are cleared only on press/release/set_ptt. pending_interrupt_persist is
+  # ALSO intentionally not reset here — it outlives the turn until flushed.
   defp reset_turn_fields(data),
     do: %{
       data
@@ -1357,7 +1444,9 @@ defmodule App.Conversations.Conversation do
         speculative_reflex: nil,
         commit_speculative?: false,
         interrupt_pending?: false,
-        pending_request: nil
+        pending_request: nil,
+        reflex_ms: 0,
+        brain_ms: 0
     }
 
   # Clean up the unlinked brain on shutdown (the linked STT dies with us via its link).
