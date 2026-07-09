@@ -90,4 +90,28 @@ defmodule App.UsersTest do
     assert u1.email == "alice@x.com"
     assert length(Users.list()) == 1
   end
+
+  describe "briefing prefs" do
+    test "briefing_time accepts HH:MM, clears on nil, rejects garbage" do
+      {:ok, user} = Users.upsert_allowed("alice@x.com")
+      assert {:ok, u} = Users.update_prefs(user, %{briefing_time: "07:00"})
+      assert u.briefing_time == "07:00"
+      assert {:ok, u} = Users.update_prefs(u, %{briefing_time: nil})
+      assert u.briefing_time == nil
+      assert {:error, _} = Users.update_prefs(user, %{briefing_time: "7am"})
+    end
+
+    test "list_briefing_users/0 returns only users with a briefing_time" do
+      {:ok, on} = Users.upsert_allowed("alice@x.com")
+      {:ok, _off} = Users.upsert_allowed("bob@x.com")
+      {:ok, on} = Users.update_prefs(on, %{briefing_time: "07:00"})
+      assert Enum.map(Users.list_briefing_users(), & &1.id) == [on.id]
+    end
+
+    test "stamp_briefing!/2 records the delivered date" do
+      {:ok, user} = Users.upsert_allowed("alice@x.com")
+      stamped = Users.stamp_briefing!(user, ~D[2026-07-03])
+      assert stamped.briefing_last_on == ~D[2026-07-03]
+    end
+  end
 end

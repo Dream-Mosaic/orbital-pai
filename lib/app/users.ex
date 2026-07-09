@@ -79,8 +79,20 @@ defmodule App.Users do
   end
 
   @doc "Persist voice preference changes (default_abi, default_ptt) for a user."
+  def update_prefs(%User{} = user, %{briefing_time: nil}) do
+    user |> User.set_briefing_time(nil) |> Repo.update()
+  end
+
   def update_prefs(%User{} = user, attrs) do
     user |> User.prefs_changeset(attrs) |> Repo.update()
+  end
+
+  @doc "Users with the morning briefing enabled."
+  def list_briefing_users, do: Repo.all(from u in User, where: not is_nil(u.briefing_time))
+
+  @doc "Record that a user's briefing was delivered on `date` (the once/day claim, at delivery)."
+  def stamp_briefing!(%User{} = user, %Date{} = date) do
+    user |> Ecto.Changeset.change(briefing_last_on: date) |> Repo.update!()
   end
 
   @doc "The primary user (owner of pre-existing connections) = first allowlisted email."
