@@ -1151,6 +1151,51 @@ defmodule App.Conversations.ConversationTest do
       turns = App.Memory.recent_turns(user_id_for_test_user(), 5)
       assert Enum.any?(turns, &(&1.user_text == "(morning briefing)" and &1.brain_text == answer))
     end
+
+    test "a briefing is de-duped: a second :agenda_due while one is pending doesn't double-speak" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      pid = start_conv()
+
+      item = %Item{
+        kind: :briefing,
+        prompt: "give the briefing",
+        deliver: :after_next_turn,
+        lead_interjected: "Rundown:"
+      }
+
+      send(pid, {:agenda_due, item})
+      send(pid, {:agenda_due, item})
+
+      Conversation.endpoint(pid, "hello")
+      assert_receive {:to_client, {:speak_start, :briefing, "Rundown:"}}, 3000
+      # only ONE briefing turn — the duplicate was dropped at receipt
+      refute_receive {:to_client, {:speak_start, :briefing, _}}, 600
+    end
+
+    test "pull-on-connect: a Conversation whose user is due self-injects the briefing" do
+      Application.put_env(:app, :allowed_users, [%{email: "agenda@x.com", name: "Agenda Test"}])
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      {:ok, user} = App.Users.upsert_allowed("agenda@x.com")
+      now_hhmm = Calendar.strftime(DateTime.now!(App.Config.timezone()), "%H:%M")
+      {:ok, _} = App.Users.update_prefs(user, %{briefing_time: now_hhmm})
+
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(user.id)
+        )
+
+      # no manual :agenda_due — the pull on start queues it; the first user turn delivers it
+      Conversation.endpoint(pid, "morning")
+
+      assert_receive {:to_client,
+                      {:speak_start, :briefing, "Oh — and here's your morning rundown."}},
+                     3000
+    end
   end
 
   # Real user row (allowlisted + upserted), same pattern as the barge-in persistence test above —

@@ -79,7 +79,13 @@ defmodule App.Conversations.Conversation do
     config = Keyword.get(opts, :config, Config.default())
     session_id = Keyword.get(opts, :session_id)
     {stt_mod, stt_pid} = maybe_start_stt(session_id, config, :auto)
-    if session_id, do: Phoenix.PubSub.subscribe(App.PubSub, "agenda:#{session_id}")
+
+    if session_id do
+      Phoenix.PubSub.subscribe(App.PubSub, "agenda:#{session_id}")
+      # pull-on-connect: deliver a morning briefing to a user who opens the app AFTER its ready
+      # time (the scheduler's broadcast at that time reached no one). Handled post-init.
+      send(self(), :pull_briefing)
+    end
 
     data = %{
       policy: Policy.initial_state(),
@@ -402,6 +408,10 @@ defmodule App.Conversations.Conversation do
         Logger.info("[agenda] expired, dropped: #{item.kind}")
         {:keep_state, data}
 
+      briefing_duplicate?(item, data) ->
+        Logger.info("[agenda] briefing already pending/in-flight; ignoring duplicate")
+        {:keep_state, data}
+
       item.deliver == :when_idle and data.policy.phase == :listening ->
         start_agenda_turn(item, :idle, data)
 
@@ -409,6 +419,17 @@ defmodule App.Conversations.Conversation do
         Logger.info("[agenda] queued (phase=#{data.policy.phase}): #{item.kind}")
         {:keep_state, %{data | pending_agenda: [item | data.pending_agenda]}}
     end
+  end
+
+  # pull-on-connect: on start, if a morning briefing is due for this session's user, inject the
+  # same {:agenda_due, item} the scheduler would have broadcast (rides the normal delivery path).
+  def handle_event(:info, :pull_briefing, _s, %{session_id: sid} = data) do
+    case App.Agenda.Briefing.pull(sid) do
+      %Item{} = item -> send(self(), {:agenda_due, item})
+      _ -> :ok
+    end
+
+    {:keep_state, data}
   end
 
   # A queued item handed back after a turn completed. Idle now -> interject; a new turn
@@ -1018,6 +1039,15 @@ defmodule App.Conversations.Conversation do
 
   defp agenda_recent_context(nil), do: true
   defp agenda_recent_context({%Item{recent_context: rc}, _mode}), do: rc
+
+  # A briefing is a daily singleton: ignore a second one while one is already queued or in-flight,
+  # so the scheduler broadcast and the pull-on-connect injection can't double-speak it.
+  defp briefing_duplicate?(%Item{kind: :briefing}, data) do
+    Enum.any?(data.pending_agenda, &(&1.kind == :briefing)) or
+      match?({%Item{kind: :briefing}, _}, data.agenda_turn)
+  end
+
+  defp briefing_duplicate?(_item, _data), do: false
 
   # ---- reflex tasks ----
   defp spawn_reflex_model(t, data) do
