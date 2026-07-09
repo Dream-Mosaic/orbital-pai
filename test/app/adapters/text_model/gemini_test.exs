@@ -211,4 +211,12 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "follow-up"
     assert prompt =~ "confirm"
   end
+
+  test "brain prompt treats email (Gmail) as a real capability, not a can't-do" do
+    prompt = Gemini.brain_prompt("Henry")
+    # Gmail shipped — email must NOT be listed among things Henry can't do yet.
+    refute prompt =~ ~r/do yet[^.]*email/
+    # and it's named as a capability.
+    assert prompt =~ "email"
+  end
 end
