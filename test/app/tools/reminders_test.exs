@@ -54,4 +54,60 @@ defmodule App.Tools.RemindersTest do
                %{session_id: "default", user_id: nil, config: App.Config.default()}
              )
   end
+
+  test "list_reminders items include kind", %{user: user} do
+    due = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+    {:ok, _} = App.Reminders.create(%{body: "call mom", due_at: due, user_id: user.id})
+
+    assert {:ok, %{reminders: [item]}} = Tool.execute("list_reminders", %{}, ctx(user))
+    assert item.kind == "reminder"
+  end
+
+  describe "create_followup" do
+    test "creates a followup-kind reminder with context", %{user: user} do
+      assert {:ok, result} =
+               Tool.execute(
+                 "create_followup",
+                 %{
+                   "body" => "check whether Bob replied about the contract",
+                   "due_at" => "2030-01-01T17:00:00Z",
+                   "context" => "I'm emailing Bob about the contract"
+                 },
+                 ctx(user)
+               )
+
+      assert result.body == "check whether Bob replied about the contract"
+      [r] = App.Reminders.list_upcoming(user.id)
+      assert r.kind == "followup"
+      assert r.context == "I'm emailing Bob about the contract"
+    end
+
+    test "context is optional", %{user: user} do
+      assert {:ok, _} =
+               Tool.execute(
+                 "create_followup",
+                 %{"body" => "check on the seedlings", "due_at" => "2030-01-01T17:00:00Z"},
+                 ctx(user)
+               )
+
+      [r] = App.Reminders.list_upcoming(user.id)
+      assert r.context == nil
+    end
+
+    test "bad due_at and nil user behave like create_reminder", %{user: user} do
+      assert {:error, :invalid_due_at} =
+               Tool.execute(
+                 "create_followup",
+                 %{"body" => "x", "due_at" => "tomorrow-ish"},
+                 ctx(user)
+               )
+
+      assert {:ok, %{note: _}} =
+               Tool.execute(
+                 "create_followup",
+                 %{"body" => "x", "due_at" => "2030-01-01T17:00:00Z"},
+                 %{session_id: "default", user_id: nil, config: App.Config.default()}
+               )
+    end
+  end
 end

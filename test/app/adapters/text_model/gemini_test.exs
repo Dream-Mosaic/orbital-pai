@@ -205,4 +205,10 @@ defmodule App.Adapters.TextModel.GeminiTest do
     line = Gemini.grounding_line(~U[2026-07-09 15:00:00Z], "Not/AZone")
     assert line =~ "2026-07-09T15:00:00Z"
   end
+
+  test "brain prompt teaches the follow-up offer" do
+    prompt = Gemini.brain_prompt("Henry")
+    assert prompt =~ "follow-up"
+    assert prompt =~ "confirm"
+  end
 end
