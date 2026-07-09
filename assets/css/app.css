@@ -616,7 +616,7 @@ main:has(#voice) > header .duedot {
 }
 #voice .spine {
   position: absolute;
-  left: var(--rail);
+  left: calc(var(--rail) + 8px);
   top: -12px ;
   bottom: 4px;
   width: 1.5px;

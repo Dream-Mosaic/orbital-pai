@@ -38,6 +38,41 @@ defmodule App.DataCase do
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(App.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    # `on_exit` runs LIFO, so this drain (registered AFTER stop_owner) runs BEFORE it — while the
+    # shared sandbox owner is still alive. Conversation FSMs persist turns + run the memory updater
+    # in async tasks on the GLOBAL `App.Conversations.TaskSup`, which can outlive the test that
+    # spawned them. If one is still using the shared connection when `stop_owner` fires, it pins the
+    # owner's open transaction (holding SQLite's single write lock) into the NEXT test → that test's
+    # first write burns the 5s `busy_timeout` and raises "Database busy". Draining while the owner
+    # still lives lets those tasks finish cleanly. Shared (sync) suites only — async files use
+    # isolated owners and must not wait on each other's global tasks.
+    unless tags[:async], do: on_exit(&drain_conversation_tasks/0)
+  end
+
+  @doc """
+  Wait for the global Conversation task supervisor to quiesce (see `setup_sandbox/1`). Polls until
+  it has no children, or force-terminates stragglers past the deadline (should never fire — with the
+  sandbox owner still alive during the drain there's a single writer, so tasks finish in a poll or two).
+  """
+  def drain_conversation_tasks(deadline_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+    drain_loop(App.Conversations.TaskSup, deadline)
+  end
+
+  defp drain_loop(sup, deadline) do
+    case Task.Supervisor.children(sup) do
+      [] ->
+        :ok
+
+      pids ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          Enum.each(pids, &Task.Supervisor.terminate_child(sup, &1))
+        else
+          Process.sleep(20)
+          drain_loop(sup, deadline)
+        end
+    end
   end
 
   @doc """
