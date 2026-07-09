@@ -7,7 +7,13 @@ export class Playback {
     this.analyser = this.ctx.createAnalyser()
     this.analyser.fftSize = 1024
     this.analyser.smoothingTimeConstant = 0.6
-    this.analyser.connect(this.ctx.destination)
+    // Master gain: duck-then-decide dips this while an interruption is being classified.
+    this.gain = this.ctx.createGain()
+    this.gain.connect(this.ctx.destination)
+    this.analyser.connect(this.gain)
+    // Playback-progress tracking for the heard-fraction report.
+    this.runStartedAt = null
+    this.scheduledMs = 0
     this.nextStart = 0
     this.active = new Set()
   }
@@ -23,6 +29,11 @@ export class Playback {
   }
 
   enqueue(arrayBuffer) {
+    if (this.active.size === 0 && this.ctx.currentTime > this.nextStart) {
+      // idle gap: a new run starts now
+      this.runStartedAt = null
+      this.scheduledMs = 0
+    }
     // Int16Array needs an even byte length; drop a stray trailing byte defensively.
     const sampleCount = Math.floor(arrayBuffer.byteLength / 2)
     if (sampleCount === 0) return
@@ -41,12 +52,19 @@ export class Playback {
     const startAt = Math.max(this.ctx.currentTime, this.nextStart)
     src.start(startAt)
     this.nextStart = startAt + buffer.duration
+    if (this.runStartedAt === null) this.runStartedAt = startAt
+    this.scheduledMs += buffer.duration * 1000
 
     this.active.add(src)
     src.onended = () => this.active.delete(src)
   }
 
+  // Cancels everything. Returns how many ms of the current run actually played.
   stop() {
+    let playedMs = 0
+    if (this.runStartedAt !== null) {
+      playedMs = Math.max(0, Math.min((this.ctx.currentTime - this.runStartedAt) * 1000, this.scheduledMs))
+    }
     for (const src of this.active) {
       try {
         src.stop()
@@ -56,6 +74,24 @@ export class Playback {
     }
     this.active.clear()
     this.nextStart = this.ctx.currentTime
+    this.runStartedAt = null
+    this.scheduledMs = 0
+    this.gain.gain.cancelScheduledValues(this.ctx.currentTime)
+    this.gain.gain.setValueAtTime(1, this.ctx.currentTime)
+    return Math.round(playedMs)
+  }
+
+  // Duck-then-decide: dip while the server classifies an interruption; restore on continue.
+  duck() {
+    const t = this.ctx.currentTime
+    this.gain.gain.cancelScheduledValues(t)
+    this.gain.gain.setTargetAtTime(0.35, t, 0.08)
+  }
+
+  unduck() {
+    const t = this.ctx.currentTime
+    this.gain.gain.cancelScheduledValues(t)
+    this.gain.gain.setTargetAtTime(1, t, 0.15)
   }
 
   // Release the AudioContext (browsers cap them ~6; hot-reload/remount leaks otherwise).

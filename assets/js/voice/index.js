@@ -186,7 +186,12 @@ export const Voice = {
     })
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
     this.channel.on("audio", ({ pcm }) => this.playback.enqueue(b64ToArrayBuffer(pcm)))
-    this.channel.on("stop_playback", () => this.playback.stop())
+    this.channel.on("stop_playback", () => {
+      const ms = this.playback.stop()
+      this.channel.push("played", { ms })
+    })
+    this.channel.on("duck", () => this.playback.duck())
+    this.channel.on("unduck", () => this.playback.unduck())
     // Turn state → Orb state. Half-duplex is enforced server-side (the policy ignores
     // any speech-endpoint mid-turn), so the mic keeps streaming — which keeps the STT
     // connection fed and healthy. "Allow interruptions" still controls barge-in.
