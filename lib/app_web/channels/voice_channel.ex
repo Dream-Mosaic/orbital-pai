@@ -150,6 +150,16 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:to_client, :duck}, socket) do
+    push(socket, "duck", %{})
+    {:noreply, socket}
+  end
+
+  def handle_info({:to_client, :unduck}, socket) do
+    push(socket, "unduck", %{})
+    {:noreply, socket}
+  end
+
   @impl true
   def terminate(reason, socket) do
     # The header dot goes amber when THIS channel dies on the client. Logging the reason here

@@ -14,7 +14,7 @@ defmodule App.Conversations.Conversation do
   """
   @behaviour :gen_statem
 
-  alias App.Conversations.{Policy, WakeWord}
+  alias App.Conversations.{Backchannel, Policy, WakeWord}
   alias App.Agenda.Item
   alias App.Config
   require Logger
@@ -130,6 +130,7 @@ defmodule App.Conversations.Conversation do
       # armed by Ink's turn.start during playback and confirmed by the next partial with real words.
       allow_interruptions: false,
       interrupt_pending?: false,
+      ducked?: false,
       # an unanswered request carried forward from a barge-in, folded into the next turn's brain
       pending_request: nil,
       # voice activation (wake-word gate): voice_activation = mode on for this session (the client
@@ -325,7 +326,7 @@ defmodule App.Conversations.Conversation do
   def handle_event({:timeout, :turn_done}, :drained, _s, data), do: feed(:drained, data)
 
   def handle_event({:timeout, :interrupt_pending}, :expire, _s, data),
-    do: {:keep_state, %{data | interrupt_pending?: false}}
+    do: {:keep_state, unduck(%{data | interrupt_pending?: false})}
 
   def handle_event({:timeout, :relock}, :relock, _s, %{voice_activation: false} = data),
     do: {:keep_state, data}
@@ -669,16 +670,31 @@ defmodule App.Conversations.Conversation do
 
   defp handle_partial(t, data), do: handle_plain_partial(t, data)
 
-  # An onset was armed (turn.start during playback): the first partial with real words
-  # confirms a genuine interruption and barges in; a wordless interim keeps waiting.
+  # Classification-driven decide: noise keeps waiting (ducked), a backchannel restores the
+  # volume but keeps the window live (cumulative partials can still escalate), real speech
+  # yields. stop_playback resets the client gain, so no unduck is needed on the barge path.
   defp confirm_interrupt(t, data) do
-    if interrupt_words?(t) do
-      Logger.info("[turn] ⏹ barge-in confirmed by interrupting speech: #{inspect(t)}")
-      feed(:barge_in, on_barge_in(%{data | interrupt_pending?: false}))
-    else
-      :keep_state_and_data
+    case Backchannel.classify(t) do
+      :interrupt ->
+        Logger.info("[turn] ⏹ barge-in confirmed by interrupting speech: #{inspect(t)}")
+        feed(:barge_in, on_barge_in(%{data | interrupt_pending?: false, ducked?: false}))
+
+      :backchannel ->
+        Logger.info("[turn] ~ backchannel (#{inspect(t)}) — continuing")
+        data = unduck(data)
+        {:keep_state, data}
+
+      :noise ->
+        :keep_state_and_data
     end
   end
+
+  defp unduck(%{ducked?: true} = data) do
+    send(data.client, {:to_client, :unduck})
+    %{data | ducked?: false}
+  end
+
+  defp unduck(data), do: data
 
   defp handle_plain_partial(t, data) do
     if data.ptt_mode and not data.holding do
@@ -704,11 +720,6 @@ defmodule App.Conversations.Conversation do
       :none -> false
     end
   end
-
-  # "Real words" = contains at least one letter (a wordless/whitespace interim or pure noise doesn't
-  # confirm). Conservative on purpose; tunable.
-  defp interrupt_words?(t) when is_binary(t), do: String.match?(t, ~r/\p{L}/u)
-  defp interrupt_words?(_), do: false
 
   # In PTT mode the manual socket only endpoints via a release finalize (expecting_finalize);
   # any other endpoint is ignored. Hands-free (auto) endpoints on Ink's turn.end as normal.
@@ -842,14 +853,20 @@ defmodule App.Conversations.Conversation do
     {:keep_state, %{data | interrupt_pending?: false}}
   end
 
-  # Ink speech-onset. During playback with interruptions on, arm a pending marker and wait for the
-  # next partial with real words to confirm (so a bare onset / residual echo can't abort a response).
+  # Ink speech-onset during playback with interruptions on: duck the audio instantly and arm
+  # the confirmation window (duck-then-decide). Skipped while wake-locked — locked mode only
+  # honors the safety stop, and TV noise must not dip the volume every few seconds.
   defp handle_turn_start(%{allow_interruptions: true, policy: %{phase: phase}} = data)
        when phase != :listening do
-    Logger.info("[turn] ◉ turn.start during #{phase} — interruption pending (awaiting words)")
+    if data.voice_activation and data.locked do
+      {:keep_state, data}
+    else
+      Logger.info("[turn] ◉ turn.start during #{phase} — ducked, awaiting words")
+      send(data.client, {:to_client, :duck})
 
-    {:keep_state, %{data | interrupt_pending?: true},
-     [{{:timeout, :interrupt_pending}, @interrupt_window_ms, :expire}]}
+      {:keep_state, %{data | interrupt_pending?: true, ducked?: true},
+       [{{:timeout, :interrupt_pending}, @interrupt_window_ms, :expire}]}
+    end
   end
 
   defp handle_turn_start(data) do
@@ -1005,7 +1022,8 @@ defmodule App.Conversations.Conversation do
          agenda_turn: nil,
          speculative_reflex: nil,
          commit_speculative?: false,
-         interrupt_pending?: false
+         interrupt_pending?: false,
+         ducked?: false
      }, acts}
   end
 

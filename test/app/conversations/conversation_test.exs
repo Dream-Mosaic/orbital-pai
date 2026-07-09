@@ -712,6 +712,68 @@ defmodule App.Conversations.ConversationTest do
     refute_receive {:to_client, :stop_playback}, 300
   end
 
+  describe "duck-then-decide" do
+    defp playback_turn(pid) do
+      Application.put_env(:app, :fake_brain_done_ms, 600)
+      on_exit(fn -> Application.delete_env(:app, :fake_brain_done_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Conversation.set_allow_interruptions(pid, true)
+      Conversation.endpoint(pid, "tell me a story")
+      assert_receive {:to_client, {:speak_start, :reflex, _}}, 1000
+    end
+
+    test "onset ducks; wordless partial stays ducked; expiry unducks" do
+      pid = start_conv()
+      playback_turn(pid)
+
+      Conversation.turn_start(pid)
+      assert_receive {:to_client, :duck}, 500
+
+      Conversation.partial(pid, "...")
+      refute_receive {:to_client, :unduck}, 100
+      refute_receive {:to_client, :stop_playback}, 100
+
+      # the 2s interrupt window expires -> unduck (no interruption)
+      assert_receive {:to_client, :unduck}, 2500
+    end
+
+    test "backchannel unducks and does NOT stop; escalation in the same window stops" do
+      pid = start_conv()
+      playback_turn(pid)
+
+      Conversation.turn_start(pid)
+      assert_receive {:to_client, :duck}, 500
+
+      Conversation.partial(pid, "yeah")
+      assert_receive {:to_client, :unduck}, 500
+      refute_receive {:to_client, :stop_playback}, 200
+
+      # Ink partials are cumulative — the same utterance grows into a real interruption
+      Conversation.partial(pid, "yeah but actually stop")
+      assert_receive {:to_client, :stop_playback}, 500
+    end
+
+    test "real interruption stops playback (as before)" do
+      pid = start_conv()
+      playback_turn(pid)
+
+      Conversation.turn_start(pid)
+      assert_receive {:to_client, :duck}, 500
+      Conversation.partial(pid, "wait what about tomorrow")
+      assert_receive {:to_client, :stop_playback}, 500
+    end
+
+    test "no duck while wake-locked (safety stop owns locked mode)" do
+      pid = start_conv()
+      playback_turn(pid)
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.turn_start(pid)
+      refute_receive {:to_client, :duck}, 300
+    end
+  end
+
   defp start_conv_session(config \\ @config, session_id \\ "default") do
     {:ok, pid} =
       Conversation.start_link(client: self(), config: config, session_id: session_id, name: nil)
