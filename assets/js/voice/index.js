@@ -208,6 +208,9 @@ export const Voice = {
       this.clearThinking()
       this.brainEl = null
       this.metricsEl = null
+      // Drop any tool-call chips still unresolved (a turn barged mid-tool-call) — resolved ✓ chips
+      // are already out of this array (resolveToolChips empties it) and stay in the log as the turn's story.
+      for (const chip of this.toolChips || []) chip.remove()
       this.toolChips = []
       this.setOrbState("listening")
     })
