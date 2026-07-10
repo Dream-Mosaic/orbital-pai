@@ -108,17 +108,29 @@ defmodule App.Google.Calendar do
     {finish, _} = edge(item["end"])
 
     %{
+      id: item["id"],
       summary: item["summary"] || "(no title)",
       start: start,
       end: finish,
       location: item["location"],
+      description: item["description"],
+      attendees: attendee_emails(item["attendees"]),
+      html_link: item["htmlLink"],
       all_day?: all_day?,
       account: label
     }
   end
 
+  defp attendee_emails(list) when is_list(list),
+    do: for(a <- list, e = a["email"], is_binary(e), do: e)
+
+  defp attendee_emails(_), do: []
+
   # Timed events carry "dateTime"; all-day events carry "date".
   defp edge(%{"dateTime" => dt}), do: {dt, false}
   defp edge(%{"date" => d}), do: {d, true}
   defp edge(_), do: {nil, false}
+
+  @doc false
+  def strftime_utc(%DateTime{} = dt), do: Calendar.strftime(dt, "%a %b %-d, %Y %-I:%M %p UTC")
 end

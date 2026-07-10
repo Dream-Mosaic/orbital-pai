@@ -55,14 +55,13 @@ defmodule App.Google.CalendarTest do
 
     assert {:ok, [timed, allday]} = Calendar.list_events(account(), opts())
 
-    assert timed == %{
-             summary: "Standup",
-             start: "2026-06-18T14:00:00Z",
-             end: "2026-06-18T14:15:00Z",
-             location: "Zoom",
-             all_day?: false,
-             account: "a@x.com"
-           }
+    assert timed.summary == "Standup"
+    assert timed.start == "2026-06-18T14:00:00Z"
+    assert timed.end == "2026-06-18T14:15:00Z"
+    assert timed.location == "Zoom"
+    assert timed.all_day? == false
+    assert timed.account == "a@x.com"
+    assert timed.attendees == []
 
     assert allday.summary == "Holiday"
     assert allday.all_day? == true
