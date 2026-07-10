@@ -148,6 +148,13 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # W3: server state snapshot on every (re)bind (and initial start) — the hook resets
+  # thinking/caption/orb from it so a reconnect can't leave a stale UI.
+  def handle_info({:to_client, {:state, snapshot}}, socket) do
+    push(socket, "state", snapshot)
+    {:noreply, socket}
+  end
+
   def handle_info({:to_client, {:transcript, text}}, socket) do
     push(socket, "transcript", %{text: text})
     {:noreply, socket}
