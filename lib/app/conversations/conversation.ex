@@ -41,8 +41,14 @@ defmodule App.Conversations.Conversation do
   @doc "Client report: how many ms of this turn's audio actually played before stop_playback."
   def played(pid, ms), do: :gen_statem.cast(pid, {:played, ms})
   def ptt_release(pid), do: :gen_statem.cast(pid, :ptt_release)
-  def push_audio(pid, pcm16), do: :gen_statem.cast(pid, {:push_audio, pcm16})
+  def push_audio(pid, pcm16), do: :gen_statem.cast(pid, {:push_audio, pcm16, self()})
   def set_ptt(pid, enabled), do: :gen_statem.cast(pid, {:set_ptt, enabled})
+
+  @doc "Rebind the outbound client (a rejoining channel). Cancels any linger and sends a state snapshot."
+  def set_client(pid, client), do: :gen_statem.cast(pid, {:set_client, client})
+
+  @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
+  def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
   def ptt_press(pid), do: :gen_statem.cast(pid, :ptt_press)
   def eager_end(pid, text), do: :gen_statem.cast(pid, {:stt_eager_end, text})
   def resume(pid), do: :gen_statem.cast(pid, {:stt_resume})
@@ -157,6 +163,8 @@ defmodule App.Conversations.Conversation do
       # nil -> fall back to the app-env default (also the test override hook).
       relock_ms: nil
     }
+
+    send_state_snapshot(data)
 
     {:ok, :running, data}
   end
@@ -297,6 +305,26 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, {:set_relock_ms, _ms}, _s, data), do: {:keep_state, data}
 
+  def handle_event(:cast, {:set_client, client}, _s, data) do
+    data = %{data | client: client}
+    send_state_snapshot(data)
+    {:keep_state, data, [{{:timeout, :client_linger}, :infinity, :cancel}]}
+  end
+
+  # Only the CURRENTLY bound channel arms the linger — a stale channel (another device took
+  # over via set_client) terminating must not schedule the death of a session in active use.
+  def handle_event(:cast, {:client_disconnected, from}, _s, %{client: from} = data) do
+    Logger.info("[conn] client gone — lingering #{linger_ms()}ms for a rebind")
+    {:keep_state, data, [{{:timeout, :client_linger}, linger_ms(), :expire}]}
+  end
+
+  def handle_event(:cast, {:client_disconnected, _from}, _s, data), do: {:keep_state, data}
+
+  def handle_event({:timeout, :client_linger}, :expire, _s, data) do
+    Logger.info("[conn] linger expired with no rebind — stopping the session")
+    {:stop, :normal, data}
+  end
+
   def handle_event(:cast, :clear_memory, _s, data),
     do: {:keep_state, reset_turn_fields(data)}
 
@@ -316,8 +344,11 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :ptt_press, _s, _data), do: :keep_state_and_data
 
-  def handle_event(:cast, {:push_audio, pcm}, _s, data),
+  def handle_event(:cast, {:push_audio, pcm, from}, _s, %{client: from} = data),
     do: {:keep_state, push_to_stt(pcm, data)}
+
+  # a frame from a channel that is no longer the bound client (stale tab/device) — drop it
+  def handle_event(:cast, {:push_audio, _pcm, _from}, _s, data), do: {:keep_state, data}
 
   # ---- STT process: transcripts + lifecycle via plain send/2 ----
   def handle_event(:info, {:stt_partial, t}, _s, data), do: handle_partial(t, data)
@@ -1018,6 +1049,15 @@ defmodule App.Conversations.Conversation do
 
   defp notify_locked(_data), do: :ok
 
+  # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
+  # non-listening phase — the client only needs the orb-level distinction.
+  defp send_state_snapshot(%{client: client} = data) when is_pid(client) do
+    phase = if data.policy.phase == :listening, do: "listening", else: "busy"
+    send(client, {:to_client, {:state, %{phase: phase, locked: data.locked}}})
+  end
+
+  defp send_state_snapshot(_data), do: :ok
+
   defp run_effects(effects, data), do: Enum.reduce(effects, {data, []}, &run_effect/2)
 
   defp run_effect({:generate_reflex, t}, {data, acts}) do
@@ -1551,6 +1591,8 @@ defmodule App.Conversations.Conversation do
 
   defp relock_ms(%{relock_ms: ms}) when is_integer(ms), do: ms
   defp relock_ms(_data), do: Application.get_env(:app, :relock_ms, 15_000)
+
+  defp linger_ms, do: Application.get_env(:app, :client_linger_ms, 120_000)
 
   defp prewarm_ttl_ms, do: Application.get_env(:app, :prewarm_ttl_ms, 15_000)
 

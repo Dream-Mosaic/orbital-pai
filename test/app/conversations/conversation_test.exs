@@ -573,6 +573,8 @@ defmodule App.Conversations.ConversationTest do
 
   test "turn.start takes no action — Phase A diagnostic logs only, never aborts a turn" do
     pid = start_conv()
+    # drain the init state snapshot (W3) so the refute below isn't caught by it
+    assert_receive {:to_client, {:state, _}}, 500
     Conversation.turn_start(pid)
 
     # diagnostic only: no barge-in, no client message, and the session stays up (handler wired)
@@ -1432,4 +1434,73 @@ defmodule App.Conversations.ConversationTest do
   end
 
   defp session_id_for_test_user, do: to_string(user_id_for_test_user())
+
+  # A process that forwards every message it receives to `test_pid`, wrapped as
+  # `{:proxied, msg}` — stands in for a rebinding client (a rejoining channel) in tests.
+  defp spawn_client_proxy(test_pid) do
+    spawn(fn -> client_proxy_loop(test_pid) end)
+  end
+
+  defp client_proxy_loop(test_pid) do
+    receive do
+      msg ->
+        send(test_pid, {:proxied, msg})
+        client_proxy_loop(test_pid)
+    end
+  end
+
+  describe "client rebind + linger" do
+    test "set_client swaps the outbound target and pushes a state snapshot" do
+      pid = start_conv()
+      new_client = spawn_client_proxy(self())
+      Conversation.set_client(pid, new_client)
+      assert_receive {:proxied, {:to_client, {:state, %{phase: "listening", locked: false}}}}
+      # subsequent outbound goes to the new client, not the old (this test process)
+      send(pid, {:brain_text, "x"})
+      refute_receive {:to_client, {:brain_delta, _}}, 100
+    end
+
+    test "client_disconnected from the CURRENT client stops the session after the linger" do
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+      pid = start_conv()
+      ref = Process.monitor(pid)
+      Conversation.client_disconnected(pid, self())
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    end
+
+    test "client_disconnected from a STALE pid does not arm the linger" do
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+      pid = start_conv()
+      stale = spawn(fn -> :ok end)
+      Conversation.client_disconnected(pid, stale)
+      refute_receive {:DOWN, _, _, _, _}, 200
+      assert Process.alive?(pid)
+    end
+
+    test "set_client cancels a pending linger" do
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+      pid = start_conv()
+      Conversation.client_disconnected(pid, self())
+      Conversation.set_client(pid, self())
+      Process.sleep(200)
+      assert Process.alive?(pid)
+    end
+
+    test "mic frames from a non-client pid are dropped" do
+      # push_audio/2 stamps self(); calling from a task that is NOT the bound client must not
+      # reach the STT. Observe via the fake STT observer registered in this file's setup.
+      Process.register(self(), :fake_stt_observer)
+
+      on_exit(fn ->
+        if Process.whereis(:fake_stt_observer), do: Process.unregister(:fake_stt_observer)
+      end)
+
+      pid = start_conv_session()
+      Task.await(Task.async(fn -> Conversation.push_audio(pid, <<0, 0>>) end))
+      refute_receive {:fake_stt_push, _}, 100
+    end
+  end
 end
