@@ -29,6 +29,20 @@ defmodule App.Google.Gmail do
   end
 
   @doc """
+  List message ids matching a Gmail query — ids only, no per-message metadata fan-out (the semantic
+  indexer only needs ids to diff; it fetches full bodies for *new* ids). `opts`: `:q`, `:max_results`
+  (default 100). Returns `{:ok, [id]}` | `{:error, reason | :needs_reconnect}`.
+  """
+  def list_message_ids(account, opts \\ []) do
+    q = Keyword.get(opts, :q, "in:inbox")
+    max = Keyword.get(opts, :max_results, 100)
+
+    with {:ok, token} <- Accounts.valid_access_token(account) do
+      list_ids(token, q, max)
+    end
+  end
+
+  @doc """
   Read one message's full plaintext body. Returns
   `{:ok, %{from, subject, date, body}}` | `{:error, reason | :needs_reconnect}`.
   """
@@ -40,6 +54,7 @@ defmodule App.Google.Gmail do
          from: header(body, "From"),
          subject: header(body, "Subject"),
          date: header(body, "Date"),
+         internal_date: body["internalDate"],
          body: Body.extract(body["payload"] || %{})
        }}
     end
