@@ -2,16 +2,20 @@ defmodule AppWeb.VoiceChannel do
   @moduledoc """
   Bridges a browser to its per-session `Conversation`.
 
-  - **Join** (re)starts the session bound to *this* channel as the Conversation's
-    `client`. Any stale session is dropped first, so a reload never leaves the
-    Conversation pushing audio at a dead pid.
+  - **Join** rebinds to a *live* session (the linger keeps it alive across a reload/
+    reconnect — conversation state is preserved) via `Conversation.set_client/2`, or
+    starts a fresh one if none exists. A start/lookup race resolves to rebinding the
+    winner.
   - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`;
     `"barge_in"` → `Conversation.barge_in`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
     relayed to the browser as a JSON event (`speak_start` / `metrics` / `transcript` /
-    `stop_playback`) — except `audio`, which is pushed as a raw binary channel frame
-    (no JSON envelope, no base64).
-  - **Terminate** stops the session (which also tears down its STT websocket).
+    `stop_playback` / `state`) — except `audio`, which is pushed as a raw binary
+    channel frame (no JSON envelope, no base64).
+  - **Terminate** does NOT stop the session outright — it tells the Conversation this
+    channel disconnected (`Conversation.client_disconnected/2`, pid-guarded so a stale
+    channel closing after another rebound can't kill the live one); the Conversation
+    arms a linger and stops itself only if nothing rebinds in time.
   """
   use AppWeb, :channel
   require Logger
@@ -28,26 +32,20 @@ defmodule AppWeb.VoiceChannel do
     end
   end
 
-  # Bind a fresh session to THIS channel. We stop any prior one first (so the Conversation's
-  # client points at us), but the Registry unregisters asynchronously after terminate, so a
-  # fast rejoin can still hit {:already_started}; retry briefly, then fall back to the
-  # existing pid rather than crashing the join.
-  defp bind_session(session_id, tries \\ 5) do
-    Sessions.stop(session_id)
-
-    case Sessions.start(session_id, self()) do
+  # Rebind to a live session (survives reconnects — the linger keeps it alive), else start
+  # fresh. A start/lookup race resolves to rebinding the winner.
+  defp bind_session(session_id) do
+    case Sessions.lookup(session_id) do
       {:ok, pid} ->
+        Conversation.set_client(pid, self())
         {:ok, pid}
 
-      {:error, {:already_started, pid}} when tries <= 0 ->
-        {:ok, pid}
-
-      {:error, {:already_started, _pid}} ->
-        Process.sleep(20)
-        bind_session(session_id, tries - 1)
-
-      {:error, reason} ->
-        {:error, reason}
+      :error ->
+        case Sessions.start(session_id, self()) do
+          {:ok, pid} -> {:ok, pid}
+          {:error, {:already_started, pid}} -> Conversation.set_client(pid, self()) && {:ok, pid}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -186,7 +184,7 @@ defmodule AppWeb.VoiceChannel do
     )
 
     case socket.assigns do
-      %{session_id: sid} -> Sessions.stop(sid)
+      %{conversation: pid} when is_pid(pid) -> Conversation.client_disconnected(pid, self())
       _ -> :ok
     end
 

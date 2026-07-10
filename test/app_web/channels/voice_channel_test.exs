@@ -54,6 +54,46 @@ defmodule AppWeb.VoiceChannelTest do
     assert Process.alive?(pid)
   end
 
+  test "join pushes a state snapshot" do
+    # The setup block's join already delivered this — a fresh session starts
+    # listening/unlocked, and every (re)bind (including the first) pushes a snapshot.
+    assert_push "state", %{phase: "listening", locked: false}
+  end
+
+  test "joining with a live session REBINDS instead of restarting it", %{sid: sid, alice: alice} do
+    {:ok, pid} = Sessions.lookup(sid)
+
+    token = AppWeb.UserAuth.socket_token(alice.id)
+    {:ok, socket2} = connect(AppWeb.UserSocket, %{"token" => token})
+    {:ok, _reply, _channel2} = subscribe_and_join(socket2, "voice:#{sid}", %{})
+
+    # same pid — state preserved (a restart would hand back a fresh pid)
+    assert {:ok, ^pid} = Sessions.lookup(sid)
+  end
+
+  test "terminate does not kill a session another channel rebound", %{
+    socket: socket_a,
+    sid: sid,
+    alice: alice
+  } do
+    {:ok, pid} = Sessions.lookup(sid)
+    ref = Process.monitor(pid)
+
+    token = AppWeb.UserAuth.socket_token(alice.id)
+    {:ok, socket_b} = connect(AppWeb.UserSocket, %{"token" => token})
+    {:ok, _reply, _channel_b} = subscribe_and_join(socket_b, "voice:#{sid}", %{})
+
+    # channel A closes, but it's no longer the bound client (B rebound it) — terminate's
+    # client_disconnected is pid-guarded, so this must NOT arm the linger/stop.
+    Process.flag(:trap_exit, true)
+    reply_ref = leave(socket_a)
+    assert_reply reply_ref, :ok
+
+    refute_receive {:DOWN, ^ref, :process, ^pid, _}, 200
+    assert Process.alive?(pid)
+    assert {:ok, ^pid} = Sessions.lookup(sid)
+  end
+
   test "relays speak_start to the browser", %{socket: socket} do
     send(socket.channel_pid, {:to_client, {:speak_start, :reflex, "hi there"}})
     assert_push "speak_start", %{source: :reflex, text: "hi there"}
@@ -136,7 +176,15 @@ defmodule AppWeb.VoiceChannelTest do
     assert_receive {:fake_stt_finalize}, 1000
   end
 
-  test "leaving stops the session (tears down STT)", %{socket: socket, sid: sid} do
+  test "leaving arms the linger and the session dies after it expires (tears down STT)", %{
+    socket: socket,
+    sid: sid
+  } do
+    # W2: a channel closing no longer stops the session outright — it only disconnects the
+    # client, which arms a linger for a rebind. Shrink the linger so this test doesn't wait 120s.
+    Application.put_env(:app, :client_linger_ms, 50)
+    on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+
     # The channel is linked to us; leaving exits it with {:shutdown, :left}.
     Process.flag(:trap_exit, true)
     {:ok, conv} = Sessions.lookup(sid)
@@ -145,7 +193,7 @@ defmodule AppWeb.VoiceChannelTest do
     reply_ref = leave(socket)
     assert_reply reply_ref, :ok
 
-    assert_receive {:DOWN, ^ref, :process, ^conv, _}
+    assert_receive {:DOWN, ^ref, :process, ^conv, _}, 500
     refute Process.alive?(conv)
     # Registry clears the session entry asynchronously after the process dies.
     assert wait_until(fn -> Sessions.lookup(sid) == :error end)

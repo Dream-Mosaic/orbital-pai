@@ -199,6 +199,15 @@ export const Voice = {
       this.showThinking()
       this.setOrbState("thinking")
     })
+    // Server state snapshot on every (re)bind: reset turn-scoped UI so a reconnect can't
+    // leave a stale thinking line / wrong orb state from a turn that ended while offline.
+    this.channel.on("state", ({ phase, locked }) => {
+      this.clearThinking()
+      this.brainEl = null
+      // RE-ANCHOR: match the existing `locked` handler's exact caption wording (index.js).
+      this.setCaption(locked ? `Say “Wake up ${this.assistantName}”` : "")
+      if (this.talking) this.setOrbState(phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle")
+    })
 
     this.onPower = () => this.toggle()
     this.powerEl.addEventListener("click", this.onPower)
