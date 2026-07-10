@@ -29,7 +29,8 @@ config :app,
   text_model: App.Adapters.TextModel.Gemini,
   tts: App.Adapters.Tts.Cartesia,
   stt: App.Adapters.Stt.Cartesia,
-  brain_stream: App.Conversations.BrainStream
+  brain_stream: App.Conversations.BrainStream,
+  embeddings: App.Adapters.Embeddings.Voyage
 
 # The reminder scheduler ticks against the DB; disabled in test (tests call tick/0 directly).
 config :app, start_reminder_scheduler: true

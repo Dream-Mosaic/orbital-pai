@@ -219,6 +219,28 @@ defmodule App.Test.Fakes do
     def execute("bad", _args, _ctx), do: :not_a_tuple
   end
 
+  defmodule Embeddings do
+    @moduledoc """
+    Deterministic fake embeddings: a stable 8-dim vector from each text's SHA1 (identical text →
+    identical vector; distinct text → distinct vector). `:fake_embeddings_error` forces failure.
+    """
+    @behaviour App.Adapters.Embeddings
+
+    @impl true
+    def embed(texts, _input_type) do
+      if Application.get_env(:app, :fake_embeddings_error, false) do
+        {:error, :fake_embed_down}
+      else
+        {:ok, Enum.map(texts, &vector/1)}
+      end
+    end
+
+    defp vector(text) do
+      <<a, b, c, d, e, f, g, h, _::binary>> = :crypto.hash(:sha, text)
+      for byte <- [a, b, c, d, e, f, g, h], do: byte / 255.0
+    end
+  end
+
   defmodule CacheTool do
     @behaviour App.Tools.Tool
 

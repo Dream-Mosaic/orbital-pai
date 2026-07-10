@@ -78,6 +78,13 @@ defmodule App.Config do
             sleep_words: ["sleep", "lock", "go to sleep", "go back to sleep"],
             # Used to tell the brain how to resolve relative reminder times.
             timezone: "America/Chicago",
+            # Semantic memory (Unified Search M1): periodic embedder cadence + Voyage/Qdrant params.
+            # Model/dims are the single source of truth (read by the Voyage + Qdrant adapters); the
+            # collection name encodes model+dims so a model swap is a clean new-collection backfill.
+            embed_interval_ms: 4 * 60 * 60 * 1000,
+            embed_model: "voyage-4-lite",
+            embed_dims: 1024,
+            qdrant_collection: "memory_v4lite_1024",
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
             weather_home: {38.52, -89.98, "Belleville, IL"}
 
