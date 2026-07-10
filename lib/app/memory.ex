@@ -172,6 +172,22 @@ defmodule App.Memory do
   defp snippet(nil), do: nil
   defp snippet(text), do: String.slice(text, 0, 200)
 
+  # ---- Reciprocal Rank Fusion (RRF) ----
+  @doc """
+  Reciprocal Rank Fusion of several ranked `{source, id}` lists. Each list contributes
+  `1 / (k + rank)` (rank 1-based) to a doc's score; docs are deduped by `{source, id}` and returned
+  best-first. `k = 60` is the standard constant.
+  """
+  def rrf_fuse(ranked_lists, k \\ 60) do
+    ranked_lists
+    |> Enum.flat_map(fn list ->
+      list |> Enum.with_index(1) |> Enum.map(fn {doc, rank} -> {doc, 1.0 / (k + rank)} end)
+    end)
+    |> Enum.reduce(%{}, fn {doc, score}, acc -> Map.update(acc, doc, score, &(&1 + score)) end)
+    |> Enum.sort_by(fn {_doc, score} -> -score end)
+    |> Enum.map(fn {doc, _score} -> doc end)
+  end
+
   # ---- daily digests (nightly consolidation substrate) ----
   @doc "Digests, newest first."
   def digests_for(user_id, limit) do
