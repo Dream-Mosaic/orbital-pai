@@ -22,6 +22,8 @@ defmodule AppWeb.VoiceChannel do
 
   alias App.Conversations.{Conversation, Sessions}
 
+  @history_turns 12
+
   @impl true
   def join("voice:" <> _ignored, _payload, socket) do
     session_id = to_string(socket.assigns.user_id)
@@ -29,6 +31,7 @@ defmodule AppWeb.VoiceChannel do
     case bind_session(session_id) do
       {:ok, pid} ->
         Process.monitor(pid)
+        send(self(), :after_join)
         {:ok, assign(socket, session_id: session_id, conversation: pid)}
 
       {:error, reason} ->
@@ -50,6 +53,21 @@ defmodule AppWeb.VoiceChannel do
           {:error, {:already_started, pid}} -> Conversation.set_client(pid, self()) && {:ok, pid}
           {:error, reason} -> {:error, reason}
         end
+    end
+  end
+
+  # The persisted transcript tail, oldest-first, for the client to backfill the log.
+  defp history(session_id) do
+    case App.Users.id_from_session(session_id) do
+      nil ->
+        []
+
+      user_id ->
+        user_id
+        |> App.Memory.recent_turns(@history_turns)
+        |> Enum.map(fn t ->
+          %{you: t.user_text, assistant: t.brain_text, at: DateTime.to_iso8601(t.inserted_at)}
+        end)
     end
   end
 
@@ -103,6 +121,11 @@ defmodule AppWeb.VoiceChannel do
 
   # ---- outbound: session -> browser ----
   @impl true
+  def handle_info(:after_join, socket) do
+    push(socket, "history", %{turns: history(socket.assigns.session_id)})
+    {:noreply, socket}
+  end
+
   def handle_info({:to_client, {:speak_start, source, text}}, socket) do
     push(socket, "speak_start", %{source: source, text: text})
     {:noreply, socket}

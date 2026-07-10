@@ -60,6 +60,31 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "state", %{phase: "listening", locked: false}
   end
 
+  test "join backfills recent turns oldest-first, capped 12, iso8601 at", %{bob: bob} do
+    # The setup block's own join (alice, who has no turns) already queued an empty history
+    # push into this test process's mailbox — drain it first so it can't shadow bob's below.
+    assert_push "history", %{turns: []}
+
+    for i <- 1..14 do
+      App.Memory.persist_turn(%{user_id: bob.id, user_text: "q#{i}", brain_text: "a#{i}"})
+    end
+
+    {:ok, _reply, _socket} = join_voice(bob)
+    assert_push "history", %{turns: turns}
+    assert length(turns) == 12
+    assert %{you: "q3", assistant: "a3", at: at} = hd(turns)
+    assert %{you: "q14"} = List.last(turns)
+    assert {:ok, _, _} = DateTime.from_iso8601(at)
+  end
+
+  test "join with no turns pushes empty history", %{bob: bob} do
+    # Drain the setup block's own (alice) empty history push before asserting on bob's.
+    assert_push "history", %{turns: []}
+
+    {:ok, _reply, _socket} = join_voice(bob)
+    assert_push "history", %{turns: []}
+  end
+
   test "joining with a live session REBINDS instead of restarting it", %{sid: sid, alice: alice} do
     {:ok, pid} = Sessions.lookup(sid)
 
@@ -221,6 +246,16 @@ defmodule AppWeb.VoiceChannelTest do
     refute Process.alive?(conv)
     # Registry clears the session entry asynchronously after the process dies.
     assert wait_until(fn -> Sessions.lookup(sid) == :error end)
+  end
+
+  # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
+  # for tests that need a fresh channel bound after some pre-join state (e.g. seeded turns).
+  defp join_voice(user) do
+    token = AppWeb.UserAuth.socket_token(user.id)
+    {:ok, socket} = connect(AppWeb.UserSocket, %{"token" => token})
+    result = subscribe_and_join(socket, "voice:#{user.id}", %{})
+    on_exit(fn -> Sessions.stop(to_string(user.id)) end)
+    result
   end
 
   defp wait_until(fun, retries \\ 50) do

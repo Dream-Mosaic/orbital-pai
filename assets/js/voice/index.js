@@ -208,6 +208,20 @@ export const Voice = {
       this.setCaption(locked ? `Say “Wake up ${this.assistantName}”` : "")
       if (this.talking) this.setOrbState(phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle")
     })
+    // One-shot backfill after join. Only into an empty log — a rebind (wire pack) re-pushes
+    // history and must not duplicate lines already on screen.
+    this.channel.on("history", ({ turns }) => {
+      if (!turns.length || this.logEl.querySelector(".voice-line")) return
+      for (const t of turns) {
+        if (t.you) this.addLine("you", t.you)
+        if (t.assistant) this.addLine("brain", t.assistant)
+      }
+      const divider = document.createElement("div")
+      divider.className = "voice-divider"
+      divider.textContent = "— earlier —"
+      this.logEl.appendChild(divider)
+      this.logEl.scrollTop = this.logEl.scrollHeight
+    })
 
     this.onPower = () => this.toggle()
     this.powerEl.addEventListener("click", this.onPower)
