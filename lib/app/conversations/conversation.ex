@@ -104,6 +104,10 @@ defmodule App.Conversations.Conversation do
       brain_pid: nil,
       brain_ref: nil,
       brain_buffer: [],
+      # a brain pre-warmed at speech onset (turn.start while listening), before any transcript
+      # exists: {pid, ref} | nil. Adopted (BrainStream.begin/3) by the next :start_brain effect,
+      # or killed by the :prewarm_ttl timer if the turn never materializes.
+      prewarm_brain: nil,
       # set once we've fallen back to the batch brain (so we don't loop)
       brain_fallback: false,
       # monotonic ms at which all audio sent so far will have finished playing
@@ -350,6 +354,16 @@ defmodule App.Conversations.Conversation do
   def handle_event({:timeout, :interrupt_persist}, :flush, _s, data),
     do: {:keep_state, flush_interrupt_persist(data, :full)}
 
+  # An unused prewarm outlived its TTL (the user never followed up) — kill it, don't leak the
+  # Cartesia WS or Gemini task forever.
+  def handle_event({:timeout, :prewarm_ttl}, :expire, _s, %{prewarm_brain: {pid, ref}} = data) do
+    Process.demonitor(ref, [:flush])
+    if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+    {:keep_state, %{data | prewarm_brain: nil}}
+  end
+
+  def handle_event({:timeout, :prewarm_ttl}, :expire, _s, data), do: {:keep_state, data}
+
   def handle_event({:timeout, :relock}, :relock, _s, %{voice_activation: false} = data),
     do: {:keep_state, data}
 
@@ -485,6 +499,16 @@ defmodule App.Conversations.Conversation do
     brain_failed(%{data | brain_pid: nil, brain_ref: nil})
   end
 
+  # a pre-warmed (not yet adopted) brain died on its own — just drop the slot; nothing was
+  # waiting on it, so this is not a turn failure. Must precede the generic {:DOWN, …} catch-all.
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _s,
+        %{prewarm_brain: {_p, ref}} = data
+      ),
+      do: {:keep_state, %{data | prewarm_brain: nil}}
+
   # ---- reflex task result / crash ----
   def handle_event(:info, {ref, result}, _s, %{refs: refs} = data) when is_map_key(refs, ref) do
     Process.demonitor(ref, [:flush])
@@ -582,6 +606,22 @@ defmodule App.Conversations.Conversation do
   end
 
   defp brain_failed(data), do: feed(:brain_done, data)
+
+  # Start a fresh BrainStream with a transcript already in hand (no prewarm to adopt, or the
+  # prewarm was unusable/refused). Mirrors what run_effect({:start_brain, _}, _) used to do
+  # unconditionally before prewarm adoption existed.
+  defp cold_start_brain(data, recent?) do
+    {:ok, pid} =
+      brain_stream_mod().start(
+        owner: self(),
+        transcript: data.transcript,
+        session_id: data.session_id,
+        recent_context: recent?,
+        config: data.config
+      )
+
+    {pid, Process.monitor(pid), data}
+  end
 
   defp spawn_brain_fallback(data) do
     cfg = data.config
@@ -899,6 +939,22 @@ defmodule App.Conversations.Conversation do
     end
   end
 
+  # Speech onset while idle: pre-open the brain's Cartesia TTS websocket now, ahead of the
+  # transcript, so the ~100-300ms WSS handshake is done before the endpoint lands. The next
+  # :start_brain effect adopts it (BrainStream.begin/3); an unused prewarm is killed by
+  # :prewarm_ttl.
+  defp handle_turn_start(%{policy: %{phase: :listening}, prewarm_brain: nil} = data) do
+    Logger.info("[turn] ◉ turn.start — pre-warming the brain TTS socket")
+
+    {:ok, pid} =
+      brain_stream_mod().start(owner: self(), session_id: data.session_id, config: data.config)
+
+    ref = Process.monitor(pid)
+
+    {:keep_state, %{data | prewarm_brain: {pid, ref}},
+     [{{:timeout, :prewarm_ttl}, prewarm_ttl_ms(), :expire}]}
+  end
+
   defp handle_turn_start(data) do
     Logger.info("[turn] ◉ turn.start during #{data.policy.phase}")
     {:keep_state, data}
@@ -998,19 +1054,31 @@ defmodule App.Conversations.Conversation do
   defp run_effect({:start_brain, _t}, {data, acts}) do
     send(data.client, {:to_client, :thinking})
 
-    {:ok, pid} =
-      brain_stream_mod().start(
-        owner: self(),
-        # data.transcript was set by :generate_reflex (which runs first) and includes any
-        # carried-forward unanswered request, so the brain answers the whole intent.
-        transcript: data.transcript,
-        session_id: data.session_id,
-        # agenda turns choose their own context isolation (reminders: no recent turns)
-        recent_context: agenda_recent_context(data.agenda_turn),
-        config: data.config
-      )
+    # agenda turns choose their own context isolation (reminders: no recent turns)
+    recent? = agenda_recent_context(data.agenda_turn)
 
-    ref = Process.monitor(pid)
+    {pid, ref, data} =
+      case data.prewarm_brain do
+        {pid, ref} when data.agenda_turn == nil ->
+          # a prewarmed brain matches this turn's context policy (default recent-context) —
+          # adopt it: the Cartesia WS handshake is already done or in flight.
+          if Process.alive?(pid) do
+            brain_stream_mod().begin(pid, data.transcript, recent?)
+            {pid, ref, %{data | prewarm_brain: nil}}
+          else
+            Process.demonitor(ref, [:flush])
+            cold_start_brain(%{data | prewarm_brain: nil}, recent?)
+          end
+
+        {pid, ref} ->
+          # agenda turns manage their own context — refuse the prewarm
+          Process.demonitor(ref, [:flush])
+          if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+          cold_start_brain(%{data | prewarm_brain: nil}, recent?)
+
+        nil ->
+          cold_start_brain(data, recent?)
+      end
 
     {%{
        data
@@ -1020,7 +1088,7 @@ defmodule App.Conversations.Conversation do
          audio_until: nil,
          brain_text: nil,
          brain_fallback: false
-     }, acts}
+     }, [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
   end
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
@@ -1459,17 +1527,28 @@ defmodule App.Conversations.Conversation do
         brain_ms: 0
     }
 
-  # Clean up the unlinked brain on shutdown (the linked STT dies with us via its link).
+  # Clean up the unlinked brain — and any pre-warmed-but-unadopted brain — on shutdown (the
+  # linked STT dies with us via its link).
   @impl true
-  def terminate(_reason, _state, %{brain_pid: pid}) when is_pid(pid) do
-    if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+  def terminate(_reason, _state, data) do
+    kill_brain(Map.get(data, :brain_pid))
+    kill_brain(prewarm_pid(data))
     :ok
   end
 
-  def terminate(_reason, _state, _data), do: :ok
+  defp prewarm_pid(%{prewarm_brain: {pid, _ref}}), do: pid
+  defp prewarm_pid(_data), do: nil
+
+  defp kill_brain(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+  end
+
+  defp kill_brain(_pid), do: :ok
 
   defp relock_ms(%{relock_ms: ms}) when is_integer(ms), do: ms
   defp relock_ms(_data), do: Application.get_env(:app, :relock_ms, 15_000)
+
+  defp prewarm_ttl_ms, do: Application.get_env(:app, :prewarm_ttl_ms, 15_000)
 
   defp text_model, do: Application.fetch_env!(:app, :text_model)
   defp tts, do: Application.fetch_env!(:app, :tts)

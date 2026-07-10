@@ -712,6 +712,38 @@ defmodule App.Conversations.ConversationTest do
     refute_receive {:to_client, :stop_playback}, 300
   end
 
+  describe "brain prewarm" do
+    test "turn_start pre-opens the brain; the endpoint adopts it (one start, correct transcript)" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      pid = start_conv()
+
+      Conversation.turn_start(pid)
+      assert_receive {:fake_brain_prewarmed}, 500
+
+      Conversation.endpoint(pid, "what's the weather")
+      assert_receive {:fake_brain_transcript, "what's the weather"}, 1000
+      # exactly one fake brain was started
+      refute_receive {:fake_brain_prewarmed}, 200
+      assert_receive {:to_client, {:speak_start, :brain, _}}, 2000
+    end
+
+    test "an unused prewarm is killed by the TTL" do
+      Process.register(self(), :fake_brain_observer)
+      Application.put_env(:app, :prewarm_ttl_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :prewarm_ttl_ms) end)
+      pid = start_conv()
+
+      Conversation.turn_start(pid)
+      assert_receive {:fake_brain_prewarmed}, 500
+      # after the TTL the prewarm dies; a later endpoint cold-starts a fresh brain
+      Process.sleep(200)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Conversation.endpoint(pid, "hello")
+      assert_receive {:fake_brain_transcript, "hello"}, 1000
+    end
+  end
+
   describe "duck-then-decide" do
     defp playback_turn(pid) do
       Application.put_env(:app, :fake_brain_done_ms, 600)

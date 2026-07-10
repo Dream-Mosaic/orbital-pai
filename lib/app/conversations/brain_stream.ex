@@ -23,6 +23,22 @@ defmodule App.Conversations.BrainStream do
   def start(opts), do: GenServer.start(__MODULE__, opts)
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
+  @doc """
+  Supply the transcript to a pre-warmed (transcript-less) stream. The Gemini call starts once
+  BOTH the Cartesia WS is ready and the transcript has arrived.
+  """
+  def begin(pid, transcript, recent_context),
+    do: GenServer.cast(pid, {:begin, transcript, recent_context})
+
+  @impl true
+  def handle_cast({:begin, transcript, recent_context}, state) do
+    state = %{state | transcript: transcript, recent_context: recent_context}
+
+    if state.ready and is_nil(state.gemini_task),
+      do: {:noreply, start_gemini(state)},
+      else: {:noreply, state}
+  end
+
   @impl true
   def init(opts) do
     # Trap exits so terminate/2 always runs (close the Cartesia WS + kill the Gemini task)
@@ -31,7 +47,7 @@ defmodule App.Conversations.BrainStream do
 
     state = %{
       owner: Keyword.fetch!(opts, :owner),
-      transcript: Keyword.fetch!(opts, :transcript),
+      transcript: Keyword.get(opts, :transcript),
       session_id: Keyword.get(opts, :session_id),
       # include recent conversation turns in the brain context? false for reminder turns, so a
       # fired reminder is fulfilled in isolation (no conversation bleed / repetition).
@@ -158,7 +174,8 @@ defmodule App.Conversations.BrainStream do
   defp handle_response({:done, ref}, %{request_ref: ref, status: 101} = state) do
     case Mint.WebSocket.new(state.conn, ref, state.status, state.resp_headers) do
       {:ok, conn, websocket} ->
-        start_gemini(%{state | conn: conn, websocket: websocket, ready: true})
+        state = %{state | conn: conn, websocket: websocket, ready: true}
+        if state.transcript, do: start_gemini(state), else: state
 
       {:error, conn, reason} ->
         send(self(), {:gemini_error, reason})
