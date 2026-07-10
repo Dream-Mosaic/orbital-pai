@@ -943,7 +943,11 @@ defmodule App.Conversations.Conversation do
   # transcript, so the ~100-300ms WSS handshake is done before the endpoint lands. The next
   # :start_brain effect adopts it (BrainStream.begin/3); an unused prewarm is killed by
   # :prewarm_ttl.
-  defp handle_turn_start(%{policy: %{phase: :listening}, prewarm_brain: nil} = data) do
+  defp handle_turn_start(
+         %{policy: %{phase: :listening}, prewarm_brain: nil, voice_activation: va, locked: locked} =
+           data
+       )
+       when not (va and locked) do
     Logger.info("[turn] ◉ turn.start — pre-warming the brain TTS socket")
 
     {:ok, pid} =

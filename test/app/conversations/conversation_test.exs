@@ -742,6 +742,16 @@ defmodule App.Conversations.ConversationTest do
       Conversation.endpoint(pid, "hello")
       assert_receive {:fake_brain_transcript, "hello"}, 1000
     end
+
+    test "no prewarm while wake-locked (ambient TV must not open a TTS socket every few seconds)" do
+      Process.register(self(), :fake_brain_observer)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.turn_start(pid)
+      refute_receive {:fake_brain_prewarmed}, 300
+    end
   end
 
   describe "duck-then-decide" do
