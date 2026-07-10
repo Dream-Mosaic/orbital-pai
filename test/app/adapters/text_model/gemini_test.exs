@@ -267,4 +267,17 @@ defmodule App.Adapters.TextModel.GeminiTest do
     # and it's named as a capability.
     assert prompt =~ "email"
   end
+
+  test "memory_block leads with identity, with or without notes" do
+    with_notes =
+      Gemini.memory_block(%{user_name: "David", profile: "- likes drones", summary: ""})
+
+    assert with_notes =~ "You're speaking with David."
+    assert with_notes =~ "likes drones"
+
+    bare = Gemini.memory_block(%{user_name: "David", profile: "", summary: ""})
+    assert bare =~ "You're speaking with David."
+
+    assert Gemini.memory_block(%{user_name: nil, profile: "", summary: ""}) == ""
+  end
 end

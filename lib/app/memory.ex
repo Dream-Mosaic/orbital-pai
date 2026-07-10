@@ -38,16 +38,18 @@ defmodule App.Memory do
   def context(session_id, opts \\ []) do
     case App.Users.id_from_session(session_id) do
       nil ->
-        %{profile: "", summary: "", recent: []}
+        %{profile: "", summary: "", recent: [], user_name: nil}
 
       user_id ->
         facts = list_facts(user_id)
         recent = if Keyword.get(opts, :recent, true), do: recent_turns(user_id), else: []
+        user = Repo.get(App.Users.User, user_id)
 
         %{
           profile: facts |> Enum.map(&fact_line/1) |> Enum.join("\n"),
           summary: get_summary(user_id).content,
-          recent: recent
+          recent: recent,
+          user_name: user && user.name
         }
     end
   end

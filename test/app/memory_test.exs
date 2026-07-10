@@ -116,6 +116,16 @@ defmodule App.MemoryTest do
     assert ctx.summary == "sum"
   end
 
+  test "context includes the user's name", %{d: d} do
+    user = Users.get(d)
+    ctx = Memory.context(to_string(user.id))
+    assert ctx.user_name == user.name
+  end
+
+  test "sessionless context has no user_name" do
+    assert Memory.context("nope").user_name == nil
+  end
+
   test "ProfileFact changeset requires content + user_id and validates source", %{d: d} do
     alias App.Memory.ProfileFact
 
