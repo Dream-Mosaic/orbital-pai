@@ -8,8 +8,9 @@ defmodule AppWeb.VoiceChannel do
   - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`;
     `"barge_in"` → `Conversation.barge_in`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
-    relayed to the browser as a JSON event (`speak_start` / `audio` / `metrics` /
-    `transcript` / `stop_playback`).
+    relayed to the browser as a JSON event (`speak_start` / `metrics` / `transcript` /
+    `stop_playback`) — except `audio`, which is pushed as a raw binary channel frame
+    (no JSON envelope, no base64).
   - **Terminate** stops the session (which also tears down its STT websocket).
   """
   use AppWeb, :channel
@@ -105,8 +106,10 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
-  def handle_info({:to_client, {:audio, source, pcm_b64}}, socket) do
-    push(socket, "audio", %{source: source, pcm: pcm_b64})
+  def handle_info({:to_client, {:audio, _source, pcm}}, socket) do
+    # Raw PCM as a binary channel frame — no base64 (25% smaller, no client-side atob loop).
+    # The client ignores the source for audio (speak_start carries the labeled text).
+    push(socket, "audio", {:binary, pcm})
     {:noreply, socket}
   end
 

@@ -166,7 +166,10 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:locked, false}}, 500
       assert_receive {:to_client, {:speak_start, :reflex, ack}}, 500
       assert ack in ["Yeah?", "Hm?", "Mm?", "Go on."]
-      assert_receive {:to_client, {:audio, :reflex, _}}, 500
+      assert_receive {:to_client, {:audio, :reflex, pcm}}, 500
+      # raw PCM, not base64 — the fake ack TTS returns a fixed 320-byte clip
+      assert is_binary(pcm)
+      assert byte_size(pcm) == 320
       refute_receive {:fake_brain_transcript, _}, 300
     end
 
@@ -446,11 +449,17 @@ defmodule App.Conversations.ConversationTest do
 
     pid = start_conv()
     Conversation.endpoint(pid, "why X")
+    fake_pcm = :binary.copy(<<0, 0>>, 160)
 
     assert_receive {:to_client, {:transcript, "why X"}}, 1000
     assert_receive {:to_client, {:speak_start, :reflex, "huh, okay"}}, 1000
-    assert_receive {:to_client, {:audio, :reflex, _}}, 1000
-    assert_receive {:to_client, {:audio, :brain, _}}, 1000
+    assert_receive {:to_client, {:audio, :reflex, reflex_pcm}}, 1000
+    # raw PCM, not base64 — decoding it should fail or be identity-length
+    assert is_binary(reflex_pcm)
+    assert byte_size(reflex_pcm) == byte_size(fake_pcm)
+    assert_receive {:to_client, {:audio, :brain, brain_pcm}}, 1000
+    assert is_binary(brain_pcm)
+    assert byte_size(brain_pcm) == byte_size(fake_pcm)
     assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
   end
 

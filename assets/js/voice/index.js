@@ -12,13 +12,6 @@ import DOMPurify from "dompurify"
 // Single newlines → <br> (the brain often uses them); CommonMark defaults otherwise.
 marked.setOptions({ breaks: true })
 
-function b64ToArrayBuffer(b64) {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return bytes.buffer
-}
-
 // getUserMedia fails silently otherwise (power just bounces off). Map the common DOMException
 // names to a plain-language caption so a stuck/blocked mic is obvious instead of a mystery —
 // NotReadable/Abort = another app is holding the mic (a phone reboot frees it).
@@ -185,7 +178,8 @@ export const Voice = {
       this.addLine(source, text)
     })
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
-    this.channel.on("audio", ({ pcm }) => this.playback.enqueue(b64ToArrayBuffer(pcm)))
+    // Binary channel frame: payload IS the ArrayBuffer (no JSON envelope, no base64).
+    this.channel.on("audio", (payload) => this.playback.enqueue(payload))
     this.channel.on("stop_playback", () => {
       const ms = this.playback.stop()
       this.channel.push("played", { ms })

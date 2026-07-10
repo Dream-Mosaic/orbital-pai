@@ -69,9 +69,9 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "brain_delta", %{delta: "the "}
   end
 
-  test "relays audio (base64 pcm) to the browser", %{socket: socket} do
-    send(socket.channel_pid, {:to_client, {:audio, :brain, "QUJD"}})
-    assert_push "audio", %{source: :brain, pcm: "QUJD"}
+  test "audio relays as a binary payload", %{socket: socket} do
+    send(socket.channel_pid, {:to_client, {:audio, :brain, <<1, 2, 3, 4>>}})
+    assert_push "audio", {:binary, <<1, 2, 3, 4>>}
   end
 
   test "relays metrics to the browser", %{socket: socket} do

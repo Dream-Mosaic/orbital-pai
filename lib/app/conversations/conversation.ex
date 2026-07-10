@@ -874,7 +874,7 @@ defmodule App.Conversations.Conversation do
 
     Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
       case tts().synthesize(ack, tts_opts(cfg)) do
-        {:ok, pcm} -> send(client, {:to_client, {:audio, :reflex, Base.encode64(pcm)}})
+        {:ok, pcm} -> send(client, {:to_client, {:audio, :reflex, pcm}})
         {:error, _} -> :ok
       end
     end)
@@ -1327,7 +1327,7 @@ defmodule App.Conversations.Conversation do
 
     data = %{data | audio_until: max(data.audio_until || now, now) + dur}
     data = record_metrics(source, data)
-    send(data.client, {:to_client, {:audio, source, Base.encode64(pcm)}})
+    send(data.client, {:to_client, {:audio, source, pcm}})
     data
   end
 
