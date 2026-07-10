@@ -483,6 +483,26 @@ defmodule App.Conversations.ConversationTest do
     assert is_integer(ttb) and ttb >= 0
   end
 
+  test "turn telemetry never carries nil measurements" do
+    :telemetry.attach(
+      "t2-test",
+      [:app, :turn, :audio],
+      fn _e, meas, _meta, pid -> send(pid, {:meas, meas}) end,
+      self()
+    )
+
+    on_exit(fn -> :telemetry.detach("t2-test") end)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, _opts -> {:ok, "huh"} end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+
+    # reflex audio drives a turn far enough for endpoint_at to be set -> record_metrics fires.
+    assert_receive {:meas, meas}, 1000
+    refute Enum.any?(Map.values(meas), &is_nil/1)
+  end
+
   test "reflex model error falls back to canned text; the brain still streams" do
     stub(App.TextModelMock, :generate, fn _t, _c, _opts -> {:error, :boom} end)
 

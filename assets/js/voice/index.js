@@ -178,6 +178,8 @@ export const Voice = {
       this.addLine(source, text)
     })
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
+    // Latency HUD: one dim line per turn, updated as ttfa (reflex) then ttb (brain) land.
+    this.channel.on("metrics", ({ ttfa, ttb }) => this.renderMetrics(ttfa, ttb))
     // Binary channel frame: payload IS the ArrayBuffer (no JSON envelope, no base64).
     this.channel.on("audio", (payload) => this.playback.enqueue(payload))
     this.channel.on("stop_playback", () => {
@@ -193,6 +195,7 @@ export const Voice = {
     this.channel.on("listening", () => {
       this.clearThinking()
       this.brainEl = null
+      this.metricsEl = null
       this.setOrbState("listening")
     })
     this.channel.on("thinking", () => {
@@ -458,6 +461,20 @@ export const Voice = {
     } catch (_e) {
       el.textContent = text
     }
+  },
+
+  renderMetrics(ttfa, ttb) {
+    if (!this.logEl) return
+    if (!this.metricsEl) {
+      this.metricsEl = document.createElement("div")
+      this.metricsEl.className = "voice-metrics"
+      this.logEl.appendChild(this.metricsEl)
+    }
+    const parts = []
+    if (ttfa != null) parts.push(`⚡ ${(ttfa / 1000).toFixed(1)}s`)
+    if (ttb != null) parts.push(`🧠 ${(ttb / 1000).toFixed(1)}s`)
+    this.metricsEl.textContent = parts.join(" · ")
+    this.logEl.scrollTop = this.logEl.scrollHeight
   },
 
   addLine(who, text) {

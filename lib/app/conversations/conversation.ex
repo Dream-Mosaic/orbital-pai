@@ -1384,7 +1384,11 @@ defmodule App.Conversations.Conversation do
       data
     else
       data = %{data | ttfa: ttfa, ttb: ttb}
-      :telemetry.execute([:app, :turn, :audio], %{ttfa: ttfa, ttb: ttb}, %{source: source})
+
+      measurements =
+        %{ttfa: ttfa, ttb: ttb} |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+      :telemetry.execute([:app, :turn, :audio], measurements, %{source: source})
       Logger.info("[turn] metrics: ttfa=#{inspect(ttfa)}ms ttb=#{inspect(ttb)}ms (#{source})")
       send(data.client, {:to_client, {:metrics, ttfa, ttb}})
       data
