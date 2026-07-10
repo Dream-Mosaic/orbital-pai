@@ -1,5 +1,5 @@
 defmodule App.Tools.Recall do
-  @moduledoc "recall_memory: full-text search over the user's past conversations (FTS5 on turns)."
+  @moduledoc "recall_memory: hybrid semantic + keyword search over the user's past conversations, email, and calendar."
   @behaviour App.Tools.Tool
 
   @impl true
@@ -8,10 +8,10 @@ defmodule App.Tools.Recall do
       %{
         name: "recall_memory",
         description:
-          "Search your past conversations with this user for a topic — use when they " <>
-            "reference something from before that isn't in your current context (\"that " <>
-            "recipe we discussed\", \"what did I say about X last week\"). Returns dated " <>
-            "snippets of what they said and what you answered.",
+          "Search the user's past conversations, email, and calendar for a topic — use when they " <>
+            "reference something from before that isn't in your current context (\"that recipe we " <>
+            "discussed\", \"the restaurant Sam emailed me\", \"when's my dentist appointment\"). " <>
+            "Returns dated snippets from chats, emails, and calendar events.",
         parameters: %{
           type: "object",
           properties: %{

@@ -109,6 +109,7 @@ defmodule App.Memory do
     Repo.delete_all(from f in ProfileFact, where: f.user_id == ^user_id and f.source == "auto")
     put_summary(user_id, "")
     purge_vectors(user_id)
+    App.Sources.Items.delete_for_user(user_id)
     broadcast_updated()
     :ok
   end
@@ -126,6 +127,7 @@ defmodule App.Memory do
     Repo.delete_all(from f in ProfileFact, where: f.user_id == ^user_id)
     Repo.delete_all(from s in Summary, where: s.user_id == ^user_id)
     purge_vectors(user_id)
+    App.Sources.Items.delete_for_user(user_id)
     broadcast_updated()
     :ok
   end

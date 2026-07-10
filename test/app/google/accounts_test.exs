@@ -158,6 +158,51 @@ defmodule App.Google.AccountsTest do
     assert Accounts.list(uid) == []
   end
 
+  test "deleting an account purges its semantic footprint (vectors + source_items)" do
+    App.Test.Fakes.VectorStore.reset()
+    Application.put_env(:app, :allowed_users, [%{email: "pz@x.com", name: "Pz"}])
+    on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+    {:ok, u} = App.Users.upsert_allowed("pz@x.com")
+
+    {:ok, acc} =
+      %App.Google.Account{}
+      |> App.Google.Account.changeset(%{
+        user_id: u.id,
+        email: "pz@x.com",
+        label: "A",
+        refresh_token: "rt",
+        access_token: "at",
+        access_token_expires_at:
+          DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
+      })
+      |> App.Repo.insert()
+
+    :ok =
+      App.Test.Fakes.VectorStore.upsert([
+        %{
+          id: "email:m1",
+          vector: [0.0],
+          payload: %{user_id: u.id, source: "email", external_id: "m1", account_id: acc.id}
+        }
+      ])
+
+    {:ok, _} =
+      App.Sources.Items.record(%{
+        user_id: u.id,
+        account_id: acc.id,
+        source: "email",
+        external_id: "m1",
+        content_hash: "m1",
+        indexed_at: DateTime.utc_now()
+      })
+
+    App.Google.Accounts.delete(acc)
+
+    assert App.Sources.Items.refs_indexed(u.id, "email", acc.id) == %{}
+    {:ok, hits} = App.Test.Fakes.VectorStore.search([0.0], u.id, 10)
+    assert hits == []
+  end
+
   test "the first connected account becomes the default; later ones do not", ctx do
     uid = user_id(ctx)
     {:ok, a} = Accounts.upsert_from_oauth(oauth("a@x.com"), uid)

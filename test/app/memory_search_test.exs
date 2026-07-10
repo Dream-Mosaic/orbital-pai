@@ -206,6 +206,21 @@ defmodule App.MemorySearchTest do
     assert sources == ["calendar", "email", "turn"]
   end
 
+  test "reset clears the user's source_items rows", %{u1: uid} do
+    {:ok, _} =
+      App.Sources.Items.record(%{
+        user_id: uid,
+        account_id: 7,
+        source: "email",
+        external_id: "m1",
+        content_hash: "m1",
+        indexed_at: DateTime.utc_now()
+      })
+
+    Memory.reset(uid)
+    assert App.Sources.Items.refs_indexed(uid, "email", 7) == %{}
+  end
+
   test "external matches respect user isolation", %{u1: u1, u2: u2} do
     index_external(u1, "email", "m1", %{
       at: "2026-07-01T10:00:00Z",

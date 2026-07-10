@@ -95,7 +95,30 @@ defmodule App.Google.Accounts do
     if fresh?(account), do: {:ok, account.access_token}, else: do_refresh(account)
   end
 
-  def delete(%Account{} = account), do: Repo.delete(account)
+  @doc """
+  Delete a connected account AND purge its semantic footprint (Qdrant vectors + source_items rows)
+  first, so a disconnect leaves no recall-able email/calendar data. The purge is best-effort — a
+  Qdrant hiccup is logged, never raised, so the disconnect still completes.
+  """
+  def delete(%Account{user_id: user_id, id: account_id} = account) do
+    purge_semantics(user_id, account_id)
+    Repo.delete(account)
+  end
+
+  defp purge_semantics(user_id, account_id) do
+    case App.Adapters.VectorStore.impl().delete_by_account(user_id, account_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[google] vector purge failed for account #{account_id}: #{inspect(reason)}"
+        )
+    end
+
+    App.Sources.Items.delete_for_account(user_id, account_id)
+    :ok
+  end
 
   defp do_refresh(account) do
     case OAuth.refresh(account.refresh_token) do
