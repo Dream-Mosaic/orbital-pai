@@ -38,6 +38,53 @@ defmodule App.Adapters.TextModel.GeminiTest do
     refute_received {:gemini_error, _}
   end
 
+  test "a round's tool calls execute concurrently" do
+    defmodule TwoSleepers do
+      @behaviour App.Tools.Tool
+      def declarations do
+        for n <- ["sleep_a", "sleep_b"] do
+          %{name: n, description: n, parameters: %{type: "object", properties: %{}, required: []}}
+        end
+      end
+
+      def execute(_n, _a, _c) do
+        Process.sleep(150)
+        {:ok, %{ok: true}}
+      end
+    end
+
+    cfg = %App.Config{tools: [TwoSleepers], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    me = self()
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      if tools? and not Process.get(:sent_calls, false) do
+        Process.put(:sent_calls, true)
+        {:ok, [{"sleep_a", %{}, nil}, {"sleep_b", %{}, nil}]}
+      else
+        {:ok, []}
+      end
+    end
+
+    {elapsed_us, _} =
+      :timer.tc(fn ->
+        App.Adapters.TextModel.Gemini.run_rounds(
+          [],
+          "sys",
+          cfg,
+          "low",
+          tool_ctx,
+          me,
+          0,
+          round_fun
+        )
+      end)
+
+    assert_receive {:gemini_done}
+    # sequential would be >= 300ms; concurrent stays well under
+    assert elapsed_us < 280_000
+  end
+
   test "tools_block includes function tools AND googleSearch when web_search is on" do
     assert [%{functionDeclarations: decls}, %{googleSearch: %{}}] =
              Gemini.tools_block(%Config{web_search: true})

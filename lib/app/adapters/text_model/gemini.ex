@@ -97,21 +97,42 @@ defmodule App.Adapters.TextModel.Gemini do
       {:ok, calls} ->
         if phrase = bridge_phrase(calls, cfg), do: send(target, {:gemini_bridge, phrase})
 
+        # Gemini can emit several calls in one round (parallel function calling) — run them
+        # concurrently. ordered: true keeps results aligned with `calls` for the
+        # functionResponse parts. 20s > the largest per-tool cap (Gmail 18s), so on_timeout
+        # only fires if a tool's own cap machinery wedged.
         results =
-          Enum.map(calls, fn {name, args, _sig} ->
-            case App.Tools.execute(name, args, tool_ctx) do
-              {:ok, r} ->
-                {name, %{result: r}}
+          calls
+          |> Task.async_stream(
+            fn {name, args, _sig} ->
+              case App.Tools.execute(name, args, tool_ctx) do
+                {:ok, r} ->
+                  {name, %{result: r}}
 
-              {:error, e} ->
-                # Proves the failure path: the brain SEES this error and (via B1/B2) must still
-                # answer rather than loop silently. Correlate with the turn's final `brain:` line.
-                Logger.warning(
-                  "[gemini] tool #{name} errored: #{error_string(e)} — fed back to brain"
-                )
+                {:error, e} ->
+                  # Proves the failure path: the brain SEES this error and (via B1/B2) must
+                  # still answer rather than loop silently. Correlate with the turn's final
+                  # `brain:` line.
+                  Logger.warning(
+                    "[gemini] tool #{name} errored: #{error_string(e)} — fed back to brain"
+                  )
 
-                {name, %{error: error_string(e)}}
-            end
+                  {name, %{error: error_string(e)}}
+              end
+            end,
+            max_concurrency: 4,
+            ordered: true,
+            timeout: 20_000,
+            on_timeout: :kill_task
+          )
+          |> Enum.zip(calls)
+          |> Enum.map(fn
+            {{:ok, result}, _call} ->
+              result
+
+            {{:exit, reason}, {name, _args, _sig}} ->
+              Logger.warning("[gemini] tool #{name} task exited: #{inspect(reason)}")
+              {name, %{error: "timeout"}}
           end)
 
         contents =
