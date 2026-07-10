@@ -126,4 +126,49 @@ defmodule App.Memory do
     broadcast_updated()
     :ok
   end
+
+  # ---- full-text recall (FTS5 over all past turns) ----
+  @doc """
+  Full-text search over ALL of a user's past turns (FTS5). Returns up to `limit` snippet maps
+  `%{when:, you:, henry:}`, best-match first. The query is sanitized into quoted OR-terms so
+  user speech can't break FTS syntax.
+  """
+  def search_turns(user_id, query, limit \\ 6) do
+    case fts_query(query) do
+      "" ->
+        []
+
+      match ->
+        sql = """
+        SELECT t.user_text, t.brain_text, t.inserted_at
+        FROM turns_fts f JOIN turns t ON t.id = f.rowid
+        WHERE turns_fts MATCH ?1 AND t.user_id = ?2
+        ORDER BY bm25(turns_fts) LIMIT ?3
+        """
+
+        %{rows: rows} = Ecto.Adapters.SQL.query!(Repo, sql, [match, user_id, limit])
+
+        Enum.map(rows, fn [you, henry, inserted_at] ->
+          %{
+            when: inserted_at |> to_string() |> String.slice(0, 10),
+            you: snippet(you),
+            henry: snippet(henry)
+          }
+        end)
+    end
+  end
+
+  # each term quoted -> literal token match, OR'd; strips FTS operators entirely
+  defp fts_query(query) when is_binary(query) do
+    query
+    |> String.split(~r/[^\p{L}\p{N}]+/u, trim: true)
+    |> Enum.take(8)
+    |> Enum.map(&~s|"#{&1}"|)
+    |> Enum.join(" OR ")
+  end
+
+  defp fts_query(_), do: ""
+
+  defp snippet(nil), do: nil
+  defp snippet(text), do: String.slice(text, 0, 200)
 end

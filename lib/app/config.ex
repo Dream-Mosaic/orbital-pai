@@ -45,7 +45,13 @@ defmodule App.Config do
             tts_sample_rate: 24_000,
             jitter_buffer_ms: 150,
             # Enabled tool modules (App.Tools.Tool behaviour).
-            tools: [App.Tools.Weather, App.Tools.Reminders, App.Tools.Calendar, App.Tools.Gmail],
+            tools: [
+              App.Tools.Weather,
+              App.Tools.Reminders,
+              App.Tools.Calendar,
+              App.Tools.Gmail,
+              App.Tools.Recall
+            ],
             # Google-Search grounding on the brain request (web search). Toggle off if the model
             # ever rejects googleSearch alongside function tools.
             web_search: true,

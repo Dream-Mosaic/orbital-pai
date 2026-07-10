@@ -136,4 +136,25 @@ defmodule App.MemoryTest do
 
     refute ProfileFact.changeset(%ProfileFact{}, %{content: "x", user_id: d, source: "bogus"}).valid?
   end
+
+  describe "search_turns/3" do
+    test "finds, scopes by user, limits, survives hostile queries", %{d: u1, t: u2} do
+      for {uid, text} <- [
+            {u1, "we talked about the tomato seedlings"},
+            {u1, "drone flying weather tomorrow"},
+            {u2, "tomato soup recipe"}
+          ] do
+        {:ok, _} =
+          Memory.persist_turn(%{user_id: uid, user_text: text, brain_text: "noted"})
+      end
+
+      [hit] = Memory.search_turns(u1, "tomato")
+      assert hit.you =~ "seedlings"
+      assert hit.when =~ ~r/^\d{4}-\d{2}-\d{2}$/
+      assert hit.henry == "noted"
+
+      assert Memory.search_turns(u1, ~s|tomato "quoted" AND (weird|) != :error
+      assert Memory.search_turns(u1, "") == []
+    end
+  end
 end
