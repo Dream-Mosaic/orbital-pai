@@ -361,6 +361,60 @@ defmodule App.Test.Fakes do
     end
   end
 
+  defmodule Source do
+    @moduledoc """
+    Stub `App.Sources` for Ingester tests. `:fake_source_refs` = the ref list `list_refs` returns
+    (or `{:error, reason}`); `:fake_source_mode` = `:full | :age_out` (default `:age_out`). Each ref
+    is `%{external_id, content_hash}`; `to_point` builds a trivial point (or errors if the ref carries
+    `to_point: {:error, r}`).
+    """
+    @behaviour App.Sources
+
+    @impl true
+    def source_key, do: "email"
+
+    @impl true
+    def connector, do: :gmail
+
+    @impl true
+    def reconcile_mode, do: Application.get_env(:app, :fake_source_mode, :age_out)
+
+    @impl true
+    def list_refs(_account) do
+      case Application.get_env(:app, :fake_source_refs, []) do
+        {:error, reason} -> {:error, reason}
+        refs -> {:ok, Enum.map(refs, &Map.put(&1, :raw, &1))}
+      end
+    end
+
+    @impl true
+    def to_point(account, %{external_id: id} = ref) do
+      case ref[:to_point] do
+        {:error, reason} ->
+          {:error, reason}
+
+        _ ->
+          {:ok,
+           %{
+             embed_text: "text #{id}",
+             at: ref[:at],
+             payload: %{
+               user_id: account.user_id,
+               source: "email",
+               external_id: id,
+               account_id: account.id,
+               account: account.label,
+               subject: "s#{id}",
+               from: "f",
+               snippet: "x",
+               link: "l",
+               at: "2026-07-01T00:00:00Z"
+             }
+           }}
+      end
+    end
+  end
+
   defmodule CacheTool do
     @behaviour App.Tools.Tool
 
