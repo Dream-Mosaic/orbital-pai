@@ -241,6 +241,83 @@ defmodule App.Test.Fakes do
     end
   end
 
+  defmodule VectorStore do
+    @moduledoc """
+    In-memory fake vector store for tests. `search` returns the user's points (most-recent-first,
+    capped) — semantic ranking is NOT modeled (RRF ranking is proven separately). Re-upsert by id
+    converges (no duplicates). `:fake_vector_error` forces failures for degradation tests.
+    """
+    @behaviour App.Adapters.VectorStore
+    use Agent
+
+    def start_link(_ \\ []), do: Agent.start_link(fn -> [] end, name: __MODULE__)
+
+    defp ensure_started do
+      unless Process.whereis(__MODULE__), do: start_link()
+      :ok
+    end
+
+    @impl true
+    def ensure_collection, do: :ok
+
+    @impl true
+    def upsert(points) do
+      ensure_started()
+
+      if Application.get_env(:app, :fake_vector_error, false) do
+        {:error, :fake_vector_down}
+      else
+        ids = MapSet.new(points, & &1.id)
+
+        Agent.update(__MODULE__, fn store ->
+          Enum.reject(store, &MapSet.member?(ids, &1.id)) ++ points
+        end)
+
+        :ok
+      end
+    end
+
+    @impl true
+    def search(_vector, user_id, limit) do
+      ensure_started()
+
+      if Application.get_env(:app, :fake_vector_error, false) do
+        {:error, :fake_vector_down}
+      else
+        hits =
+          __MODULE__
+          |> Agent.get(& &1)
+          |> Enum.reverse()
+          |> Enum.filter(&(&1.payload.user_id == user_id))
+          |> Enum.take(limit)
+          |> Enum.map(&%{source: &1.payload.source, id: &1.payload.source_id})
+
+        {:ok, hits}
+      end
+    end
+
+    @impl true
+    def delete_by_user(user_id) do
+      ensure_started()
+
+      if Application.get_env(:app, :fake_vector_error, false) do
+        {:error, :fake_vector_down}
+      else
+        Agent.update(__MODULE__, fn store ->
+          Enum.reject(store, &(&1.payload.user_id == user_id))
+        end)
+
+        :ok
+      end
+    end
+
+    @doc "Clear all points (call in test setup)."
+    def reset do
+      if Process.whereis(__MODULE__), do: Agent.update(__MODULE__, fn _ -> [] end)
+      :ok
+    end
+  end
+
   defmodule CacheTool do
     @behaviour App.Tools.Tool
 

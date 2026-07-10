@@ -30,7 +30,8 @@ config :app,
   tts: App.Adapters.Tts.Cartesia,
   stt: App.Adapters.Stt.Cartesia,
   brain_stream: App.Conversations.BrainStream,
-  embeddings: App.Adapters.Embeddings.Voyage
+  embeddings: App.Adapters.Embeddings.Voyage,
+  vector_store: App.Adapters.VectorStore.Qdrant
 
 # The reminder scheduler ticks against the DB; disabled in test (tests call tick/0 directly).
 config :app, start_reminder_scheduler: true
