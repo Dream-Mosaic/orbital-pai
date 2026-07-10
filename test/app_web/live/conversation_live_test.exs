@@ -20,6 +20,14 @@ defmodule AppWeb.ConversationLiveTest do
     refute html =~ "What I remember about you"
   end
 
+  test "the shell sources the assistant name from config", %{conn: conn} do
+    {:ok, _lv, html} = live(conn, "/")
+    assert html =~ App.Config.default().name
+    # no stray hardcoded name leaks (the app was previously named Remi); word-boundary guard
+    # so this doesn't false-positive on "Reminders" elsewhere on the page.
+    refute Regex.match?(~r/\bremi\b/i, html)
+  end
+
   test "the main screen does not load memory/reminders (memory/reminders/connectors live in modals now)",
        %{conn: conn} do
     {:ok, _lv, _html} = live(conn, "/")

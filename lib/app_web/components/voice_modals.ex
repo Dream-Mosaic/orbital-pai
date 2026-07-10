@@ -249,6 +249,7 @@ defmodule AppWeb.VoiceModals do
   attr :briefing_time, :string, default: nil
   attr :relock_seconds, :integer, default: 15
   attr :app_version, :string, required: true
+  attr :assistant_name, :string, required: true
 
   def settings_panel(assigns) do
     ~H"""
@@ -342,7 +343,7 @@ defmodule AppWeb.VoiceModals do
         >Clear conversation</button>
         <button
           phx-click="forget_me"
-          data-confirm="Forget everything Henry knows about you?"
+          data-confirm={"Forget everything #{@assistant_name} knows about you?"}
           class="btn btn-sm btn-error w-full"
         >Wipe memory</button>
       </section>
@@ -358,6 +359,7 @@ defmodule AppWeb.VoiceModals do
   @doc "Memory modal contents: profile facts, rolling summary, and a wipe-all button."
   attr :facts, :list, required: true
   attr :summary, :string, default: ""
+  attr :assistant_name, :string, required: true
 
   def memory_panel(assigns) do
     ~H"""
@@ -409,7 +411,7 @@ defmodule AppWeb.VoiceModals do
         <button class="btn btn-ghost btn-xs" phx-click="refresh_memory">Refresh</button>
         <button
           phx-click="forget_me"
-          data-confirm="Forget everything Henry knows about you?"
+          data-confirm={"Forget everything #{@assistant_name} knows about you?"}
           class="btn btn-error btn-sm"
         >
           Forget me

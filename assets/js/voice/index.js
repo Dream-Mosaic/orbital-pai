@@ -42,10 +42,6 @@ export const Voice = {
     thinking: { glow: "#a855f7", hi: "#c084fc", lo: "#1c1230", rim: "#c084fc", bleed: 0.9 },
   },
 
-  // Friendly labels for the meridian transcript's `.who` tag — keyed by the same `who`/`source`
-  // strings the channel already sends (you/reflex/brain).
-  LABELS: { you: "you", reflex: "reflex", brain: "Henry" },
-
   // Friendly labels for the live tool-call chip (addToolChip) — keyed by the tool name the
   // server announces (App.Tools registry names). Falls back to a humanized name if unlisted.
   TOOL_LABELS: {
@@ -326,7 +322,7 @@ export const Voice = {
 
     const overlay = document.createElement("div")
     overlay.id = "kiosk-tap"
-    overlay.textContent = "Tap to start Henry"
+    overlay.textContent = `Tap to start ${this.assistantName}`
     overlay.addEventListener("click", async () => {
       await this.startTalking()
       if (this.talking) overlay.remove()
@@ -478,7 +474,7 @@ export const Voice = {
       line.className = "voice-line who-brain"
       const label = document.createElement("span")
       label.className = "who"
-      label.textContent = this.LABELS.brain
+      label.textContent = this.assistantName
       const body = document.createElement("span")
       body.className = "body voice-md"
       line.appendChild(label)
@@ -519,7 +515,7 @@ export const Voice = {
     line.className = `voice-line who-${who}`
     const label = document.createElement("span")
     label.className = "who"
-    label.textContent = this.LABELS[who] || who
+    label.textContent = who === "brain" || who === "reflex" ? this.assistantName : who
     const body = document.createElement("span")
     body.className = "body voice-md"
     if (who === "brain") this.renderBrainMarkdown(body, text)

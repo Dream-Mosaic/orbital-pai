@@ -31,7 +31,7 @@ defmodule AppWeb.ConversationLive do
        tts_sample_rate: App.Config.default().tts_sample_rate,
        app_version: App.version(),
        user_name: socket.assigns.current_user.name,
-       page_title: "Henry",
+       page_title: App.Config.default().name,
        kiosk: params["kiosk"] == "1",
        modal_open: false,
        modal: nil,
@@ -382,13 +382,13 @@ defmodule AppWeb.ConversationLive do
       >
         <header>
           <div class="hd-l">
-            <span class="wordmark">Henry</span>
+            <span class="wordmark">{@assistant_name}</span>
             <%!-- server/connection status: green=connected, amber=reconnecting, red=offline --%>
             <span
               id="state-dot"
               class="dot"
               data-conn="connecting"
-              title="Henry server status"
+              title={"#{@assistant_name} server status"}
             ></span>
           </div>
           <div class="hd-r">
@@ -573,7 +573,7 @@ defmodule AppWeb.ConversationLive do
       <.modal_panel open={@modal_open} modal={@modal}>
         <%= case @modal do %>
           <% :memory -> %>
-            <.memory_panel facts={@facts} summary={@summary} />
+            <.memory_panel facts={@facts} summary={@summary} assistant_name={@assistant_name} />
           <% :reminders -> %>
             <.reminders_panel due={@due} upcoming={@upcoming} />
           <% :connectors -> %>
@@ -587,6 +587,7 @@ defmodule AppWeb.ConversationLive do
               briefing_time={@briefing_time}
               relock_seconds={@relock_seconds}
               app_version={@app_version}
+              assistant_name={@assistant_name}
             />
           <% _ -> %>
         <% end %>
