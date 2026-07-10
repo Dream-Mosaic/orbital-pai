@@ -228,10 +228,15 @@ defmodule App.Test.Fakes do
 
     @impl true
     def embed(texts, _input_type) do
-      if Application.get_env(:app, :fake_embeddings_error, false) do
-        {:error, :fake_embed_down}
-      else
-        {:ok, Enum.map(texts, &vector/1)}
+      cond do
+        Application.get_env(:app, :fake_embeddings_error, false) ->
+          {:error, :fake_embed_down}
+
+        Application.get_env(:app, :fake_embeddings_drop_last, false) ->
+          {:ok, texts |> Enum.map(&vector/1) |> Enum.drop(-1)}
+
+        true ->
+          {:ok, Enum.map(texts, &vector/1)}
       end
     end
 

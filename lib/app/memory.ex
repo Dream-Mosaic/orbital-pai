@@ -274,6 +274,9 @@ defmodule App.Memory do
           nil -> []
           d -> [%{when: to_string(d.date), summary: snippet(d.content), source: "digest"}]
         end
+
+      _ ->
+        []
     end)
   end
 

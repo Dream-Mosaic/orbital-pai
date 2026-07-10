@@ -45,4 +45,12 @@ defmodule App.Memory.EmbedderTest do
     assert :ok = Embedder.run_user(uid)
     assert [_] = Memory.unembedded_turns(uid, 10)
   end
+
+  test "a short/mismatched embedding batch leaves rows unembedded (no over-stamp)", %{uid: uid} do
+    Memory.persist_turn(%{user_id: uid, user_text: "x", brain_text: "y"})
+    Application.put_env(:app, :fake_embeddings_drop_last, true)
+    on_exit(fn -> Application.delete_env(:app, :fake_embeddings_drop_last) end)
+    assert :ok = Embedder.run_user(uid)
+    assert [_] = Memory.unembedded_turns(uid, 10)
+  end
 end

@@ -77,13 +77,19 @@ defmodule App.Adapters.VectorStore.Qdrant do
     }
 
     case req(:post, "/collections/#{collection()}/points/query", body) do
-      {:ok, %{"result" => %{"points" => points}}} -> {:ok, Enum.map(points, &to_hit/1)}
-      {:ok, _} -> {:ok, []}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{"result" => %{"points" => points}}} ->
+        {:ok, points |> Enum.map(&to_hit/1) |> Enum.reject(&is_nil/1)}
+
+      {:ok, _} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp to_hit(%{"payload" => %{"source" => s, "source_id" => id}}), do: %{source: s, id: id}
+  defp to_hit(_), do: nil
 
   @impl true
   def delete_by_user(user_id) do

@@ -88,4 +88,21 @@ defmodule App.MemorySearchTest do
     Memory.clear_turns(uid)
     refute Enum.any?(Memory.search(uid, "ephemeral", 6), &(&1[:source] == "turn"))
   end
+
+  test "an unknown vector source is dropped, not raised (render_hits fallback)", %{u1: uid} do
+    Memory.persist_turn(%{user_id: uid, user_text: "known keyword banana", brain_text: "ok"})
+
+    :ok =
+      VectorStore.upsert([
+        %{
+          id: "gmail:1",
+          vector: [0.0],
+          payload: %{user_id: uid, source: "gmail", source_id: 999, text: "x", at: "x"}
+        }
+      ])
+
+    matches = Memory.search(uid, "banana", 6)
+    assert is_list(matches)
+    refute Enum.any?(matches, &(&1[:source] == "gmail"))
+  end
 end

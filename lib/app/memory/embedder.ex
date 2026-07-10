@@ -53,6 +53,7 @@ defmodule App.Memory.Embedder do
     texts = Enum.map(rows, text_fun)
 
     with {:ok, vectors} <- App.Adapters.Embeddings.impl().embed(texts, :document),
+         true <- length(vectors) == length(rows),
          points = build_points(user_id, source, rows, vectors, text_fun),
          :ok <- App.Adapters.VectorStore.impl().upsert(points) do
       Memory.mark_embedded(source, Enum.map(rows, & &1.id))

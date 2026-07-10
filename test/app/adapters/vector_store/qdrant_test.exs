@@ -57,5 +57,20 @@ defmodule App.Adapters.VectorStore.QdrantTest do
       Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
       assert {:error, _} = Qdrant.search([0.1], 7, 20)
     end
+
+    test "drops points with a malformed payload instead of raising" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "result" => %{
+            "points" => [
+              %{"id" => "ok", "payload" => %{"source" => "turn", "source_id" => 5}},
+              %{"id" => "bad", "payload" => %{"source" => "turn"}}
+            ]
+          }
+        })
+      end)
+
+      assert {:ok, [%{source: "turn", id: 5}]} = Qdrant.search([0.1], 7, 20)
+    end
   end
 end
