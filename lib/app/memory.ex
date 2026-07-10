@@ -220,4 +220,37 @@ defmodule App.Memory do
     broadcast_updated()
     :ok
   end
+
+  # ---- embedding substrate (rows awaiting a vector) ----
+  @doc "Turns not yet embedded (embedded_at IS NULL), oldest first, capped."
+  def unembedded_turns(user_id, limit) do
+    from(t in Turn,
+      where: t.user_id == ^user_id and is_nil(t.embedded_at),
+      order_by: [asc: t.inserted_at, asc: t.id],
+      limit: ^limit
+    )
+    |> Repo.all()
+  end
+
+  @doc "Digests not yet embedded (embedded_at IS NULL), oldest first, capped."
+  def unembedded_digests(user_id, limit) do
+    from(d in Digest,
+      where: d.user_id == ^user_id and is_nil(d.embedded_at),
+      order_by: [asc: d.date, asc: d.id],
+      limit: ^limit
+    )
+    |> Repo.all()
+  end
+
+  @doc "Stamp embedded_at on the given turn/digest ids (after a confirmed vector upsert)."
+  def mark_embedded(:turn, ids), do: stamp_embedded(Turn, ids)
+  def mark_embedded(:digest, ids), do: stamp_embedded(Digest, ids)
+
+  defp stamp_embedded(_schema, []), do: :ok
+
+  defp stamp_embedded(schema, ids) do
+    now = DateTime.utc_now()
+    from(r in schema, where: r.id in ^ids) |> Repo.update_all(set: [embedded_at: now])
+    :ok
+  end
 end

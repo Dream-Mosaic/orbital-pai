@@ -12,6 +12,7 @@ defmodule App.Memory.Turn do
     field :brain_ms, :integer
     field :ttfa_ms, :integer
     field :ttb_ms, :integer
+    field :embedded_at, :utc_datetime_usec
     timestamps(type: :utc_datetime)
   end
 

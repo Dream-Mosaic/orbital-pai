@@ -7,6 +7,7 @@ defmodule App.Memory.Digest do
     field :user_id, :id
     field :date, :date
     field :content, :string
+    field :embedded_at, :utc_datetime_usec
     timestamps(type: :utc_datetime)
   end
 
