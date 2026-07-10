@@ -23,6 +23,7 @@ config :logger, level: :warning
 # Don't run the background reminder scheduler in tests (no sandbox owner on its tick process).
 config :app, start_reminder_scheduler: false
 config :app, start_briefing_scheduler: false
+config :app, start_memory_consolidator: false
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

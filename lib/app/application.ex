@@ -35,7 +35,9 @@ defmodule App.Application do
       AppWeb.Endpoint
     ]
 
-    children = children ++ reminder_scheduler() ++ briefing_scheduler() ++ pool_warmer()
+    children =
+      children ++
+        reminder_scheduler() ++ briefing_scheduler() ++ memory_consolidator() ++ pool_warmer()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -52,6 +54,12 @@ defmodule App.Application do
   defp briefing_scheduler do
     if Application.get_env(:app, :start_briefing_scheduler, true),
       do: [App.Agenda.Briefing],
+      else: []
+  end
+
+  defp memory_consolidator do
+    if Application.get_env(:app, :start_memory_consolidator, true),
+      do: [App.Memory.Consolidator],
       else: []
   end
 

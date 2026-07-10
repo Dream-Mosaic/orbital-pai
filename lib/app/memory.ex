@@ -6,7 +6,7 @@ defmodule App.Memory do
   """
   import Ecto.Query
   alias App.Repo
-  alias App.Memory.{Turn, ProfileFact, Summary}
+  alias App.Memory.{Turn, ProfileFact, Summary, Digest}
 
   @recent_turns 8
   @max_auto_facts 30
@@ -171,4 +171,53 @@ defmodule App.Memory do
 
   defp snippet(nil), do: nil
   defp snippet(text), do: String.slice(text, 0, 200)
+
+  # ---- daily digests (nightly consolidation substrate) ----
+  @doc "Digests, newest first."
+  def digests_for(user_id, limit) do
+    from(d in Digest,
+      where: d.user_id == ^user_id,
+      order_by: [desc: d.date],
+      limit: ^limit
+    )
+    |> Repo.all()
+  end
+
+  @doc "Insert a day's digest. The unique (user_id, date) index makes this the once-per-day claim."
+  def put_digest(user_id, date, content) do
+    %Digest{}
+    |> Digest.changeset(%{user_id: user_id, date: date, content: content})
+    |> Repo.insert(on_conflict: :nothing)
+  end
+
+  @doc "All turns whose inserted_at falls on the given UTC date (for the daily digest)."
+  def turns_on(user_id, %Date{} = date) do
+    {:ok, from_dt} = DateTime.new(date, ~T[00:00:00], "Etc/UTC")
+    to_dt = DateTime.add(from_dt, 86_400, :second)
+
+    from(t in Turn,
+      where: t.user_id == ^user_id and t.inserted_at >= ^from_dt and t.inserted_at < ^to_dt,
+      order_by: [asc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Transactionally replace all of a user's auto facts with `contents` (one fact per entry).
+  Only source == "auto" rows are touched — source == "user" (curated) facts are NEVER
+  deleted or modified here.
+  """
+  def replace_auto_facts(user_id, contents) do
+    Repo.transaction(fn ->
+      from(f in ProfileFact, where: f.user_id == ^user_id and f.source == "auto")
+      |> Repo.delete_all()
+
+      for c <- contents do
+        Repo.insert!(%ProfileFact{user_id: user_id, content: c, source: "auto"})
+      end
+    end)
+
+    broadcast_updated()
+    :ok
+  end
 end
