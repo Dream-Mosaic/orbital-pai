@@ -108,6 +108,7 @@ defmodule App.Memory do
     Repo.delete_all(from t in Turn, where: t.user_id == ^user_id)
     Repo.delete_all(from f in ProfileFact, where: f.user_id == ^user_id and f.source == "auto")
     put_summary(user_id, "")
+    purge_vectors(user_id)
     broadcast_updated()
     :ok
   end
@@ -115,6 +116,7 @@ defmodule App.Memory do
   @doc "Wipe a user's conversation turns only; keeps facts + summary."
   def clear_turns(user_id) do
     Repo.delete_all(from t in Turn, where: t.user_id == ^user_id)
+    purge_vectors(user_id)
     broadcast_updated()
     :ok
   end
@@ -123,8 +125,23 @@ defmodule App.Memory do
   def forget(user_id) do
     Repo.delete_all(from f in ProfileFact, where: f.user_id == ^user_id)
     Repo.delete_all(from s in Summary, where: s.user_id == ^user_id)
+    purge_vectors(user_id)
     broadcast_updated()
     :ok
+  end
+
+  # Best-effort vector-store purge: a failure is logged, never raised, so "forget me" in SQLite
+  # is never blocked by a Qdrant hiccup.
+  defp purge_vectors(user_id) do
+    case App.Adapters.VectorStore.impl().delete_by_user(user_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+        Logger.warning("[memory] vector purge failed for #{user_id}: #{inspect(reason)}")
+        :ok
+    end
   end
 
   # ---- full-text recall (FTS5 over all past turns) ----
