@@ -1,5 +1,6 @@
 defmodule App.MemorySearchTest do
   use App.DataCase, async: false
+  import ExUnit.CaptureLog
   alias App.Memory
   alias App.Test.Fakes.VectorStore
 
@@ -70,17 +71,22 @@ defmodule App.MemorySearchTest do
     assert Memory.search(u2, "sushi", 6) == []
   end
 
-  test "degrades to FTS5-only when the vector store is down", %{u1: uid} do
+  test "degrades to FTS5-only when the vector store is down (and logs the fallback)", %{u1: uid} do
     Memory.persist_turn(%{user_id: uid, user_text: "keyword pizza night", brain_text: "yum"})
     Application.put_env(:app, :fake_vector_error, true)
-    matches = Memory.search(uid, "pizza", 6)
+
+    {matches, log} = with_log(fn -> Memory.search(uid, "pizza", 6) end)
     assert Enum.any?(matches, &(&1[:source] == "turn"))
+    assert log =~ "[recall] vector leg unavailable"
   end
 
-  test "degrades to FTS5-only when the query embed is down", %{u1: uid} do
+  test "degrades to FTS5-only when the query embed is down (and logs the fallback)", %{u1: uid} do
     Memory.persist_turn(%{user_id: uid, user_text: "keyword tacos", brain_text: "ole"})
     Application.put_env(:app, :fake_embeddings_error, true)
-    assert is_list(Memory.search(uid, "tacos", 6))
+
+    {matches, log} = with_log(fn -> Memory.search(uid, "tacos", 6) end)
+    assert is_list(matches)
+    assert log =~ "[recall] vector leg unavailable"
   end
 
   test "ghost-drop: a vector hit whose SQLite row was deleted is not returned", %{u1: uid} do

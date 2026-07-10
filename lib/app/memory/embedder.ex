@@ -19,8 +19,11 @@ defmodule App.Memory.Embedder do
   def init(_) do
     # Best-effort: a Qdrant that isn't up yet must not crash the supervisor.
     case App.Adapters.VectorStore.impl().ensure_collection() do
-      :ok -> :ok
-      other -> Logger.warning("[embedder] ensure_collection: #{inspect(other)}")
+      :ok ->
+        Logger.info("[embedder] collection ready (#{App.Config.default().qdrant_collection})")
+
+      other ->
+        Logger.warning("[embedder] ensure_collection: #{inspect(other)}")
     end
 
     schedule()
@@ -57,6 +60,8 @@ defmodule App.Memory.Embedder do
          points = build_points(user_id, source, rows, vectors, text_fun),
          :ok <- App.Adapters.VectorStore.impl().upsert(points) do
       Memory.mark_embedded(source, Enum.map(rows, & &1.id))
+      Logger.info("[embedder] indexed #{length(rows)} #{source}(s) for user #{user_id}")
+      :ok
     else
       other ->
         Logger.warning(

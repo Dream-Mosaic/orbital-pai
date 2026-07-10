@@ -232,7 +232,13 @@ defmodule App.Memory do
          {:ok, hits} <- App.Adapters.VectorStore.impl().search(vec, user_id, limit) do
       Enum.map(hits, fn %{source: s, id: id} -> {s, id} end)
     else
-      _ -> []
+      {:error, reason} ->
+        require Logger
+        Logger.warning("[recall] vector leg unavailable (#{inspect(reason)}); FTS5-only")
+        []
+
+      _ ->
+        []
     end
   end
 
