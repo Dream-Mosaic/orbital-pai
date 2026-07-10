@@ -188,22 +188,23 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert phrase in App.Tools.Weather.bridge("get_weather")
   end
 
-  test "grounding_line gives the LOCAL current time (with offset) so it matches event offsets" do
-    # 15:00Z is 10:00 CDT. Calendar events arrive with a local offset (e.g. ...-05:00), so the
-    # brain must see 'now' in the SAME representation — otherwise it compares wall-clock digits
-    # (10:30 vs 15:00) and wrongly calls an upcoming 10:30-05:00 event 'past'.
-    line = Gemini.grounding_line(~U[2026-07-09 15:00:00Z], "America/Chicago")
-
-    # local 'now' present, with its offset, tagged with the zone name
-    assert line =~ "2026-07-09T10:00:00-05:00"
-    assert line =~ "America/Chicago"
-    # UTC still available for the tool-arg contract (due_at / time_min / start are ISO8601 UTC)
-    assert line =~ "2026-07-09T15:00:00Z"
+  test "the brain system prompt carries STATIC time guidance but no dynamic timestamp line" do
+    prompt = App.Adapters.TextModel.Gemini.brain_prompt("Henry")
+    assert prompt =~ "ISO8601 UTC"
+    assert prompt =~ "local timezone"
+    # the offset-comparison guidance from the grounding fix is static, so it lives here too
+    assert prompt =~ "absolute instant"
+    # the DYNAMIC time prefix (time_note) must NOT be baked into the static prompt
+    refute prompt =~ "(Current time:"
   end
 
-  test "grounding_line falls back to UTC (no crash) on an unknown timezone" do
-    line = Gemini.grounding_line(~U[2026-07-09 15:00:00Z], "Not/AZone")
-    assert line =~ "2026-07-09T15:00:00Z"
+  test "time_note/1 is the dynamic per-turn line, LOCAL-first (preserves the grounding fix)" do
+    note = App.Adapters.TextModel.Gemini.time_note(%App.Config{})
+    # local time with its offset + the zone name — NOT UTC-only (see the timezone grounding fix)
+    assert note =~ "(Current time: "
+    assert note =~ "(America/Chicago)"
+    assert note =~ "In UTC that is "
+    assert String.ends_with?(note, "\n")
   end
 
   test "brain prompt teaches the follow-up offer" do
