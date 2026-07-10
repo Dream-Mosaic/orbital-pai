@@ -64,6 +64,11 @@ export const Voice = {
     this.playback = new Playback(this.ttsSampleRate)
     this.capture = null
     this.talking = false
+    // Orb-state inputs — see resolveOrbState(): wakeLocked (screen asleep on the wall) and
+    // turnState (what the current conversation turn is doing) are the two things that decide
+    // what the orb shows; every writer below sets one of these then calls applyOrbState().
+    this.wakeLocked = false
+    this.turnState = "idle"
     // Kiosk = a wall tablet (?kiosk=1 / Fully Kiosk). We force hands-free, auto-start the mic, and
     // show a clock. Screen dimming/wake is handled by Fully Kiosk Browser, not in-app.
     this.kiosk = isKioskMode()
@@ -113,7 +118,7 @@ export const Voice = {
     // Orb starts OFF (grey, still) until the user powers on.
     this.orb = createOrb(this.canvas)
     this.orb.start()
-    this.setOrbState("off")
+    this.applyOrbState()
     this.orb.setSources({ mic: null, playback: this.playback.analyser })
     this.setPower(false)
     this.setConnStatus("connecting")
@@ -162,8 +167,10 @@ export const Voice = {
     this.channel.on("partial", ({ text }) => this.setCaption(text))
     this.channel.on("locked", ({ locked }) => {
       this.setCaption(locked ? `Say “Wake up ${this.assistantName}”` : "")
-      // Asleep = calm idle (blue), not whatever color the last turn left the chrome on.
-      if (locked) this.setOrbState("idle")
+      // Asleep on the wall = dim slate ambient orb (resolveOrbState), not whatever color the
+      // last turn left the chrome on.
+      this.wakeLocked = locked
+      this.applyOrbState()
     })
     this.channel.on("transcript", ({ text }) => {
       this.setCaption("")
@@ -173,7 +180,8 @@ export const Voice = {
       // Henry is now actually speaking this segment (reflex or brain) -> green + reactive to the
       // playback audio. Without this the orb sits in `thinking` (set at :start_brain) for the whole
       // answer, since no further turn-state event fires until :listening at the end.
-      this.setOrbState("speaking")
+      this.turnState = "speaking"
+      this.applyOrbState()
       if (source === "brain") {
         this.clearThinking()
         this.resolveToolChips()
@@ -203,7 +211,10 @@ export const Voice = {
     // Turn state → Orb state. Half-duplex is enforced server-side (the policy ignores
     // any speech-endpoint mid-turn), so the mic keeps streaming — which keeps the STT
     // connection fed and healthy. "Allow interruptions" still controls barge-in.
-    this.channel.on("speaking", () => this.setOrbState("speaking"))
+    this.channel.on("speaking", () => {
+      this.turnState = "speaking"
+      this.applyOrbState()
+    })
     this.channel.on("listening", () => {
       this.clearThinking()
       this.brainEl = null
@@ -212,11 +223,13 @@ export const Voice = {
       // are already out of this array (resolveToolChips empties it) and stay in the log as the turn's story.
       for (const chip of this.toolChips || []) chip.remove()
       this.toolChips = []
-      this.setOrbState("listening")
+      this.turnState = "listening"
+      this.applyOrbState()
     })
     this.channel.on("thinking", () => {
       this.showThinking()
-      this.setOrbState("thinking")
+      this.turnState = "thinking"
+      this.applyOrbState()
     })
     // Server state snapshot on every (re)bind: reset turn-scoped UI so a reconnect can't
     // leave a stale thinking line / wrong orb state from a turn that ended while offline.
@@ -225,7 +238,10 @@ export const Voice = {
       this.brainEl = null
       // RE-ANCHOR: match the existing `locked` handler's exact caption wording (index.js).
       this.setCaption(locked ? `Say “Wake up ${this.assistantName}”` : "")
-      if (this.talking) this.setOrbState(phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle")
+      if (this.talking) {
+        this.turnState = phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle"
+        this.applyOrbState()
+      }
     })
     // One-shot backfill after join. Only into an empty log — a rebind (wire pack) re-pushes
     // history and must not duplicate lines already on screen.
@@ -298,7 +314,8 @@ export const Voice = {
     if (this.talking) return
     this.talking = true
     this.setPower(true)
-    this.setOrbState("idle")
+    this.turnState = "idle"
+    this.applyOrbState()
     this.setCaption("") // clear any prior mic-error message on retry
     this.playback.resume()
     try {
@@ -309,7 +326,7 @@ export const Voice = {
     } catch (err) {
       this.talking = false
       this.setPower(false)
-      this.setOrbState("off")
+      this.applyOrbState() // talking is false -> resolves to "off"
       console.error("mic error:", err)
       this.setCaption(micErrorMessage(err))
     }
@@ -344,7 +361,8 @@ export const Voice = {
     if (!this.pttEnabled || this.pttHeld) return
     this.pttHeld = true
     this.pttHoldEl.classList.add("ptt-held")
-    this.setOrbState("listening") // orange while held
+    this.turnState = "listening" // orange while held (or ambient if wake-locked)
+    this.applyOrbState()
     this.channel.push("ptt_press", {})
   },
 
@@ -352,7 +370,8 @@ export const Voice = {
     if (!this.pttHeld) return
     this.pttHeld = false
     this.pttHoldEl.classList.remove("ptt-held")
-    this.setOrbState("idle")
+    this.turnState = "idle"
+    this.applyOrbState()
     this.channel.push("ptt_release", {})
   },
 
@@ -361,7 +380,7 @@ export const Voice = {
     this.setPower(false)
     this.setCaption("")
     this.clearThinking()
-    this.setOrbState("off")
+    this.applyOrbState() // talking is false -> resolves to "off"
     if (this.capture) {
       this.capture.stop()
       this.capture = null
@@ -377,6 +396,22 @@ export const Voice = {
     this.captionEl.textContent = text || ""
     const len = (text || "").length
     this.captionEl.style.fontSize = (len > 80 ? 0.95 : len > 40 ? 1.2 : 1.6) + "rem"
+  },
+
+  // Single source of truth for the orb: power off wins, then the wake lock (ambient = asleep
+  // on the wall), then whatever the turn is doing. Every orb-state writer sets `this.talking`/
+  // `this.wakeLocked`/`this.turnState` and calls applyOrbState() instead of setOrbState directly,
+  // so a wake-locked kiosk always shows the slate ambient orb while idle/listening — a
+  // speaking/thinking turn still finishes in its live color even if the lock lands mid-turn.
+  resolveOrbState() {
+    if (!this.talking) return "off"
+    if (this.wakeLocked && (this.turnState === "idle" || this.turnState === "listening"))
+      return "ambient"
+    return this.turnState
+  },
+
+  applyOrbState() {
+    this.setOrbState(this.resolveOrbState())
   },
 
   // Sets the orb's own animation state AND recolors the Meridian chrome (orb-light bleed) to match,
