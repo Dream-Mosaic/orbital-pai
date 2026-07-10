@@ -24,6 +24,14 @@ defmodule App.Conversations.BrainStreamTest do
     assert msg.output_format.sample_rate == 44_100
   end
 
+  test "tts_message includes max_buffer_delay_ms only when configured" do
+    base = BrainStream.tts_message(%Config{}, "hi", true, "c-0")
+    refute Map.has_key?(base, :max_buffer_delay_ms)
+
+    tuned = BrainStream.tts_message(%Config{tts_max_buffer_delay_ms: 1200}, "hi", true, "c-0")
+    assert tuned.max_buffer_delay_ms == 1200
+  end
+
   test "a gemini delta emits {:brain_text, text} to the owner and still accumulates" do
     state = %{ready: false, pending: [], text: "", owner: self()}
     {:noreply, new_state} = BrainStream.handle_info({:gemini_delta, "hello "}, state)

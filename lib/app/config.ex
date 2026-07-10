@@ -24,6 +24,10 @@ defmodule App.Config do
             # neutral, happy, excited, enthusiastic, elated, euphoric, triumphant, amazed, surprised, flirtatious, curious, content, peaceful, serene, calm, grateful, affectionate, trust, sympathetic, anticipation, mysterious, angry, mad, outraged, frustrated, agitated, threatened, disgusted, contempt, envious, sarcastic, ironic, sad, dejected, melancholic, disappointed, hurt, guilty, bored, tired, rejected, nostalgic, wistful, apologetic, hesitant, insecure, confused, resigned, anxious, panicked, alarmed, scared, proud, confident, distant, skeptical, contemplative, determined
             # nil → omit (neutral); else a Cartesia emotion string
             tts_emotion: "content",
+            # Cartesia streaming-TTS buffer cap (ms) before first audio. nil = omit (Cartesia
+            # default 3000). Lowering (~1200) cuts first-brain-audio latency at some prosody
+            # risk — SMOKE-GATED: change only with a listening test (see the latency-pack spec).
+            tts_max_buffer_delay_ms: nil,
             # Cartesia API version: the date we last tested the integration. It's a
             # backwards-compat pin (Cartesia freezes the request/response shape as of this
             # date), NOT a model version — shared by TTS (Sonic) and STT (Ink-2). Bump it to

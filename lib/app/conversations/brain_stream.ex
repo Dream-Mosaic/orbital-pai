@@ -310,7 +310,7 @@ defmodule App.Conversations.BrainStream do
 
   @doc false
   def tts_message(config, transcript, continue, context_id) do
-    %{
+    msg = %{
       model_id: config.tts_model,
       transcript: transcript,
       continue: continue,
@@ -328,6 +328,12 @@ defmodule App.Conversations.BrainStream do
         sample_rate: config.tts_sample_rate
       }
     }
+
+    # Cartesia's streaming buffer cap: omit entirely to keep the vendor default (3000ms).
+    case config.tts_max_buffer_delay_ms do
+      nil -> msg
+      ms -> Map.put(msg, :max_buffer_delay_ms, ms)
+    end
   end
 
   defp send_frame(state, frame) do
