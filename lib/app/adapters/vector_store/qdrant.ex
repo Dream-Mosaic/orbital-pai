@@ -88,14 +88,45 @@ defmodule App.Adapters.VectorStore.Qdrant do
     end
   end
 
-  defp to_hit(%{"payload" => %{"source" => s, "source_id" => id}}), do: %{source: s, id: id}
+  defp to_hit(%{"payload" => %{"source" => s} = p}), do: %{source: s, id: hit_id(p), payload: p}
   defp to_hit(_), do: nil
+
+  defp hit_id(%{"source_id" => id}), do: id
+  defp hit_id(%{"external_id" => ext, "account_id" => acc}), do: "#{acc}:#{ext}"
+  defp hit_id(%{"external_id" => ext}), do: ext
 
   @impl true
   def delete_by_user(user_id) do
     body = %{filter: %{must: [%{key: "user_id", match: %{value: user_id}}]}}
 
     case req(:post, "/collections/#{collection()}/points/delete?wait=true", body) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def delete_by_account(user_id, account_id) do
+    body = %{
+      filter: %{
+        must: [
+          %{key: "user_id", match: %{value: user_id}},
+          %{key: "account_id", match: %{value: account_id}}
+        ]
+      }
+    }
+
+    case req(:post, "/collections/#{collection()}/points/delete?wait=true", body) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def delete_by_ids([]), do: :ok
+
+  def delete_by_ids(ids) do
+    case req(:post, "/collections/#{collection()}/points/delete?wait=true", %{points: ids}) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end

@@ -64,13 +64,62 @@ defmodule App.Adapters.VectorStore.QdrantTest do
           "result" => %{
             "points" => [
               %{"id" => "ok", "payload" => %{"source" => "turn", "source_id" => 5}},
-              %{"id" => "bad", "payload" => %{"source" => "turn"}}
+              %{"id" => "bad", "payload" => %{"foo" => "bar"}}
             ]
           }
         })
       end)
 
       assert {:ok, [%{source: "turn", id: 5}]} = Qdrant.search([0.1], 7, 20)
+    end
+  end
+
+  describe "payload-carrying search + account/id deletes" do
+    test "search maps a point payload into %{source, id, payload} (string-keyed payload)" do
+      Application.put_env(:app, :qdrant_req_opts,
+        plug: fn conn ->
+          Req.Test.json(conn, %{
+            "result" => %{
+              "points" => [
+                %{
+                  "payload" => %{
+                    "source" => "email",
+                    "external_id" => "m1",
+                    "account_id" => 7,
+                    "subject" => "Hi"
+                  }
+                }
+              ]
+            }
+          })
+        end
+      )
+
+      assert {:ok, [hit]} = Qdrant.search([0.0], 1, 5)
+      assert hit.source == "email"
+      assert hit.id == "7:m1"
+      assert hit.payload["subject"] == "Hi"
+    after
+      Application.delete_env(:app, :qdrant_req_opts)
+    end
+
+    test "delete_by_account posts a user_id + account_id filter" do
+      Application.put_env(:app, :qdrant_req_opts,
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          assert body =~ "account_id"
+          assert body =~ "user_id"
+          Req.Test.json(conn, %{"result" => %{}})
+        end
+      )
+
+      assert :ok = Qdrant.delete_by_account(1, 7)
+    after
+      Application.delete_env(:app, :qdrant_req_opts)
+    end
+
+    test "delete_by_ids([]) is a no-op :ok" do
+      assert :ok = Qdrant.delete_by_ids([])
     end
   end
 end

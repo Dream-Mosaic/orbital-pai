@@ -7,8 +7,11 @@ defmodule App.Adapters.VectorStore do
   @callback ensure_collection() :: :ok | {:error, term()}
   @callback upsert(points :: [map()]) :: :ok | {:error, term()}
   @callback search(vector :: [float()], user_id :: integer(), limit :: integer()) ::
-              {:ok, [%{source: String.t(), id: integer()}]} | {:error, term()}
+              {:ok, [%{source: String.t(), id: term(), payload: map()}]} | {:error, term()}
   @callback delete_by_user(user_id :: integer()) :: :ok | {:error, term()}
+  @callback delete_by_account(user_id :: integer(), account_id :: integer()) ::
+              :ok | {:error, term()}
+  @callback delete_by_ids(ids :: [String.t()]) :: :ok | {:error, term()}
 
   @doc "The configured vector-store adapter."
   def impl, do: Application.fetch_env!(:app, :vector_store)

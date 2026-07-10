@@ -27,7 +27,8 @@ defmodule App.Memory.EmbedderTest do
     assert Memory.unembedded_turns(uid, 10) == []
     assert Memory.unembedded_digests(uid, 10) == []
     assert {:ok, hits} = VectorStore.search([0.0], uid, 20)
-    assert Enum.any?(hits, &(&1 == %{source: "turn", id: t.id}))
+    tid = t.id
+    assert Enum.any?(hits, &match?(%{source: "turn", id: ^tid}, &1))
     assert Enum.any?(hits, &(&1.source == "digest"))
   end
 

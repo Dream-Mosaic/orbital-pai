@@ -295,11 +295,22 @@ defmodule App.Test.Fakes do
           |> Enum.reverse()
           |> Enum.filter(&(&1.payload.user_id == user_id))
           |> Enum.take(limit)
-          |> Enum.map(&%{source: &1.payload.source, id: &1.payload.source_id})
+          |> Enum.map(fn p ->
+            %{
+              source: to_string(p.payload.source),
+              id: hit_id(p.payload),
+              payload: stringify(p.payload)
+            }
+          end)
 
         {:ok, hits}
       end
     end
+
+    defp hit_id(%{source_id: id}), do: id
+    defp hit_id(%{external_id: ext, account_id: acc}), do: "#{acc}:#{ext}"
+    defp hit_id(%{external_id: ext}), do: ext
+    defp stringify(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
 
     @impl true
     def delete_by_user(user_id) do
@@ -314,6 +325,32 @@ defmodule App.Test.Fakes do
 
         :ok
       end
+    end
+
+    @impl true
+    def delete_by_account(user_id, account_id) do
+      ensure_started()
+
+      if Application.get_env(:app, :fake_vector_error, false) do
+        {:error, :fake_vector_down}
+      else
+        Agent.update(__MODULE__, fn store ->
+          Enum.reject(
+            store,
+            &(&1.payload.user_id == user_id and &1.payload[:account_id] == account_id)
+          )
+        end)
+
+        :ok
+      end
+    end
+
+    @impl true
+    def delete_by_ids(ids) do
+      ensure_started()
+      set = MapSet.new(ids)
+      Agent.update(__MODULE__, fn store -> Enum.reject(store, &MapSet.member?(set, &1.id)) end)
+      :ok
     end
 
     @doc "Clear all points (call in test setup)."
