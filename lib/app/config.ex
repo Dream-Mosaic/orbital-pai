@@ -52,6 +52,10 @@ defmodule App.Config do
             # Pre-compute the reflex on Ink's turn.eager_end prediction so it's ready the instant
             # turn.end confirms (turn.resume cancels). Hands-free only. Off → pure Phase-1 timing.
             eager_reflex: true,
+            # :always — the reflex always speaks first (brain audio waits for it).
+            # :race — if the brain's first audio lands before the reflex has spoken, skip the
+            # reflex (it's latency insurance, not a ritual). Flip after live smoke.
+            reflex_mode: :always,
             # Voice-activation wake matching (App.Conversations.WakeWord): attention
             # prefixes ("wake up Henry"), extra accepted name spellings grown from the
             # `[wake] locked drop` log lines, and the fuzzy (Levenshtein<=1) toggle.

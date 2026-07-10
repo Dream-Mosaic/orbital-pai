@@ -369,8 +369,16 @@ defmodule App.Conversations.Conversation do
   def handle_event(:info, {:brain_audio, pcm}, _s, %{policy: %{reflex_sent: true}} = data),
     do: {:keep_state, push_audio_chunk(:brain, pcm, data)}
 
-  def handle_event(:info, {:brain_audio, pcm}, _s, data),
-    do: {:keep_state, %{data | brain_buffer: [pcm | data.brain_buffer]}}
+  def handle_event(:info, {:brain_audio, pcm}, _s, data) do
+    data = %{data | brain_buffer: [pcm | data.brain_buffer]}
+
+    if data.config.reflex_mode == :race and data.policy.phase == :awaiting_reflex do
+      Logger.info("[turn] brain won the race — skipping the reflex")
+      feed(:brain_won, data)
+    else
+      {:keep_state, data}
+    end
+  end
 
   # Live caption: stream each brain text delta to the client as Gemini generates it (ahead of the
   # spoken audio). Only while a turn is live — a stale delta from an abandoned/barged turn (phase
@@ -1066,6 +1074,8 @@ defmodule App.Conversations.Conversation do
          brain_ms: 0
      }, [{{:timeout, :interrupt_pending}, :infinity, :cancel} | acts]}
   end
+
+  defp run_effect(:cancel_reflex, {data, acts}), do: {cancel_reflex_tasks(data), acts}
 
   defp run_effect({:arm_timer, :watchdog}, {data, acts}),
     do: {data, [{{:timeout, :watchdog}, data.config.turn_max_ms, :watchdog} | acts]}

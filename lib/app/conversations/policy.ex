@@ -10,7 +10,7 @@ defmodule App.Conversations.Policy do
 
   Effects: `{:generate_reflex, t}`, `{:start_brain, t}`, `{:speak_reflex, text}`,
   `:flush_brain`, `:arm_drain`, `:turn_complete`, `:stop_playback`, `:cancel_brain`,
-  `{:arm_timer, :watchdog}`, `:cancel_timers`.
+  `{:arm_timer, :watchdog}`, `:cancel_timers`, `:cancel_reflex`.
   """
   alias App.Config
 
@@ -60,6 +60,17 @@ defmodule App.Conversations.Policy do
   end
 
   def decide(s, :reflex_sent, _c), do: {s, []}
+
+  # --- race mode: the brain's first audio arrived before the reflex spoke -> skip the reflex ---
+  def decide(%{phase: :awaiting_reflex} = s, :brain_won, _c) do
+    s = %{s | phase: :streaming, reflex_sent: true}
+
+    {s,
+     [:cancel_reflex, :flush_brain] ++
+       if(s.brain_done, do: [:cancel_watchdog, :arm_drain], else: [])}
+  end
+
+  def decide(s, :brain_won, _c), do: {s, []}
 
   # --- brain stream finished generating: cancel the watchdog (it only guards a stuck
   # *generation*) so it can't abort a long answer mid-playback; the drain timer governs ---

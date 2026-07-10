@@ -1166,6 +1166,21 @@ defmodule App.Conversations.ConversationTest do
     assert_receive {:to_client, {:speak_start, :reflex, "ok:ptt utterance"}}, 1000
   end
 
+  test "race mode: a fast brain skips the slow reflex entirely" do
+    stub(App.TextModelMock, :generate, fn _t, _c, opts ->
+      # the reflex model call is slow — the fake brain's audio will win
+      if Keyword.get(opts, :tier) == :reflex, do: Process.sleep(500)
+      {:ok, "late reflex"}
+    end)
+
+    pid = start_conv(%Config{reflex_mode: :race})
+    Conversation.endpoint(pid, "quick question")
+
+    assert_receive {:to_client, {:audio, :brain, _}}, 2000
+    assert_receive {:to_client, {:speak_start, :brain, _}}, 2000
+    refute_receive {:to_client, {:speak_start, :reflex, _}}, 600
+  end
+
   describe "agenda framework" do
     alias App.Agenda.Item
 

@@ -71,4 +71,23 @@ defmodule App.Conversations.PolicyTest do
     state = %{Policy.initial_state() | phase: :streaming}
     assert {%{phase: :listening}, [:cancel_brain, :cancel_timers]} = decide(state, :watchdog)
   end
+
+  test ":brain_won while awaiting_reflex skips to streaming and cancels the reflex" do
+    s = %{Policy.initial_state() | phase: :awaiting_reflex, transcript: "q"}
+    {s2, effects} = decide(s, :brain_won)
+    assert s2.phase == :streaming
+    assert s2.reflex_sent == true
+    assert effects == [:cancel_reflex, :flush_brain]
+  end
+
+  test ":brain_won when the brain already finished also arms the drain" do
+    s = %{Policy.initial_state() | phase: :awaiting_reflex, brain_done: true}
+    {_s2, effects} = decide(s, :brain_won)
+    assert effects == [:cancel_reflex, :flush_brain, :cancel_watchdog, :arm_drain]
+  end
+
+  test ":brain_won elsewhere is a no-op" do
+    s = %{Policy.initial_state() | phase: :speaking_reflex}
+    assert {^s, []} = decide(s, :brain_won)
+  end
 end
