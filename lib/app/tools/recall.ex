@@ -27,7 +27,7 @@ defmodule App.Tools.Recall do
   def execute("recall_memory", _args, %{user_id: nil}), do: {:ok, %{matches: []}}
 
   def execute("recall_memory", %{"query" => q}, ctx),
-    do: {:ok, %{matches: App.Memory.search_turns(ctx.user_id, q)}}
+    do: {:ok, %{matches: App.Memory.search(ctx.user_id, q)}}
 
   def execute("recall_memory", _args, _ctx), do: {:error, :missing_args}
 

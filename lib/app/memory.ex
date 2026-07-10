@@ -172,6 +172,96 @@ defmodule App.Memory do
   defp snippet(nil), do: nil
   defp snippet(text), do: String.slice(text, 0, 200)
 
+  @doc "The text embedded for one turn: user + brain, one vector."
+  def embed_text_for(%Turn{user_text: u, brain_text: b}), do: "#{u}\n#{b}"
+
+  @doc """
+  Hybrid recall: FTS5 (keyword) + Qdrant (semantic), fused with RRF, rendered from SQLite. Returns
+  up to `limit` match maps, best-first. Degrades to FTS5-only if the vector leg is unavailable. The
+  returned shape is the `recall_memory` contract.
+  """
+  def search(user_id, query, limit \\ 6) do
+    leg_a = fts_turn_ids(user_id, query, 20)
+    leg_b = vector_ids(user_id, query, 20)
+
+    [leg_a, leg_b]
+    |> rrf_fuse()
+    |> Enum.take(limit)
+    |> render_hits(user_id)
+  end
+
+  # FTS5 leg for fusion: ranked TURN ids (bm25 best-first). Mirrors search_turns/3's query.
+  defp fts_turn_ids(user_id, query, limit) do
+    case fts_query(query) do
+      "" ->
+        []
+
+      match ->
+        sql = """
+        SELECT t.id
+        FROM turns_fts f JOIN turns t ON t.id = f.rowid
+        WHERE turns_fts MATCH ?1 AND t.user_id = ?2
+        ORDER BY bm25(turns_fts) LIMIT ?3
+        """
+
+        %{rows: rows} = Ecto.Adapters.SQL.query!(Repo, sql, [match, user_id, limit])
+        Enum.map(rows, fn [id] -> {"turn", id} end)
+    end
+  end
+
+  # Semantic leg: embed the query, search the vector store. Any failure → [] (degrade to FTS5).
+  defp vector_ids(user_id, query, limit) do
+    with {:ok, [vec]} <- App.Adapters.Embeddings.impl().embed([query], :query),
+         {:ok, hits} <- App.Adapters.VectorStore.impl().search(vec, user_id, limit) do
+      Enum.map(hits, fn %{source: s, id: id} -> {s, id} end)
+    else
+      _ -> []
+    end
+  end
+
+  # Load fused rows from SQLite (one query per source), preserving fused order, dropping any row
+  # deleted since indexing (ghost-drop). user_id re-checked defensively.
+  defp render_hits(fused, user_id) do
+    turn_ids = for {"turn", id} <- fused, do: id
+    digest_ids = for {"digest", id} <- fused, do: id
+
+    turns =
+      from(t in Turn, where: t.id in ^turn_ids and t.user_id == ^user_id)
+      |> Repo.all()
+      |> Map.new(&{&1.id, &1})
+
+    digests =
+      from(d in Digest, where: d.id in ^digest_ids and d.user_id == ^user_id)
+      |> Repo.all()
+      |> Map.new(&{&1.id, &1})
+
+    Enum.flat_map(fused, fn
+      {"turn", id} ->
+        case turns[id] do
+          nil ->
+            []
+
+          t ->
+            [
+              %{
+                when: day(t.inserted_at),
+                you: snippet(t.user_text),
+                henry: snippet(t.brain_text),
+                source: "turn"
+              }
+            ]
+        end
+
+      {"digest", id} ->
+        case digests[id] do
+          nil -> []
+          d -> [%{when: to_string(d.date), summary: snippet(d.content), source: "digest"}]
+        end
+    end)
+  end
+
+  defp day(inserted_at), do: inserted_at |> to_string() |> String.slice(0, 10)
+
   # ---- Reciprocal Rank Fusion (RRF) ----
   @doc """
   Reciprocal Rank Fusion of several ranked `{source, id}` lists. Each list contributes
