@@ -24,6 +24,7 @@ config :logger, level: :warning
 config :app, start_reminder_scheduler: false
 config :app, start_briefing_scheduler: false
 config :app, start_memory_consolidator: false
+config :app, start_memory_embedder: false
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime

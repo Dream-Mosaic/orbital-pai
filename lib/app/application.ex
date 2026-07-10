@@ -37,7 +37,8 @@ defmodule App.Application do
 
     children =
       children ++
-        reminder_scheduler() ++ briefing_scheduler() ++ memory_consolidator() ++ pool_warmer()
+        reminder_scheduler() ++
+        briefing_scheduler() ++ memory_consolidator() ++ memory_embedder() ++ pool_warmer()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -60,6 +61,12 @@ defmodule App.Application do
   defp memory_consolidator do
     if Application.get_env(:app, :start_memory_consolidator, true),
       do: [App.Memory.Consolidator],
+      else: []
+  end
+
+  defp memory_embedder do
+    if Application.get_env(:app, :start_memory_embedder, true),
+      do: [App.Memory.Embedder],
       else: []
   end
 

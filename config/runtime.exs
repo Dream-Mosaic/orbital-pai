@@ -104,6 +104,20 @@ if tz = System.get_env("TIMEZONE") do
   config :app, :timezone, tz
 end
 
+# Semantic memory (Unified Search M1): Qdrant + Voyage credentials, unset in dev (both adapters
+# have fakes wired in test; a missing prod value surfaces as an adapter error, not a boot crash).
+if url = System.get_env("QDRANT_URL") do
+  config :app, :qdrant_url, url
+end
+
+if key = System.get_env("QDRANT_API_KEY") do
+  config :app, :qdrant_api_key, key
+end
+
+if vk = System.get_env("VOYAGE_API_KEY") do
+  config :app, :voyage_api_key, vk
+end
+
 # Allowlisted users come from the environment (JSON) so no personal emails live in the repo.
 # Format (ordered — the first entry is the primary who owns pre-existing connections):
 #   ALLOWED_USERS='[{"email":"you@example.com","name":"You","aliases":["alt@example.com"]}]'
