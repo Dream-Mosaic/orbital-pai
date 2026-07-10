@@ -13,13 +13,18 @@ defmodule AppWeb.ConversationLive do
   alias App.Google.Accounts, as: GoogleAccounts
   alias App.Google.Connectors
 
+  # Kiosk-only ambient info strip (weather · next event · due reminders) refresh cadence.
+  @ambient_refresh_ms 5 * 60_000
+
   @impl true
   def mount(params, _session, socket) do
     sid = to_string(socket.assigns.current_user.id)
+    kiosk = params["kiosk"] == "1"
 
     if connected?(socket) do
       Memory.subscribe()
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{sid}")
+      if kiosk, do: send(self(), :refresh_ambient)
     end
 
     {:ok,
@@ -32,7 +37,7 @@ defmodule AppWeb.ConversationLive do
        app_version: App.version(),
        user_name: socket.assigns.current_user.name,
        page_title: App.Config.default().name,
-       kiosk: params["kiosk"] == "1",
+       kiosk: kiosk,
        modal_open: false,
        modal: nil,
        grant: nil,
@@ -41,7 +46,8 @@ defmodule AppWeb.ConversationLive do
        voice_activation: socket.assigns.current_user.voice_activation,
        briefing_time: socket.assigns.current_user.briefing_time,
        relock_seconds: socket.assigns.current_user.relock_seconds,
-       assistant_name: App.Config.default().name
+       assistant_name: App.Config.default().name,
+       ambient: %{weather: nil, next_event: nil}
      )
      |> load_memory()
      |> load_reminders()
@@ -260,6 +266,44 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_reminders(socket)}
   end
 
+  # Self-rearming ambient refresh — only kiosk mount ever sends the first message (see mount/3), so
+  # a non-kiosk LiveView never enters this clause and never fetches. `%{}` args for the calendar
+  # call default its window to now→+24h (App.Tools.Calendar.time_min/time_max), which is exactly
+  # the "what's next" window `AppWeb.Ambient.next_event_line/2` wants.
+  def handle_info(:refresh_ambient, socket) do
+    Process.send_after(self(), :refresh_ambient, @ambient_refresh_ms)
+    uid = socket.assigns.current_user.id
+    cfg = App.Config.default()
+
+    {:noreply,
+     start_async(socket, :ambient, fn ->
+       ctx = %{session_id: to_string(uid), user_id: uid, config: cfg}
+
+       weather =
+         case App.Tools.execute("get_weather", %{}, ctx) do
+           {:ok, r} -> r
+           _ -> nil
+         end
+
+       events =
+         case App.Tools.execute("get_calendar_events", %{}, ctx) do
+           {:ok, r} -> r
+           _ -> nil
+         end
+
+       %{
+         weather: AppWeb.Ambient.weather_line(weather),
+         next_event: AppWeb.Ambient.next_event_line(events, DateTime.utc_now())
+       }
+     end)}
+  end
+
+  @impl true
+  def handle_async(:ambient, {:ok, ambient}, socket),
+    do: {:noreply, assign(socket, ambient: ambient)}
+
+  def handle_async(:ambient, {:exit, _reason}, socket), do: {:noreply, socket}
+
   defp load_memory(socket) do
     uid = socket.assigns.current_user.id
     assign(socket, facts: Memory.list_facts(uid), summary: Memory.get_summary(uid).content)
@@ -437,6 +481,15 @@ defmodule AppWeb.ConversationLive do
             </div>
           </div>
         </header>
+
+        <%!-- Kiosk-only glanceable line: weather · next event · due reminders. Fetched via the tool
+             layer in start_async (handle_info(:refresh_ambient, ...) below), refreshed every 5 min;
+             @ambient is always assigned in mount/3 (even off-kiosk) so these reads never crash. --%>
+        <div :if={@kiosk} id="ambient-strip" class="text-center text-sm opacity-60">
+          <span :if={@ambient.weather}>{@ambient.weather}</span>
+          <span :if={@ambient.next_event}> · {@ambient.next_event}</span>
+          <span :if={@due != []}> · {length(@due)} reminder{if length(@due) != 1, do: "s"} due</span>
+        </div>
 
         <section
           id="voice"

@@ -9,6 +9,28 @@ defmodule AppWeb.ConversationLiveTest do
     :ok
   end
 
+  # Ambient info strip (kiosk-only) — mount/3 fires handle_info(:refresh_ambient, ...) once for any
+  # kiosk-mounted LiveView, which calls the real App.Tools.execute("get_weather"/"get_calendar_events",
+  # ...) in a start_async task running under App.Conversations.TaskSup — a different process than
+  # this test, so Req.Test's default per-process ownership can't see the stub there (it 500s with
+  # "cannot find mock/stub" when the LiveView's async task is the caller). set_req_test_to_shared/1
+  # (this file is already async: false, matching Req.Test's own shared-mode requirement) makes the
+  # stub visible from any process. Stub the weather HTTP call at the module level so EVERY kiosk mount
+  # in this file — including the pre-existing kiosk tests below — never reaches the real network. The
+  # calendar call needs no stub: a freshly-registered test user has no connected Google accounts, so
+  # App.Tools.Calendar short-circuits to `{:ok, %{events: [], ...}}` before any HTTP call.
+  setup do
+    Req.Test.set_req_test_to_shared()
+    Application.put_env(:app, :weather_req_opts, plug: {Req.Test, ConversationLiveWeatherStub})
+    on_exit(fn -> Application.delete_env(:app, :weather_req_opts) end)
+
+    Req.Test.stub(ConversationLiveWeatherStub, fn conn ->
+      Req.Test.json(conn, %{"current" => %{"temperature_2m" => 70.0, "weather_code" => 0}})
+    end)
+
+    :ok
+  end
+
   test "the main screen mounts with the voice hook region and top bar", %{conn: conn} do
     {:ok, _lv, html} = live(conn, "/")
     assert html =~ ~s(id="voice")
@@ -446,23 +468,50 @@ defmodule AppWeb.ConversationLiveTest do
     refute to =~ "account="
   end
 
+  # These three are pure static-markup assertions (layout classes / container presence), so they use
+  # a plain disconnected `get/2` rather than `live/2`. That matters beyond style: a *connected* kiosk
+  # mount fires the real handle_info(:refresh_ambient, ...) → start_async → App.Tools.execute (a real
+  # Ecto read for get_calendar_events even with zero accounts) in the background on
+  # App.Conversations.TaskSup. That's fully drained deterministically by render_async in the dedicated
+  # test below, but doing it in EVERY kiosk-mounting test here piled up extra real background DB
+  # reads against this file's shared Ecto sandbox and measurably worsened the project's known
+  # "Database busy" flake (see CLAUDE.md / App.DataCase.drain_conversation_tasks). A disconnected GET
+  # renders the identical template (kiosk/ambient assigns are unconditional in mount/3) without ever
+  # reaching `connected?(socket)`, so it never triggers the refresh at all — no async, no DB read.
   test "kiosk param marks the layout; default does not", %{conn: conn} do
-    {:ok, _lv, kiosk_html} = live(conn, "/?kiosk=1")
+    kiosk_html = conn |> get("/?kiosk=1") |> html_response(200)
     assert kiosk_html =~ ~s(data-kiosk="true")
 
-    {:ok, _lv, default_html} = live(conn, "/")
+    default_html = conn |> get("/") |> html_response(200)
     assert default_html =~ ~s(data-kiosk="false")
   end
 
+  test "kiosk mount renders the ambient strip container; non-kiosk mount renders none", %{
+    conn: conn
+  } do
+    kiosk_html = conn |> get("/?kiosk=1") |> html_response(200)
+    assert kiosk_html =~ ~s(id="ambient-strip")
+
+    default_html = conn |> get("/") |> html_response(200)
+    refute default_html =~ ~s(id="ambient-strip")
+  end
+
+  test "kiosk ambient strip fills in with the fetched weather line (real tool layer, stubbed HTTP)",
+       %{conn: conn} do
+    {:ok, lv, _html} = live(conn, "/?kiosk=1")
+
+    assert render_async(lv) =~ "70° clear"
+  end
+
   test "kiosk moves modal nav into the header strip and drops the bottom nav", %{conn: conn} do
-    {:ok, _lv, kiosk_html} = live(conn, "/?kiosk=1")
+    kiosk_html = conn |> get("/?kiosk=1") |> html_response(200)
     assert kiosk_html =~ ~s(id="kiosk-modal-strip")
     refute kiosk_html =~ ~s(id="bottom-nav")
     assert kiosk_html =~ ~s(id="ptt-toggle")
     assert kiosk_html =~ ~s(id="power-btn")
     assert kiosk_html =~ ~s(id="ptt-hold")
 
-    {:ok, _lv, default_html} = live(conn, "/")
+    default_html = conn |> get("/") |> html_response(200)
     refute default_html =~ ~s(id="kiosk-modal-strip")
     assert default_html =~ ~s(id="bottom-nav")
   end

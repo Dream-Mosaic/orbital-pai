@@ -984,6 +984,15 @@ main:has(#voice) > header .duedot {
     top: 0.5rem;
     bottom: auto;
   }
+  /* Ambient info strip sits just under the top-center clock, spanning the header's empty middle.
+     pointer-events: none — it's glanceable text, not interactive, and must never intercept taps
+     meant for the header controls on either side of it. */
+  .kiosk #ambient-strip {
+    position: fixed;
+    inset-inline: 0;
+    top: 2.2rem;
+    pointer-events: none;
+  }
 }
 
 /* ============================================================
