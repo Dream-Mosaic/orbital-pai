@@ -14,6 +14,10 @@ defmodule App.Sources.Ingester do
   alias App.Google.Accounts
   alias App.Adapters.VectorStore
 
+  # Bound each Voyage embed request so a large Gmail batch can't exceed the per-request token cap.
+  @embed_max_items 96
+  @embed_max_bytes 120_000
+
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @impl true
@@ -79,10 +83,16 @@ defmodule App.Sources.Ingester do
 
   defp index_refs(refs, user_id, mod, account) do
     source = mod.source_key()
-    built = for r <- refs, {:ok, pt} <- [mod.to_point(account, r)], do: {r, pt}
 
+    for(r <- refs, {:ok, pt} <- [mod.to_point(account, r)], do: {r, pt})
+    |> chunk_built()
+    |> Enum.each(&upsert_and_record(&1, user_id, source, account))
+  end
+
+  # Embed + upsert one chunk, then record its source_items rows ONLY after a confirmed upsert.
+  defp upsert_and_record(chunk, user_id, source, account) do
     items =
-      for {r, pt} <- built do
+      for {r, pt} <- chunk do
         %{
           point_id: point_id(source, account.id, r.external_id),
           embed_text: pt.embed_text,
@@ -94,7 +104,7 @@ defmodule App.Sources.Ingester do
       :ok ->
         now = DateTime.utc_now()
 
-        for {r, pt} <- built do
+        for {r, pt} <- chunk do
           Items.record(%{
             user_id: user_id,
             account_id: account.id,
@@ -106,16 +116,34 @@ defmodule App.Sources.Ingester do
           })
         end
 
-        Logger.info("[sources] indexed #{length(built)} #{source}(s) from #{account.label}")
-        :ok
+        Logger.info("[sources] indexed #{length(chunk)} #{source}(s) from #{account.label}")
 
       {:error, reason} ->
         Logger.warning("[sources] #{source} #{account.label} upsert failed: #{inspect(reason)}")
-        :ok
     end
   end
 
-  # ---- reconcile (only after a successful list_refs) ----
+  # Split built {ref, point} pairs into sub-batches, each within @embed_max_items and @embed_max_bytes,
+  # so no single Voyage request is oversized. A single item larger than the byte budget still ships alone.
+  defp chunk_built(built) do
+    {chunks, cur, _n, _bytes} =
+      Enum.reduce(built, {[], [], 0, 0}, fn {_r, pt} = item, {chunks, cur, n, bytes} ->
+        sz = byte_size(pt.embed_text)
+
+        if cur != [] and (n + 1 > @embed_max_items or bytes + sz > @embed_max_bytes) do
+          {[Enum.reverse(cur) | chunks], [item], 1, sz}
+        else
+          {chunks, [item | cur], n + 1, bytes + sz}
+        end
+      end)
+
+    chunks = if cur == [], do: chunks, else: [Enum.reverse(cur) | chunks]
+    Enum.reverse(chunks)
+  end
+
+  # ---- reconcile (only after a successful list_refs). Purge Qdrant points FIRST, then delete the
+  # source_items rows only on a confirmed purge, so a transient Qdrant failure leaves the rows in
+  # place and the next tick recomputes the same drop set and retries (self-healing; no orphans). ----
 
   defp reconcile(user_id, mod, account, refs) do
     source = mod.source_key()
@@ -123,30 +151,33 @@ defmodule App.Sources.Ingester do
     dropped =
       case mod.reconcile_mode() do
         :full ->
-          live = MapSet.new(refs, & &1.external_id)
-          Items.delete_missing(user_id, source, account.id, live)
+          Items.missing_ids(user_id, source, account.id, MapSet.new(refs, & &1.external_id))
 
         :age_out ->
           cutoff = DateTime.utc_now() |> DateTime.add(-max_age_days() * 86_400, :second)
-          Items.prune_older_than(user_id, source, account.id, cutoff)
+          Items.older_than_ids(user_id, source, account.id, cutoff)
       end
 
-    purge_points(source, account.id, dropped)
+    purge_dropped(user_id, source, account, dropped)
   end
 
-  defp purge_points(_source, _account_id, []), do: :ok
+  defp purge_dropped(_user_id, _source, _account, []), do: :ok
 
-  defp purge_points(source, account_id, external_ids) do
-    ids = Enum.map(external_ids, &point_id(source, account_id, &1))
+  defp purge_dropped(user_id, source, account, external_ids) do
+    point_ids = Enum.map(external_ids, &point_id(source, account.id, &1))
 
-    case VectorStore.impl().delete_by_ids(ids) do
+    case VectorStore.impl().delete_by_ids(point_ids) do
       :ok ->
+        Items.delete_external_ids(user_id, source, account.id, external_ids)
+
         Logger.info(
-          "[sources] reconciled #{length(ids)} stale #{source} point(s) from account #{account_id}"
+          "[sources] reconciled #{length(external_ids)} stale #{source} point(s) from account #{account.id}"
         )
 
       {:error, reason} ->
-        Logger.warning("[sources] reconcile purge failed: #{inspect(reason)}")
+        Logger.warning(
+          "[sources] #{source} reconcile purge failed (rows kept for retry): #{inspect(reason)}"
+        )
     end
   end
 

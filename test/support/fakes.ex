@@ -354,6 +354,21 @@ defmodule App.Test.Fakes do
       :ok
     end
 
+    @impl true
+    def delete_by_user_sources(user_id, sources) do
+      ensure_started()
+      set = MapSet.new(sources)
+
+      Agent.update(__MODULE__, fn store ->
+        Enum.reject(
+          store,
+          &(&1.payload.user_id == user_id and MapSet.member?(set, to_string(&1.payload.source)))
+        )
+      end)
+
+      :ok
+    end
+
     @doc "Clear all points (call in test setup)."
     def reset do
       if Process.whereis(__MODULE__), do: Agent.update(__MODULE__, fn _ -> [] end)

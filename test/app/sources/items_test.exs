@@ -35,22 +35,38 @@ defmodule App.Sources.ItemsTest do
     assert Items.refs_indexed(uid, "email", 1) == %{"m1" => "h1"}
   end
 
-  test "delete_missing drops rows whose external_id is not live, returns them", %{uid: uid} do
+  test "missing_ids returns not-live external_ids WITHOUT deleting anything", %{uid: uid} do
     rec(uid, "calendar", 1, "e1", "h")
     rec(uid, "calendar", 1, "e2", "h")
-    dropped = Items.delete_missing(uid, "calendar", 1, MapSet.new(["e1"]))
-    assert dropped == ["e2"]
-    assert Items.refs_indexed(uid, "calendar", 1) == %{"e1" => "h"}
+    missing = Items.missing_ids(uid, "calendar", 1, MapSet.new(["e1"]))
+    assert missing == ["e2"]
+    # read-only: both rows are still present
+    assert Items.refs_indexed(uid, "calendar", 1) == %{"e1" => "h", "e2" => "h"}
   end
 
-  test "prune_older_than drops rows older than the cutoff, returns them", %{uid: uid} do
+  test "older_than_ids returns ids older than the cutoff WITHOUT deleting anything", %{uid: uid} do
     old = ~U[2020-01-01 00:00:00Z]
     new = ~U[2030-01-01 00:00:00Z]
     rec(uid, "email", 1, "old", "h", old)
     rec(uid, "email", 1, "new", "h", new)
-    dropped = Items.prune_older_than(uid, "email", 1, ~U[2025-01-01 00:00:00Z])
+    dropped = Items.older_than_ids(uid, "email", 1, ~U[2025-01-01 00:00:00Z])
     assert dropped == ["old"]
-    assert Map.keys(Items.refs_indexed(uid, "email", 1)) == ["new"]
+    # read-only: both rows are still present
+    assert Map.keys(Items.refs_indexed(uid, "email", 1)) |> Enum.sort() == ["new", "old"]
+  end
+
+  test "delete_external_ids deletes exactly the given ids", %{uid: uid} do
+    rec(uid, "email", 1, "m1", "h")
+    rec(uid, "email", 1, "m2", "h")
+    rec(uid, "email", 1, "m3", "h")
+    :ok = Items.delete_external_ids(uid, "email", 1, ["m1", "m3"])
+    assert Items.refs_indexed(uid, "email", 1) == %{"m2" => "h"}
+  end
+
+  test "delete_external_ids([]) is a no-op", %{uid: uid} do
+    rec(uid, "email", 1, "m1", "h")
+    :ok = Items.delete_external_ids(uid, "email", 1, [])
+    assert Items.refs_indexed(uid, "email", 1) == %{"m1" => "h"}
   end
 
   test "delete_for_account clears one account; delete_for_user clears all", %{uid: uid} do

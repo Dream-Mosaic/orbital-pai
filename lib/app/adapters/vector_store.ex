@@ -12,6 +12,8 @@ defmodule App.Adapters.VectorStore do
   @callback delete_by_account(user_id :: integer(), account_id :: integer()) ::
               :ok | {:error, term()}
   @callback delete_by_ids(ids :: [String.t()]) :: :ok | {:error, term()}
+  @callback delete_by_user_sources(user_id :: integer(), sources :: [String.t()]) ::
+              :ok | {:error, term()}
 
   @doc "The configured vector-store adapter."
   def impl, do: Application.fetch_env!(:app, :vector_store)

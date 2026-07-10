@@ -221,6 +221,34 @@ defmodule App.MemorySearchTest do
     assert App.Sources.Items.refs_indexed(uid, "email", 7) == %{}
   end
 
+  test "clear_turns does NOT drop the email/calendar index", %{u1: uid} do
+    index_turn(uid, "ephemeral chat", "ok")
+
+    index_external(uid, "email", "m1", %{
+      at: "2026-07-01T10:00:00Z",
+      subject: "keep me",
+      from: "s@x",
+      snippet: "x",
+      link: "l"
+    })
+
+    {:ok, _} =
+      App.Sources.Items.record(%{
+        user_id: uid,
+        account_id: 7,
+        source: "email",
+        external_id: "m1",
+        content_hash: "h1",
+        indexed_at: DateTime.utc_now()
+      })
+
+    Memory.clear_turns(uid)
+
+    refute Enum.any?(Memory.search(uid, "ephemeral", 6), &(&1[:source] == "turn"))
+    assert Enum.any?(Memory.search(uid, "keep", 6), &(&1[:source] == "email"))
+    assert App.Sources.Items.refs_indexed(uid, "email", 7) != %{}
+  end
+
   test "external matches respect user isolation", %{u1: u1, u2: u2} do
     index_external(u1, "email", "m1", %{
       at: "2026-07-01T10:00:00Z",

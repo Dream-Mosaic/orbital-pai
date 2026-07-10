@@ -1,8 +1,10 @@
 defmodule App.Sources.Items do
   @moduledoc """
   Context over the `source_items` tracking table: what external items are indexed (for dedup +
-  change detection), and the prune/delete queries the Ingester + privacy purges use. The prune
-  helpers return the dropped `external_id`s so the caller can purge their Qdrant points.
+  change detection), and the read-only/delete queries the Ingester + privacy purges use. The
+  `missing_ids`/`older_than_ids` lookups are read-only (compute the drop set); the caller purges
+  the Qdrant points for those ids FIRST, then calls `delete_external_ids/4` to drop the rows —
+  so a failed purge leaves the rows in place for the next tick to retry (self-healing).
   """
   import Ecto.Query
   alias App.Repo
@@ -28,33 +30,39 @@ defmodule App.Sources.Items do
     )
   end
 
-  @doc "Delete rows for (user, source, account) whose external_id is NOT in `live_ids`. Returns dropped ids."
-  def delete_missing(user_id, source, account_id, %MapSet{} = live_ids) do
-    rows =
-      from(i in Item,
-        where: i.user_id == ^user_id and i.source == ^source and i.account_id == ^account_id,
-        select: {i.id, i.external_id}
-      )
-      |> Repo.all()
-
-    dropped = for {id, ext} <- rows, not MapSet.member?(live_ids, ext), do: {id, ext}
-    delete_ids(Enum.map(dropped, &elem(&1, 0)))
-    Enum.map(dropped, &elem(&1, 1))
+  @doc "External ids for (user, source, account) NOT in `live_ids` (read-only — does not delete)."
+  def missing_ids(user_id, source, account_id, %MapSet{} = live_ids) do
+    from(i in Item,
+      where: i.user_id == ^user_id and i.source == ^source and i.account_id == ^account_id,
+      select: i.external_id
+    )
+    |> Repo.all()
+    |> Enum.reject(&MapSet.member?(live_ids, &1))
   end
 
-  @doc "Delete rows for (user, source, account) older than `cutoff`. Returns dropped ids."
-  def prune_older_than(user_id, source, account_id, %DateTime{} = cutoff) do
-    rows =
-      from(i in Item,
+  @doc "External ids for (user, source, account) older than `cutoff` (read-only — does not delete)."
+  def older_than_ids(user_id, source, account_id, %DateTime{} = cutoff) do
+    from(i in Item,
+      where:
+        i.user_id == ^user_id and i.source == ^source and i.account_id == ^account_id and
+          i.at < ^cutoff,
+      select: i.external_id
+    )
+    |> Repo.all()
+  end
+
+  @doc "Delete the rows for the given external ids under (user, source, account)."
+  def delete_external_ids(_user_id, _source, _account_id, []), do: :ok
+
+  def delete_external_ids(user_id, source, account_id, external_ids) do
+    Repo.delete_all(
+      from i in Item,
         where:
           i.user_id == ^user_id and i.source == ^source and i.account_id == ^account_id and
-            i.at < ^cutoff,
-        select: {i.id, i.external_id}
-      )
-      |> Repo.all()
+            i.external_id in ^external_ids
+    )
 
-    delete_ids(Enum.map(rows, &elem(&1, 0)))
-    Enum.map(rows, &elem(&1, 1))
+    :ok
   end
 
   @doc "Delete every row for one account (account disconnect)."
@@ -69,7 +77,4 @@ defmodule App.Sources.Items do
     Repo.delete_all(from i in Item, where: i.user_id == ^user_id)
     :ok
   end
-
-  defp delete_ids([]), do: :ok
-  defp delete_ids(ids), do: Repo.delete_all(from i in Item, where: i.id in ^ids)
 end

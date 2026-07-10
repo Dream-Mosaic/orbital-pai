@@ -132,5 +132,10 @@ defmodule App.Google.Calendar do
   defp edge(_), do: {nil, false}
 
   @doc false
-  def strftime_utc(%DateTime{} = dt), do: Calendar.strftime(dt, "%a %b %-d, %Y %-I:%M %p UTC")
+  def format_when(%DateTime{} = dt) do
+    case DateTime.shift_zone(dt, App.Config.timezone()) do
+      {:ok, local} -> Calendar.strftime(local, "%a %b %-d, %Y %-I:%M %p %Z")
+      _ -> Calendar.strftime(dt, "%a %b %-d, %Y %-I:%M %p UTC")
+    end
+  end
 end

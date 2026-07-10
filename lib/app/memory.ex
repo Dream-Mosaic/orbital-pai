@@ -117,7 +117,7 @@ defmodule App.Memory do
   @doc "Wipe a user's conversation turns only; keeps facts + summary."
   def clear_turns(user_id) do
     Repo.delete_all(from t in Turn, where: t.user_id == ^user_id)
-    purge_vectors(user_id)
+    purge_conversation_vectors(user_id)
     broadcast_updated()
     :ok
   end
@@ -142,6 +142,24 @@ defmodule App.Memory do
       {:error, reason} ->
         require Logger
         Logger.warning("[memory] vector purge failed for #{user_id}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  # clear_turns wipes CONVERSATION turns only — purge just the conversation vectors, NOT the
+  # email/calendar index (which delete_by_user would also drop, orphaning source_items rows).
+  defp purge_conversation_vectors(user_id) do
+    case App.Adapters.VectorStore.impl().delete_by_user_sources(user_id, ["turn", "digest"]) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "[memory] conversation vector purge failed for #{user_id}: #{inspect(reason)}"
+        )
+
         :ok
     end
   end

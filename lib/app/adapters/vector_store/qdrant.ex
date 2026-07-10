@@ -113,6 +113,25 @@ defmodule App.Adapters.VectorStore.Qdrant do
   end
 
   @impl true
+  def delete_by_user_sources(_user_id, []), do: :ok
+
+  def delete_by_user_sources(user_id, sources) do
+    body = %{
+      filter: %{
+        must: [
+          %{key: "user_id", match: %{value: user_id}},
+          %{key: "source", match: %{any: sources}}
+        ]
+      }
+    }
+
+    case req(:post, "/collections/#{collection()}/points/delete?wait=true", body) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def delete_by_account(user_id, account_id) do
     body = %{
       filter: %{

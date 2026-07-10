@@ -73,7 +73,7 @@ defmodule App.Sources.Calendar do
     #{ev.summary}
     When: #{when_human(ev)}
     Where: #{ev.location}
-    #{ev.description}
+    #{String.slice(ev.description || "", 0, 8_000)}
     With: #{Enum.join(ev.attendees, ", ")}
     """
     |> String.trim()
@@ -98,7 +98,7 @@ defmodule App.Sources.Calendar do
 
   defp when_human(%{start: s}) when is_binary(s) do
     case DateTime.from_iso8601(s) do
-      {:ok, dt, _} -> Calendar.strftime_utc(dt)
+      {:ok, dt, _} -> Calendar.format_when(dt)
       _ -> s
     end
   end
