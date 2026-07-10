@@ -321,8 +321,14 @@ defmodule App.Adapters.TextModel.Gemini do
       recent
       |> Enum.filter(&(present?(&1.user_text) and present?(&1.brain_text)))
       |> Enum.flat_map(fn t ->
+        user_text =
+          case age_marker(Map.get(t, :inserted_at), DateTime.utc_now()) do
+            nil -> t.user_text
+            marker -> marker <> " " <> t.user_text
+          end
+
         [
-          %{role: "user", parts: [%{text: t.user_text}]},
+          %{role: "user", parts: [%{text: user_text}]},
           %{role: "model", parts: [%{text: t.brain_text}]}
         ]
       end)
@@ -333,6 +339,21 @@ defmodule App.Adapters.TextModel.Gemini do
   def build_contents(_ctx, transcript), do: [%{role: "user", parts: [%{text: transcript}]}]
 
   defp present?(s), do: is_binary(s) and String.trim(s) != ""
+
+  @doc false
+  # Relative-age marker for a history turn, so the brain can tell "just now" from "yesterday".
+  def age_marker(nil, _now), do: nil
+
+  def age_marker(inserted_at, now) do
+    mins = div(DateTime.diff(now, inserted_at, :second), 60)
+
+    cond do
+      mins < 15 -> nil
+      mins < 120 -> "[#{mins}m ago]"
+      mins < 36 * 60 -> "[#{div(mins, 60)}h ago]"
+      true -> "[on #{Date.to_iso8601(DateTime.to_date(inserted_at))}]"
+    end
+  end
 
   # Per-tier model: the fast reflex/bridge model vs the smarter brain model (memory summaries want
   # the smarter one too, so they ride model_brain).

@@ -149,6 +149,35 @@ defmodule App.Adapters.TextModel.GeminiTest do
            ]
   end
 
+  describe "age_marker/2" do
+    @now ~U[2026-07-03 12:00:00Z]
+    test "buckets" do
+      assert Gemini.age_marker(~U[2026-07-03 11:50:00Z], @now) == nil
+      assert Gemini.age_marker(~U[2026-07-03 11:22:00Z], @now) == "[38m ago]"
+      assert Gemini.age_marker(~U[2026-07-03 07:00:00Z], @now) == "[5h ago]"
+      assert Gemini.age_marker(~U[2026-07-01 09:00:00Z], @now) == "[on 2026-07-01]"
+      assert Gemini.age_marker(nil, @now) == nil
+    end
+  end
+
+  test "build_contents prefixes old history turns, not the live transcript" do
+    old = %{
+      user_text: "plant the tomatoes",
+      brain_text: "noted",
+      inserted_at: DateTime.add(DateTime.utc_now(), -5 * 3600, :second)
+    }
+
+    fresh = %{user_text: "thanks", brain_text: "sure", inserted_at: DateTime.utc_now()}
+
+    [h1, _a1, h2, _a2, live] =
+      Gemini.build_contents(%{recent: [old, fresh]}, "what did I say to plant?")
+
+    assert [%{text: t1}] = h1.parts
+    assert String.starts_with?(t1, "[5h ago] plant the tomatoes")
+    assert [%{text: "thanks"}] = h2.parts
+    assert [%{text: "what did I say to plant?"}] = live.parts
+  end
+
   test "extract_calls pulls functionCall parts (with the thought_signature) out of a chunk" do
     decoded = %{
       "candidates" => [
