@@ -85,6 +85,19 @@ defmodule App.Config do
             embed_model: "voyage-4-lite",
             embed_dims: 1024,
             qdrant_collection: "memory_v4lite_1024",
+            # Unified Search M2 (external sources): periodic Ingester cadence + per-source windows.
+            # No new env vars; tunable here. Keep gmail_index_max_age_days consistent with the
+            # newer_than: in gmail_index_query (365 ≈ 1y).
+            source_ingest_interval_ms: 6 * 60 * 60 * 1000,
+            gmail_index_query:
+              "(category:primary OR label:sent) newer_than:1y -in:spam -in:trash",
+            # ids-only list cap per tick (single Gmail page ≤ 500; no pagination this milestone).
+            gmail_index_max_results: 500,
+            gmail_index_max_age_days: 365,
+            calendar_index_past_days: 30,
+            calendar_index_future_days: 90,
+            # new items embedded per account/source per tick (drains a bounded backlog over ticks).
+            source_ingest_batch: 200,
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
             weather_home: {38.52, -89.98, "Belleville, IL"}
 
