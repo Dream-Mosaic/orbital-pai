@@ -199,12 +199,12 @@ defmodule App.Memory do
   """
   def search(user_id, query, limit \\ 6) do
     leg_a = fts_turn_ids(user_id, query, 20)
-    leg_b = vector_ids(user_id, query, 20)
+    {leg_b, payloads} = vector_ids(user_id, query, 20)
 
     [leg_a, leg_b]
     |> rrf_fuse()
     |> Enum.take(limit)
-    |> render_hits(user_id)
+    |> render_hits(user_id, payloads)
   end
 
   # FTS5 leg for fusion: ranked TURN ids (bm25 best-first). Mirrors search_turns/3's query.
@@ -226,25 +226,30 @@ defmodule App.Memory do
     end
   end
 
-  # Semantic leg: embed the query, search the vector store. Any failure → [] (degrade to FTS5).
+  # Semantic leg: embed the query, search the vector store. Returns the ranked {source, id} list AND
+  # a %{{source, id} => payload} map (external sources render from payload — no SQLite row). Any
+  # failure → {[], %{}} (degrade to FTS5).
   defp vector_ids(user_id, query, limit) do
     with {:ok, [vec]} <- App.Adapters.Embeddings.impl().embed([query], :query),
          {:ok, hits} <- App.Adapters.VectorStore.impl().search(vec, user_id, limit) do
-      Enum.map(hits, fn %{source: s, id: id} -> {s, id} end)
+      ranked = Enum.map(hits, fn %{source: s, id: id} -> {s, id} end)
+      payloads = Map.new(hits, fn %{source: s, id: id, payload: p} -> {{s, id}, p} end)
+      {ranked, payloads}
     else
       {:error, reason} ->
         require Logger
         Logger.warning("[recall] vector leg unavailable (#{inspect(reason)}); FTS5-only")
-        []
+        {[], %{}}
 
       _ ->
-        []
+        {[], %{}}
     end
   end
 
-  # Load fused rows from SQLite (one query per source), preserving fused order, dropping any row
-  # deleted since indexing (ghost-drop). user_id re-checked defensively.
-  defp render_hits(fused, user_id) do
+  # Load fused rows, preserving fused order. Conversations (turn/digest) load from SQLite by id
+  # (ghost-drop preserved); external sources (email/calendar) render from the Qdrant payload carried
+  # by the vector leg (no Google API call on the recall path). user_id re-checked defensively.
+  defp render_hits(fused, user_id, payloads) do
     turn_ids = for {"turn", id} <- fused, do: id
     digest_ids = for {"digest", id} <- fused, do: id
 
@@ -281,10 +286,47 @@ defmodule App.Memory do
           d -> [%{when: to_string(d.date), summary: snippet(d.content), source: "digest"}]
         end
 
+      {"email", _id} = key ->
+        render_external(:email, payloads[key])
+
+      {"calendar", _id} = key ->
+        render_external(:calendar, payloads[key])
+
       _ ->
         []
     end)
   end
+
+  defp render_external(_kind, nil), do: []
+
+  defp render_external(:email, p) do
+    [
+      %{
+        when: when_of(p),
+        subject: p["subject"],
+        from: p["from"],
+        snippet: p["snippet"],
+        link: p["link"],
+        source: "email"
+      }
+    ]
+  end
+
+  defp render_external(:calendar, p) do
+    [
+      %{
+        when: when_of(p),
+        title: p["title"],
+        when_human: p["when_human"],
+        location: p["location"],
+        link: p["link"],
+        source: "calendar"
+      }
+    ]
+  end
+
+  defp when_of(%{"at" => at}) when is_binary(at), do: String.slice(at, 0, 10)
+  defp when_of(_), do: nil
 
   defp day(inserted_at), do: inserted_at |> to_string() |> String.slice(0, 10)
 

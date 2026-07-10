@@ -111,4 +111,110 @@ defmodule App.MemorySearchTest do
     assert is_list(matches)
     refute Enum.any?(matches, &(&1[:source] == "gmail"))
   end
+
+  defp index_external(uid, source, ext, payload_extra) do
+    :ok =
+      VectorStore.upsert([
+        %{
+          id: "#{source}:#{ext}",
+          vector: [0.0],
+          payload:
+            Map.merge(
+              %{user_id: uid, source: source, external_id: ext, account_id: 7},
+              payload_extra
+            )
+        }
+      ])
+  end
+
+  test "renders an email match from the vector payload", %{u1: uid} do
+    index_external(uid, "email", "m1", %{
+      at: "2026-07-01T10:00:00Z",
+      subject: "dinner plans",
+      from: "sam@x.com",
+      snippet: "thai on main?",
+      link: "https://mail/m1"
+    })
+
+    matches = Memory.search(uid, "dinner", 6)
+
+    assert Enum.any?(
+             matches,
+             &match?(
+               %{
+                 when: "2026-07-01",
+                 subject: "dinner plans",
+                 from: "sam@x.com",
+                 snippet: "thai on main?",
+                 link: "https://mail/m1",
+                 source: "email"
+               },
+               &1
+             )
+           )
+  end
+
+  test "renders a calendar match from the vector payload", %{u1: uid} do
+    index_external(uid, "calendar", "e1", %{
+      at: "2026-07-20T15:00:00Z",
+      title: "Dentist",
+      when_human: "Mon Jul 20, 2026 3:00 PM UTC",
+      location: "123 Main",
+      link: "https://cal/e1"
+    })
+
+    matches = Memory.search(uid, "dentist", 6)
+
+    assert Enum.any?(
+             matches,
+             &match?(
+               %{
+                 when: "2026-07-20",
+                 title: "Dentist",
+                 when_human: "Mon Jul 20, 2026 3:00 PM UTC",
+                 location: "123 Main",
+                 link: "https://cal/e1",
+                 source: "calendar"
+               },
+               &1
+             )
+           )
+  end
+
+  test "a single recall spans turn + email + calendar", %{u1: uid} do
+    index_turn(uid, "the thai place on main", "you loved it")
+
+    index_external(uid, "email", "m9", %{
+      at: "2026-07-01T10:00:00Z",
+      subject: "thai?",
+      from: "s@x",
+      snippet: "?",
+      link: "l"
+    })
+
+    index_external(uid, "calendar", "e9", %{
+      at: "2026-07-02T10:00:00Z",
+      title: "thai dinner",
+      when_human: "soon",
+      location: "main",
+      link: "l"
+    })
+
+    sources =
+      Memory.search(uid, "thai", 10) |> Enum.map(& &1.source) |> Enum.uniq() |> Enum.sort()
+
+    assert sources == ["calendar", "email", "turn"]
+  end
+
+  test "external matches respect user isolation", %{u1: u1, u2: u2} do
+    index_external(u1, "email", "m1", %{
+      at: "2026-07-01T10:00:00Z",
+      subject: "secret",
+      from: "x",
+      snippet: "x",
+      link: "x"
+    })
+
+    assert Memory.search(u2, "secret", 6) == []
+  end
 end
