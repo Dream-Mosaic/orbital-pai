@@ -310,6 +310,7 @@ defmodule App.Test.Fakes do
     defp hit_id(%{source_id: id}), do: id
     defp hit_id(%{external_id: ext, account_id: acc}), do: "#{acc}:#{ext}"
     defp hit_id(%{external_id: ext}), do: ext
+    defp hit_id(_), do: nil
     defp stringify(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
 
     @impl true

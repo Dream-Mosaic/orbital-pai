@@ -88,12 +88,19 @@ defmodule App.Adapters.VectorStore.Qdrant do
     end
   end
 
-  defp to_hit(%{"payload" => %{"source" => s} = p}), do: %{source: s, id: hit_id(p), payload: p}
+  defp to_hit(%{"payload" => %{"source" => s} = p}) do
+    case hit_id(p) do
+      nil -> nil
+      id -> %{source: s, id: id, payload: p}
+    end
+  end
+
   defp to_hit(_), do: nil
 
   defp hit_id(%{"source_id" => id}), do: id
   defp hit_id(%{"external_id" => ext, "account_id" => acc}), do: "#{acc}:#{ext}"
   defp hit_id(%{"external_id" => ext}), do: ext
+  defp hit_id(_), do: nil
 
   @impl true
   def delete_by_user(user_id) do

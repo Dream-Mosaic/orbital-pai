@@ -64,7 +64,7 @@ defmodule App.Adapters.VectorStore.QdrantTest do
           "result" => %{
             "points" => [
               %{"id" => "ok", "payload" => %{"source" => "turn", "source_id" => 5}},
-              %{"id" => "bad", "payload" => %{"foo" => "bar"}}
+              %{"id" => "bad", "payload" => %{"source" => "turn"}}
             ]
           }
         })
