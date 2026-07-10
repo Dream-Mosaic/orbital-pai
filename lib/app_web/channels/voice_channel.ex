@@ -27,8 +27,12 @@ defmodule AppWeb.VoiceChannel do
     session_id = to_string(socket.assigns.user_id)
 
     case bind_session(session_id) do
-      {:ok, pid} -> {:ok, assign(socket, session_id: session_id, conversation: pid)}
-      {:error, reason} -> {:error, %{reason: inspect(reason)}}
+      {:ok, pid} ->
+        Process.monitor(pid)
+        {:ok, assign(socket, session_id: session_id, conversation: pid)}
+
+      {:error, reason} ->
+        {:error, %{reason: inspect(reason)}}
     end
   end
 
@@ -171,6 +175,21 @@ defmodule AppWeb.VoiceChannel do
   def handle_info({:to_client, :unduck}, socket) do
     push(socket, "unduck", %{})
     {:noreply, socket}
+  end
+
+  # If the bound Conversation dies — a crash, or a linger-expiry we raced during join (set_client is a
+  # cast, so a lookup→dead-pid gap is possible) — drop this channel so the browser's auto-rejoin starts a
+  # fresh session instead of talking silently to a dead pid.
+  def handle_info({:DOWN, _ref, :process, pid, reason}, socket) do
+    if pid == Map.get(socket.assigns, :conversation) do
+      Logger.info(
+        "[conn] bound conversation down (#{inspect(reason)}) — dropping channel for a fresh rejoin"
+      )
+
+      {:stop, :shutdown, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true

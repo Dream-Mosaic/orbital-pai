@@ -76,6 +76,13 @@ defmodule AppWeb.VoiceChannelTest do
     sid: sid,
     alice: alice
   } do
+    # Shrink the linger so this test actually proves the pid-guard end-to-end: with the default
+    # 120s linger, a broken guard (loser's terminate wrongly arming a linger) would still pass a
+    # short refute window on timing alone. At 50ms, a wrongly-armed linger fires well inside the
+    # ~200ms assertion window below.
+    Application.put_env(:app, :client_linger_ms, 50)
+    on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+
     {:ok, pid} = Sessions.lookup(sid)
     ref = Process.monitor(pid)
 
@@ -92,6 +99,23 @@ defmodule AppWeb.VoiceChannelTest do
     refute_receive {:DOWN, ^ref, :process, ^pid, _}, 200
     assert Process.alive?(pid)
     assert {:ok, ^pid} = Sessions.lookup(sid)
+  end
+
+  test "join monitors the bound session — if it dies, the channel stops for a fresh rejoin", %{
+    socket: socket,
+    sid: sid
+  } do
+    # The channel is linked to us; it exiting with :shutdown would otherwise take this test
+    # process down too.
+    Process.flag(:trap_exit, true)
+
+    channel_pid = socket.channel_pid
+    channel_ref = Process.monitor(channel_pid)
+
+    {:ok, conv} = Sessions.lookup(sid)
+    Process.exit(conv, :kill)
+
+    assert_receive {:DOWN, ^channel_ref, :process, ^channel_pid, _}, 500
   end
 
   test "relays speak_start to the browser", %{socket: socket} do

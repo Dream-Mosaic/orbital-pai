@@ -1460,6 +1460,22 @@ defmodule App.Conversations.ConversationTest do
       refute_receive {:to_client, {:brain_delta, _}}, 100
     end
 
+    test "set_client mid-turn snapshots the phase as busy" do
+      # Hold the brain stream open so the turn can't drain back to :listening before we rebind.
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+
+      pid = start_conv()
+      Conversation.endpoint(pid, "tell me a story")
+      # reflex audio confirms the turn is genuinely mid-flight (phase is off :listening)
+      assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+
+      new_client = spawn_client_proxy(self())
+      Conversation.set_client(pid, new_client)
+      assert_receive {:proxied, {:to_client, {:state, %{phase: "busy", locked: _}}}}
+    end
+
     test "client_disconnected from the CURRENT client stops the session after the linger" do
       Application.put_env(:app, :client_linger_ms, 80)
       on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
