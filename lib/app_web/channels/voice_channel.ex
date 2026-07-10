@@ -143,6 +143,11 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:to_client, {:tool_call, name}}, socket) do
+    push(socket, "tool_call", %{name: name})
+    {:noreply, socket}
+  end
+
   def handle_info({:to_client, {:metrics, ttfa, ttb}}, socket) do
     push(socket, "metrics", %{ttfa: ttfa, ttb: ttb})
     {:noreply, socket}

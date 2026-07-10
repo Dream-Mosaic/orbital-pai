@@ -436,6 +436,17 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:info, {:brain_text, _delta}, _s, data), do: {:keep_state, data}
 
+  # Live tool-call chip: mirror the audio tool-bridge filler with a visual "⚙ checking your
+  # calendar…" line as each tool call is announced. Only while a turn is live — a stale call
+  # from an abandoned/barged turn (phase back to :listening) is dropped, same as brain_text.
+  def handle_event(:info, {:brain_tool_call, name}, _s, %{policy: %{phase: phase}} = data)
+      when phase != :listening do
+    send(data.client, {:to_client, {:tool_call, name}})
+    {:keep_state, data}
+  end
+
+  def handle_event(:info, {:brain_tool_call, _name}, _s, data), do: {:keep_state, data}
+
   # The brain finished with no ANSWER text — don't go silent. Substitute a canned line ONCE
   # (guarded by brain_fallback) so the user always hears a reply and knows to retry. NOTE: we key
   # off the answer text being blank, NOT off ttb — a tool "bridge" filler ("let me check your

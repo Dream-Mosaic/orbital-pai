@@ -669,6 +669,7 @@ main:has(#voice) > header .duedot {
 .voice-divider { text-align: center; font-size: 0.7rem; opacity: 0.4; margin: 0.35rem 0; }
 .voice-metrics { font-size: 0.65rem; opacity: 0.45; }
 .kiosk .voice-metrics { display: none; }
+.voice-tool-chip { font-size: 0.75rem; font-style: italic; opacity: 0.55; }
 
 /* "you" — amber, right-aligned on the rail to the spine's left. */
 .who-you {

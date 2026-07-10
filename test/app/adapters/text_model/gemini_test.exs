@@ -85,6 +85,36 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert elapsed_us < 280_000
   end
 
+  test "each tool call in a round is announced to the owner before it executes" do
+    cfg = %App.Config{tools: [], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      if tools? and not Process.get(:sent_calls, false) do
+        Process.put(:sent_calls, true)
+        {:ok, [{"sleep_a", %{}, nil}, {"sleep_b", %{}, nil}]}
+      else
+        {:ok, []}
+      end
+    end
+
+    App.Adapters.TextModel.Gemini.run_rounds(
+      [],
+      "sys",
+      cfg,
+      "low",
+      tool_ctx,
+      self(),
+      0,
+      round_fun
+    )
+
+    # before executing a round, each call is announced to the owner
+    assert_receive {:gemini_tool_call, "sleep_a"}
+    assert_receive {:gemini_tool_call, "sleep_b"}
+    assert_receive {:gemini_done}
+  end
+
   test "tools_block includes function tools AND googleSearch when web_search is on" do
     assert [%{functionDeclarations: decls}, %{googleSearch: %{}}] =
              Gemini.tools_block(%Config{web_search: true})

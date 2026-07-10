@@ -46,6 +46,20 @@ export const Voice = {
   // strings the channel already sends (you/reflex/brain).
   LABELS: { you: "you", reflex: "reflex", brain: "Henry" },
 
+  // Friendly labels for the live tool-call chip (addToolChip) — keyed by the tool name the
+  // server announces (App.Tools registry names). Falls back to a humanized name if unlisted.
+  TOOL_LABELS: {
+    get_weather: "checking the weather",
+    get_calendar_events: "checking your calendar",
+    create_event: "adding to your calendar",
+    create_reminder: "setting a reminder",
+    list_reminders: "checking your reminders",
+    search_email: "checking your email",
+    read_email: "checking your email",
+    send_email: "sending an email",
+    recall_memory: "thinking back",
+  },
+
   mounted() {
     this.sttSampleRate = parseInt(this.el.dataset.sttSampleRate || "16000", 10)
     this.ttsSampleRate = parseInt(this.el.dataset.ttsSampleRate || "44100", 10)
@@ -166,6 +180,7 @@ export const Voice = {
       this.setOrbState("speaking")
       if (source === "brain") {
         this.clearThinking()
+        this.resolveToolChips()
         // If we streamed deltas into a live brain line, snap it to the full markdown render now;
         // otherwise (e.g. the batch-brain fallback sends no deltas) render it fresh as today.
         if (this.brainEl) {
@@ -178,6 +193,7 @@ export const Voice = {
       this.addLine(source, text)
     })
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
+    this.channel.on("tool_call", ({ name }) => this.addToolChip(name))
     // Latency HUD: one dim line per turn, updated as ttfa (reflex) then ttb (brain) land.
     this.channel.on("metrics", ({ ttfa, ttb }) => this.renderMetrics(ttfa, ttb))
     // Binary channel frame: payload IS the ArrayBuffer (no JSON envelope, no base64).
@@ -196,6 +212,7 @@ export const Voice = {
       this.clearThinking()
       this.brainEl = null
       this.metricsEl = null
+      this.toolChips = []
       this.setOrbState("listening")
     })
     this.channel.on("thinking", () => {
@@ -430,6 +447,24 @@ export const Voice = {
     }
   },
 
+  // Visual twin of the audio tool-bridge filler: a live "⚙ checking your calendar…" chip per
+  // tool call, appended to the log as the brain announces it. Resolved (…→ ✓) once the brain's
+  // answer starts (first delta or speak_start), and cleared on the next :listening.
+  addToolChip(name) {
+    if (!this.logEl) return
+    const chip = document.createElement("div")
+    chip.className = "voice-tool-chip"
+    chip.textContent = `⚙ ${this.TOOL_LABELS[name] || name.replace(/_/g, " ")}…`
+    this.logEl.appendChild(chip)
+    ;(this.toolChips ||= []).push(chip)
+    this.logEl.scrollTop = this.logEl.scrollHeight
+  },
+
+  resolveToolChips() {
+    for (const chip of this.toolChips || []) chip.textContent = chip.textContent.replace(/…$/, " ✓")
+    this.toolChips = []
+  },
+
   // Live brain caption: append raw text deltas to a single brain line as Gemini generates them.
   // Plaintext only (no markdown parse) so a half-open ** or code fence can't flicker mid-stream;
   // the final speak_start swaps it to the full markdown render. The first delta replaces the
@@ -437,6 +472,7 @@ export const Voice = {
   appendBrainDelta(delta) {
     if (!this.logEl) return
     if (!this.brainEl) {
+      this.resolveToolChips()
       this.clearThinking()
       const line = document.createElement("div")
       line.className = "voice-line who-brain"

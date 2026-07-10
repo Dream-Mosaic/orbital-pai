@@ -95,6 +95,9 @@ defmodule App.Adapters.TextModel.Gemini do
         end
 
       {:ok, calls} ->
+        # announce each call so the UI can show a live "checking your calendar…" chip
+        Enum.each(calls, fn {name, _args, _sig} -> send(target, {:gemini_tool_call, name}) end)
+
         if phrase = bridge_phrase(calls, cfg), do: send(target, {:gemini_bridge, phrase})
 
         # Gemini can emit several calls in one round (parallel function calling) — run them

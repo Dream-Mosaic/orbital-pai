@@ -123,6 +123,13 @@ defmodule App.Conversations.BrainStream do
     {:noreply, send_text(state, text, true)}
   end
 
+  # Relay each tool-call announcement so the owner (Conversation) can surface a live
+  # "checking your calendar…" chip in the transcript, mirroring the audio bridge filler.
+  def handle_info({:gemini_tool_call, name}, state) do
+    send(state.owner, {:brain_tool_call, name})
+    {:noreply, state}
+  end
+
   def handle_info({:gemini_done}, %{ready: false} = state),
     do: {:noreply, %{state | gemini_done: true}}
 

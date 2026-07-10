@@ -609,6 +609,27 @@ defmodule App.Conversations.ConversationTest do
     refute_receive {:to_client, {:brain_delta, _}}, 200
   end
 
+  test "relays a live tool call to the client mid-turn" do
+    # keep the brain stream open so the turn is still live when we send the tool call
+    Application.put_env(:app, :fake_brain_done_ms, 5_000)
+    on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+    stub(App.TextModelMock, :generate, fn _t, _c, _opts -> {:ok, "huh"} end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+    assert_receive {:to_client, {:audio, :brain, _}}, 1000
+
+    send(pid, {:brain_tool_call, "get_weather"})
+    assert_receive {:to_client, {:tool_call, "get_weather"}}, 500
+  end
+
+  test "a stale brain_tool_call (idle / abandoned turn) is dropped" do
+    pid = start_conv()
+    # no turn in flight -> phase :listening -> the tool call must not reach the client
+    send(pid, {:brain_tool_call, "get_weather"})
+    refute_receive {:to_client, {:tool_call, _}}, 200
+  end
+
   test "barge-in stops playback and kills the brain stream" do
     # keep the brain stream open so we can barge in mid-stream
     Application.put_env(:app, :fake_brain_done_ms, 5_000)
