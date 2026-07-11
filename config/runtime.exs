@@ -138,3 +138,10 @@ end
 if System.get_env("KIOSK_USER_SWITCH") in ~w(true 1) do
   config :app, :kiosk_user_switch, true
 end
+
+# Vision ("Henry, look at this"): ON by default. Set VISION=false or VISION=0 to disable the
+# webcam capture path entirely (the server never asks the browser for a frame). Anything else
+# (or unset) leaves it on — it's still gated by the explicit look-phrase + camera permission.
+if System.get_env("VISION") in ~w(false 0) do
+  config :app, :vision, false
+end

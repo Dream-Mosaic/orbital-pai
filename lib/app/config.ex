@@ -101,12 +101,21 @@ defmodule App.Config do
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
             weather_home: {38.52, -89.98, "Belleville, IL"},
             # Trusted-wall user switching; enable only on the household kiosk deployment.
-            kiosk_user_switch: false
+            kiosk_user_switch: false,
+            # Vision ("look at this"): grab a single webcam frame on an explicit spoken cue and
+            # send it to the multimodal brain. ON by default (further gated by camera permission +
+            # the explicit phrase); env-backed so `VISION=false`/`0` disables it without recompiling.
+            vision: true
 
   @type t :: %__MODULE__{}
 
   @spec default() :: t()
-  def default, do: %__MODULE__{timezone: timezone(), kiosk_user_switch: kiosk_user_switch?()}
+  def default,
+    do: %__MODULE__{
+      timezone: timezone(),
+      kiosk_user_switch: kiosk_user_switch?(),
+      vision: vision?()
+    }
 
   @doc """
   The instance timezone — one IANA zone for the whole instance, from the `TIMEZONE` env (wired to
@@ -129,4 +138,9 @@ defmodule App.Config do
   # `Application.put_env(:app, :kiosk_user_switch, true)` without recompiling; struct default stays
   # false either way.
   defp kiosk_user_switch?, do: Application.get_env(:app, :kiosk_user_switch, false)
+
+  # Env-backed (default ON). `VISION=false`/`0` flips it off in config/runtime.exs without a
+  # recompile; anything else (or unset) leaves it on. Nothing happens without ALSO the explicit
+  # look-phrase and browser camera permission, so on-by-default is safe.
+  defp vision?, do: Application.get_env(:app, :vision, true)
 end
