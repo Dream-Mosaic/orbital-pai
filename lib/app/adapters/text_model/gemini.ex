@@ -406,7 +406,7 @@ defmodule App.Adapters.TextModel.Gemini do
   # structural in App.HomeAssistant.Entities.service_for/3 (no lock/alarm/garage mapping).
   def home_block(%App.Config{tools: tools}) do
     if App.Tools.HomeAssistant in tools do
-      ~s| You can also see and control the smart home: home_state reads any device or sensor (use it first to find the exact entity_id), home_control acts — lights, switches, scenes, scripts, media players, thermostats, and blinds (on/off/toggle, brightness, temperature, volume, play/pause). Locks, the alarm, and the garage door are VIEW-ONLY: report their state freely, but you cannot operate them — if asked to, say you're not set up for that, briefly.|
+      ~s| You can also see and control the smart home. It's large — don't ask for everything at once. Use home_index to learn the rooms and device types, home_find to search — pass the room (area) AND device type (domain) on the FIRST call whenever you know them (e.g. area:"Kitchen", domain:"light"), so one search pins it — then home_control to act (on/off/toggle, brightness, temperature, covers/blinds position, fan speed, volume, play/pause, scenes/scripts). If a find returns close_matches, pick the right one and act in the same turn; if it returns nothing and no close matches, ASK the user what the device is called — don't guess and don't keep searching. Locks, the alarm, and the garage door are VIEW-ONLY: report their state freely, but you cannot operate them — if asked to, say you're not set up for that, briefly.|
     else
       ""
     end

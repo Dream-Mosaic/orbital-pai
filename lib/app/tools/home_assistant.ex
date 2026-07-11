@@ -1,8 +1,9 @@
 defmodule App.Tools.HomeAssistant do
   @moduledoc """
-  Voice smart-home control (Home Assistant REST). Two brain-callable functions: `home_state`
-  (read — compacted entity states, optional query filter; how the brain discovers entity_ids)
-  and `home_control` (write — one semantic action on one entity_id). Safety is STRUCTURAL:
+  Voice smart-home control (Home Assistant REST). Three brain-callable functions: `home_index`
+  (a compact rooms/domains map to orient the brain), `home_find` (fuzzy area/domain/name search
+  returning the exact entity_ids), and `home_control` (one attribute-aware action on one
+  entity_id). Safety is STRUCTURAL:
   locks, alarm panels, and garage-class covers classify `:sensitive_read_only` and have no
   action→service mapping (App.HomeAssistant.Entities), so a control call on them returns a
   benign note — it can never act. Instance-wide (one house, both users; nothing user-scoped).
@@ -14,9 +15,6 @@ defmodule App.Tools.HomeAssistant do
 
   alias App.HomeAssistant
   alias App.HomeAssistant.Entities
-
-  # Soft cap on the no-query view so a huge install can't flood the model.
-  @entity_cap 150
 
   # Soft cap on home_find rows before the result shape switches to a summary (Task 5).
   @find_cap 20
@@ -60,41 +58,19 @@ defmodule App.Tools.HomeAssistant do
         }
       },
       %{
-        name: "home_state",
-        description:
-          "Current state of the smart-home devices (Home Assistant): lights, switches, scenes, " <>
-            "scripts, media players, thermostats, covers/blinds, sensors — plus view-only locks, " <>
-            "alarm, and garage door. Returns each entity's friendly name, entity_id, domain, " <>
-            "state, and key attributes (brightness, temperature, media, position). Use it to " <>
-            "answer questions like \"is the garage open?\" and to find the exact entity_id " <>
-            "before calling home_control.",
-        parameters: %{
-          type: "object",
-          properties: %{
-            query: %{
-              type: "string",
-              description:
-                "Optional filter: a name, room, or domain substring (e.g. \"kitchen\", " <>
-                  "\"light\", \"thermostat\"). Omit to list everything."
-            }
-          },
-          required: []
-        }
-      },
-      %{
         name: "home_control",
         description:
-          "Act on ONE smart-home device by entity_id (find it with home_state first). " <>
-            "Actions: on, off, toggle, set_brightness (value 0-100), set_temperature " <>
-            "(value in °F), activate (scene/script), play, pause, next, volume_set " <>
-            "(value 0-100). Locks, alarm panels, and garage doors cannot be operated — " <>
-            "this tool is structurally unable to; report their state instead.",
+          "Act on ONE smart-home device by entity_id (find it with home_find first). Actions: " <>
+            "on, off, toggle, set_brightness (0-100), set_temperature (°F — a heat_cool " <>
+            "thermostat recentres its band), set_position (covers, 0-100), set_speed (fans, " <>
+            "0-100), volume_set (0-100), activate (scene/script), play, pause, next. Locks, " <>
+            "alarm panels, and garage doors cannot be operated — report their state instead.",
         parameters: %{
           type: "object",
           properties: %{
             entity_id: %{
               type: "string",
-              description: "The exact entity_id from home_state (e.g. \"light.kitchen\")."
+              description: "The exact entity_id from home_find (e.g. \"light.kitchen\")."
             },
             action: %{
               type: "string",
@@ -104,18 +80,19 @@ defmodule App.Tools.HomeAssistant do
                 "toggle",
                 "set_brightness",
                 "set_temperature",
+                "set_position",
+                "set_speed",
+                "volume_set",
                 "activate",
                 "play",
                 "pause",
-                "next",
-                "volume_set"
+                "next"
               ],
               description: "The semantic action to perform."
             },
             value: %{
               type: "number",
-              description:
-                "For set_brightness / volume_set: 0-100. For set_temperature: degrees F."
+              description: "brightness/position/speed/volume 0-100; set_temperature is degrees F."
             }
           },
           required: ["entity_id", "action"]
@@ -127,18 +104,9 @@ defmodule App.Tools.HomeAssistant do
   @impl true
   def cache_ttl("home_index"), do: 60_000
   def cache_ttl("home_find"), do: 10_000
-  def cache_ttl("home_state"), do: 10_000
   def cache_ttl(_), do: nil
 
   @impl true
-  # Normalize the query so "Kitchen" / " kitchen " hit the same 10s cache entry.
-  def cache_key("home_state", args) do
-    case Map.get(args, "query") do
-      q when is_binary(q) -> %{"query" => q |> String.downcase() |> String.trim()}
-      _ -> %{"query" => ""}
-    end
-  end
-
   def cache_key("home_find", args) do
     %{
       "name" => norm(Map.get(args, "name")),
@@ -151,16 +119,13 @@ defmodule App.Tools.HomeAssistant do
   def cache_key(_, args), do: args
 
   @impl true
-  def cache_invalidates("home_control"), do: ["home_state"]
+  def cache_invalidates("home_control"), do: ["home_index", "home_find"]
   def cache_invalidates(_), do: []
 
   @impl true
   def bridge("home_index"), do: ["Let me look at the house.", "One sec — checking the house."]
 
   def bridge("home_find"), do: ["Let me find that.", "One sec — looking.", "Checking the house."]
-
-  def bridge("home_state"),
-    do: ["Let me check the house.", "One sec, looking at the house.", "Checking on that now."]
 
   def bridge("home_control"), do: ["On it.", "Sure — one sec.", "Doing that now."]
   def bridge(_), do: []
@@ -186,21 +151,15 @@ defmodule App.Tools.HomeAssistant do
     end
   end
 
-  def execute("home_state", args, _ctx) do
-    case HomeAssistant.states() do
-      {:ok, raw} ->
-        {:ok, state_result(Entities.compact_states(raw, Map.get(args, "query")))}
-
-      {:error, reason} ->
-        {:ok, %{error: reach_note(reason)}}
-    end
-  end
-
   def execute("home_control", %{"entity_id" => id, "action" => action} = args, _ctx)
       when is_binary(id) and is_binary(action) do
-    case HomeAssistant.states() do
-      {:ok, raw} ->
-        control(Enum.find(raw, &(&1["entity_id"] == id)), id, action, num(Map.get(args, "value")))
+    case HomeAssistant.state(id) do
+      {:ok, entity} ->
+        control(entity, id, action, num(Map.get(args, "value")))
+
+      {:error, :not_found} ->
+        {:ok,
+         %{note: "no device with entity_id #{inspect(id)} — call home_find to find the right one"}}
 
       {:error, reason} ->
         {:ok, %{error: reach_note(reason)}}
@@ -212,37 +171,16 @@ defmodule App.Tools.HomeAssistant do
       {:ok,
        %{
          note:
-           "home_control needs an entity_id and an action — call home_state first to find the entity_id"
+           "home_control needs an entity_id and an action — call home_find first to find the entity_id"
        }}
-
-  defp state_result([]),
-    do: %{
-      entities: [],
-      note: "no matching devices — try home_state without a query to see everything"
-    }
-
-  defp state_result(entities) when length(entities) > @entity_cap do
-    %{
-      entities: Enum.take(entities, @entity_cap),
-      count: length(entities),
-      truncated: true,
-      note: "large home — showing #{@entity_cap} of #{length(entities)}; narrow with a query"
-    }
-  end
-
-  defp state_result(entities), do: %{entities: entities, count: length(entities)}
-
-  defp control(nil, id, _action, _value),
-    do:
-      {:ok,
-       %{note: "no device with entity_id #{inspect(id)} — call home_state to find the right one"}}
 
   defp control(entity, id, action, value) do
     case Entities.service_for(entity, action, value) do
       {:ok, {domain, service, data}} ->
         case HomeAssistant.call_service(domain, service, Map.put(data, :entity_id, id)) do
           {:ok, _} ->
-            {:ok, %{done: action, entity: Entities.compact(entity).name, entity_id: id}}
+            {:ok,
+             %{done: action, entity: Entities.compact(entity).name, entity_id: id, set: data}}
 
           {:error, reason} ->
             {:ok, %{error: service_note(reason, id)}}
@@ -261,15 +199,15 @@ defmodule App.Tools.HomeAssistant do
          %{
            note:
              "#{inspect(action)} isn't something I can do to a #{Entities.domain(entity)} — " <>
-               "actions: on, off, toggle, set_brightness, set_temperature, activate, play, " <>
-               "pause, next, volume_set"
+               "actions: on, off, toggle, set_brightness, set_temperature, set_position, " <>
+               "set_speed, volume_set, activate, play, pause, next"
          }}
 
       {:error, :needs_value} ->
         {:ok,
          %{
            note:
-             "#{inspect(action)} needs a numeric value (brightness/volume 0-100, temperature in °F)"
+             "#{inspect(action)} needs a numeric value (brightness/volume/position/speed 0-100, temperature in °F)"
          }}
     end
   end

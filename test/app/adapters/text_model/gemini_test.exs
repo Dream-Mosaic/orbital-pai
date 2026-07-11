@@ -374,11 +374,13 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "genuinely can't do yet"
   end
 
-  test "home_block teaches the smart home ONLY when the tool is registered" do
+  test "home_block teaches find-then-act ONLY when the tool is registered" do
     with_ha = %App.Config{tools: [App.Tools.Weather, App.Tools.HomeAssistant]}
     block = Gemini.home_block(with_ha)
-    assert block =~ "home_state"
+    assert block =~ "home_index"
+    assert block =~ "home_find"
     assert block =~ "home_control"
+    refute block =~ "home_state"
     assert block =~ ~r/view-only/i
 
     assert Gemini.home_block(%App.Config{}) == ""
