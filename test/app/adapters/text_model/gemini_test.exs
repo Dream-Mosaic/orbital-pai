@@ -350,6 +350,13 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "confirm"
   end
 
+  test "brain prompt teaches the lists tool: books vs to-do, shared-by-default, read back who" do
+    prompt = Gemini.brain_prompt("Henry")
+    assert prompt =~ "add_to_list"
+    assert prompt =~ "book"
+    assert prompt =~ ~r/shared by default/i
+  end
+
   test "brain prompt forbids Henry from acknowledging a reminder on his own (delivery != ack)" do
     prompt = Gemini.brain_prompt("Henry")
     # It must teach the ack tool...
