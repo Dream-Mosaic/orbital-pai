@@ -3,6 +3,7 @@
 // loop, but over a Phoenix channel (`voice:<session_id>`) instead of a raw WebSocket.
 import { Socket } from "phoenix"
 import { startCapture } from "./capture"
+import { captureFrame } from "./camera"
 import { Playback } from "./playback"
 import { isKioskMode } from "./kiosk"
 import { createOrb } from "./orb"
@@ -198,6 +199,7 @@ export const Voice = {
     })
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
     this.channel.on("tool_call", ({ name }) => this.addToolChip(name))
+    this.channel.on("capture_frame", ({ ref }) => this.onCaptureFrame(ref))
     // Latency HUD: one dim line per turn, updated as ttfa (reflex) then ttb (brain) land.
     this.channel.on("metrics", ({ ttfa, ttb }) => this.renderMetrics(ttfa, ttb))
     // Binary channel frame: payload IS the ArrayBuffer (no JSON envelope, no base64).
@@ -500,6 +502,39 @@ export const Voice = {
     this.toolChips = []
   },
 
+  // Server asked us to look. Grab one frame, downscale+compress it (camera.js), push it up, and
+  // pin a thumbnail to the just-shown "you" line as a receipt. On any failure send data:null so
+  // the server stops waiting immediately instead of burning the full capture timeout.
+  async onCaptureFrame(ref) {
+    if (!this.talking) {
+      this.channel.push("vision_frame", { ref, data: null })
+      return
+    }
+    try {
+      const data = await captureFrame()
+      this.channel.push("vision_frame", { ref, data })
+      this.attachShot(data)
+    } catch (err) {
+      console.warn("[vision] capture failed", err && err.name)
+      this.channel.push("vision_frame", { ref, data: null })
+    }
+  },
+
+  // Thumbnail receipt: what Henry saw, pinned under the current "you" line.
+  attachShot(base64) {
+    if (!this.lastYouLine) return
+    const img = document.createElement("img")
+    img.className = "voice-shot"
+    img.src = `data:image/jpeg;base64,${base64}`
+    img.alt = "what you showed"
+    img.style.maxWidth = "160px"
+    img.style.borderRadius = "8px"
+    img.style.display = "block"
+    img.style.marginTop = "4px"
+    this.lastYouLine.appendChild(img)
+    this.logEl.scrollTop = this.logEl.scrollHeight
+  },
+
   // Live brain caption: append raw text deltas to a single brain line as Gemini generates them.
   // Plaintext only (no markdown parse) so a half-open ** or code fence can't flicker mid-stream;
   // the final speak_start swaps it to the full markdown render. The first delta replaces the
@@ -561,6 +596,7 @@ export const Voice = {
     else body.textContent = text
     line.appendChild(label)
     line.appendChild(body)
+    if (who === "you") this.lastYouLine = line
     this.logEl.appendChild(line)
     this.logEl.scrollTop = this.logEl.scrollHeight
   },
