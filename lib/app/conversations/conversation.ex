@@ -991,9 +991,20 @@ defmodule App.Conversations.Conversation do
         {:keep_state, %{data | wake_hit: false}}
 
       {:none, false} ->
-        if ack_echo?(t, data),
-          do: {:keep_state, data},
-          else: feed({:endpoint, t}, %{data | wake_hit: false})
+        cond do
+          # Already awake: a bare "sleep"/"lock" (the name got swallowed by the wake/barge-in,
+          # and Ink often clips "sleep" to "Slee.") must still re-lock — not leak to the brain,
+          # which would grab it as a request (e.g. a Home Assistant goodnight scene).
+          WakeWord.sleep_command?(t, data.config) ->
+            Logger.info(~s|[wake] sleep (awake): "#{t}"|)
+            {:keep_state, lock_now(%{data | wake_hit: false})}
+
+          ack_echo?(t, data) ->
+            {:keep_state, data}
+
+          true ->
+            feed({:endpoint, t}, %{data | wake_hit: false})
+        end
 
       {{:wake, rest}, _} ->
         if WakeWord.sleep_command?(rest, data.config) do

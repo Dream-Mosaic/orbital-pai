@@ -391,6 +391,27 @@ defmodule App.Conversations.ConversationTest do
       refute_receive {:fake_brain_transcript, _}, 300
     end
 
+    test "an awake bare sleep (name swallowed, 'Slee.') re-locks and never reaches the brain" do
+      # Live regression: the wake/barge-in eats "Henry" and Ink clips "sleep" to "Slee.", so the
+      # endpoint arrives with NO trigger while awake. Without the awake-branch sleep check it
+      # leaked to the brain, which (now that Home Assistant exists) ran a goodnight scene.
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      # wake him first so the next utterance is handled while AWAKE (unlocked)
+      Conversation.endpoint(pid, "Henry hello")
+      assert_receive {:to_client, {:locked, false}}, 500
+      assert_receive {:fake_brain_transcript, "hello"}, 1000
+
+      # bare, name-swallowed, Ink-clipped "sleep" -> re-lock, no brain turn
+      Conversation.endpoint(pid, "Slee.")
+      assert_receive {:to_client, {:locked, true}}, 500
+      refute_receive {:fake_brain_transcript, _}, 300
+    end
+
     test "sleep at the endpoint while already locked stays locked (no unlock, no turn)" do
       Process.register(self(), :fake_brain_observer)
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)

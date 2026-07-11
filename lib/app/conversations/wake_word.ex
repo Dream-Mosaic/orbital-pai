@@ -71,15 +71,30 @@ defmodule App.Conversations.WakeWord do
   @spec sleep_command?(String.t(), App.Config.t()) :: boolean()
   def sleep_command?(rest, cfg) when is_binary(rest) do
     down = rest |> String.trim_leading() |> String.downcase()
+    bare = String.replace(down, ~r/[\s,.!?;:]+\z/u, "")
 
     Enum.any?(cfg.sleep_words, fn sw ->
       sw = String.downcase(sw)
       len = String.length(sw)
 
-      String.replace(down, ~r/[\s,.!?;:]+\z/u, "") == sw or
-        (String.starts_with?(down, sw) and not word_char?(String.at(down, len)))
+      bare == sw or
+        (String.starts_with?(down, sw) and not word_char?(String.at(down, len))) or
+        fuzzy_sleep?(bare, sw)
     end)
   end
+
+  # Ink-2 truncates/mishears the one-word command "sleep" as "slee"/"seep" — the exact/boundary
+  # match above then misses the very word it guards, and the utterance leaks to the brain. When
+  # the WHOLE utterance is a single (misheard) word, tolerate it within Levenshtein 1 of a
+  # single-word sleep word of length >= 5. The length gate keeps short words (e.g. "lock", 4)
+  # EXACT-only so "look" (the vision cue), "lick", "lack" can never lock him; the single-token
+  # gate keeps "sweep the floor" and the like from matching.
+  defp fuzzy_sleep?(bare, sw) do
+    String.length(sw) >= 5 and not String.contains?(sw, " ") and
+      single_token?(bare) and String.length(bare) >= 4 and levenshtein(bare, sw) <= 1
+  end
+
+  defp single_token?(s), do: s != "" and not String.match?(s, ~r/\s/u)
 
   # ---- name occurrences: byte ranges {start, stop} ----
 

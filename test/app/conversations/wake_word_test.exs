@@ -133,6 +133,25 @@ defmodule App.Conversations.WakeWordTest do
       assert WakeWord.sleep_command?("nap", cfg)
       refute WakeWord.sleep_command?("sleep", cfg)
     end
+
+    test "tolerates Ink truncating/mishearing the one-word 'sleep' (slee/seep)" do
+      # Ink-2 reliably clips the bare command "sleep" to "Slee." / "seep" — the very word the
+      # gate guards. A single (misheard) word within Levenshtein 1 of "sleep" still counts.
+      assert WakeWord.sleep_command?("Slee.", @cfg)
+      assert WakeWord.sleep_command?("slee", @cfg)
+      assert WakeWord.sleep_command?("seep", @cfg)
+    end
+
+    test "fuzzy sleep never fires on short lookalikes or multi-word utterances (no false locks)" do
+      # "lock" (4 chars) stays EXACT-only, so its near-misses can't lock him — critically "look"
+      # (the vision cue) must never be read as "lock".
+      refute WakeWord.sleep_command?("look", @cfg)
+      refute WakeWord.sleep_command?("lick", @cfg)
+      refute WakeWord.sleep_command?("lack", @cfg)
+
+      # single-token guard: a longer utterance that merely contains a near-miss never fuzzy-matches
+      refute WakeWord.sleep_command?("sweep the floor", @cfg)
+    end
   end
 
   describe "levenshtein/2" do
