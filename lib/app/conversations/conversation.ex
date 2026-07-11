@@ -27,10 +27,13 @@ defmodule App.Conversations.Conversation do
   @brain_blank "Sorry, I lost that one — mind asking again?"
 
   # Vision ("look at this"): how long to hold the brain waiting for the client's frame before
-  # answering text-only. 5s (not 2s) because a real capture legitimately needs getUserMedia +
-  # a camera warm-up (the first frames are black) + downscale; the reflex masks the wait.
+  # answering text-only. 8s because a real capture legitimately takes a few seconds — getUserMedia
+  # (+ a fallback getUserMedia on webviews that reject the rear-camera constraint) + a
+  # wait-for-a-real-frame warm-up (the first frames are black) + downscale. The brain starts the
+  # instant the frame arrives (NOT at the timeout), so a generous ceiling adds no latency on
+  # success — it only rescues slow-but-successful captures (live smoke: real frame landed after 2s).
   # App-env override (:vision_capture_timeout_ms) is the test hook.
-  @vision_capture_timeout_ms 5_000
+  @vision_capture_timeout_ms 8_000
   @vision_unavailable_note "\n\n(Note: the camera wasn't available just now — answer from what " <>
                              "was said and do not describe or invent an image.)"
 
