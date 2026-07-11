@@ -13,10 +13,11 @@ defmodule App.Reminders.Reminder do
     # context = a one-line note of the original commitment, used to phrase the question.
     field :kind, :string, default: "reminder"
     field :context, :string
+    field :household, :boolean, default: false
     timestamps(type: :utc_datetime)
   end
 
-  @fields [:user_id, :body, :due_at, :fired_at, :acknowledged_at, :kind, :context]
+  @fields [:user_id, :body, :due_at, :fired_at, :acknowledged_at, :kind, :context, :household]
 
   def changeset(reminder, attrs) do
     reminder
