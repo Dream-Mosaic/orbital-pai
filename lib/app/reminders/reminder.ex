@@ -14,10 +14,21 @@ defmodule App.Reminders.Reminder do
     field :kind, :string, default: "reminder"
     field :context, :string
     field :household, :boolean, default: false
+    field :delivered_at, :utc_datetime
     timestamps(type: :utc_datetime)
   end
 
-  @fields [:user_id, :body, :due_at, :fired_at, :acknowledged_at, :kind, :context, :household]
+  @fields [
+    :user_id,
+    :body,
+    :due_at,
+    :fired_at,
+    :acknowledged_at,
+    :kind,
+    :context,
+    :household,
+    :delivered_at
+  ]
 
   def changeset(reminder, attrs) do
     reminder

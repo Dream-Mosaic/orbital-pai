@@ -98,6 +98,20 @@ defmodule App.RemindersTest do
     assert Reminders.acknowledge(%Reminders.Reminder{id: nil, body: "x"}) == :ok
   end
 
+  test "mark_delivered stamps delivered_at but leaves the reminder pending (acknowledged_at null)",
+       %{d: d} do
+    {:ok, r} = Reminders.create(%{user_id: d, body: "trash", due_at: at(-10)})
+    {:ok, _} = Reminders.mark_fired(r)
+    fired = App.Repo.get!(App.Reminders.Reminder, r.id)
+
+    {:ok, delivered} = Reminders.mark_delivered(fired)
+
+    assert delivered.delivered_at != nil
+    assert delivered.acknowledged_at == nil
+    # still pending (visible in the needs-your-OK list)
+    assert Enum.any?(Reminders.list_unacknowledged(delivered.user_id), &(&1.id == delivered.id))
+  end
+
   test "create requires a user_id" do
     assert {:error, %Ecto.Changeset{} = cs} = Reminders.create(%{body: "b", due_at: at(60)})
     assert %{user_id: ["can't be blank"]} = errors_on(cs)

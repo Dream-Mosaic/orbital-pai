@@ -46,6 +46,20 @@ defmodule App.Reminders do
     end
   end
 
+  @doc "Stamp a reminder as spoken by Henry (delivered) — it stays PENDING until the human acks."
+  def mark_delivered(%Reminder{id: nil}), do: :ok
+
+  def mark_delivered(%Reminder{} = r) do
+    case r |> Reminder.changeset(%{delivered_at: now()}) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_changed(updated.user_id, updated.household)
+        {:ok, updated}
+
+      other ->
+        other
+    end
+  end
+
   def list_upcoming(user_id) do
     now = now()
 
