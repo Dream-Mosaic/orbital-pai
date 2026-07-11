@@ -18,9 +18,14 @@ export async function captureFrame() {
     video.srcObject = stream
     await video.play()
 
-    // Wait until we actually have frame dimensions (metadata) before drawing.
+    // Wait until we have frame dimensions (metadata) before drawing — but NEVER hang: race the
+    // event against a short timeout so the `finally` (which stops the camera) always runs. If
+    // dimensions are still unknown we fall back to default dims below.
     if (!video.videoWidth) {
-      await new Promise((resolve) => (video.onloadedmetadata = () => resolve()))
+      await new Promise((resolve) => {
+        video.onloadedmetadata = () => resolve()
+        setTimeout(resolve, 1500)
+      })
     }
 
     const w = video.videoWidth || 640
