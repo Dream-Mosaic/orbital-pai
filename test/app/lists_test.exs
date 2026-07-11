@@ -105,6 +105,24 @@ defmodule App.ListsTest do
       assert found.id == shared.id
       refute found.id == personal.id
     end
+
+    test "a PERSONAL owner ('my X') resolves to the personal list, not a same-named household one",
+         %{d: d} do
+      {:ok, personal} =
+        %List{}
+        |> List.changeset(%{user_id: d, name: "Groceries", household: false})
+        |> Repo.insert()
+
+      {:ok, shared} =
+        %List{}
+        |> List.changeset(%{user_id: d, name: "Groceries", household: true})
+        |> Repo.insert()
+
+      # "add to my groceries" (household: false) must NOT get hijacked by the household list.
+      found = Lists.find_or_create_list(%{user_id: d, household: false}, "Groceries")
+      assert found.id == personal.id
+      refute found.id == shared.id
+    end
   end
 
   describe "list_visible/1" do

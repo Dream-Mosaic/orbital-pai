@@ -19,13 +19,16 @@ defmodule App.Lists do
   def find_or_create_list(%{user_id: uid, household: household}, name) do
     down = String.downcase(name)
 
-    matches =
+    # Scope the lookup to the RESOLVED owner: a household owner → any household list of that name
+    # (shared); a personal owner ("my X") → that user's OWN list — so "add to my groceries" can't
+    # get hijacked by an existing household "Groceries".
+    match =
       List
-      |> where([l], l.user_id == ^uid or l.household == true)
+      |> owner_scope(uid, household)
       |> Repo.all()
-      |> Enum.filter(&(String.downcase(&1.name) == down))
+      |> Enum.find(&(String.downcase(&1.name) == down))
 
-    case Enum.find(matches, & &1.household) || Enum.at(matches, 0) do
+    case match do
       nil ->
         {:ok, list} =
           %List{}
@@ -38,6 +41,11 @@ defmodule App.Lists do
         list
     end
   end
+
+  defp owner_scope(query, _uid, true), do: where(query, [l], l.household == true)
+
+  defp owner_scope(query, uid, false),
+    do: where(query, [l], l.household == false and l.user_id == ^uid)
 
   @doc "Every list `user_id` can see (own + household), each preloaded with its items, oldest first."
   def list_visible(user_id) do
