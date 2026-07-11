@@ -382,6 +382,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert block =~ "home_control"
     refute block =~ "home_state"
     assert block =~ ~r/view-only/i
+    assert block =~ "play_music"
 
     assert Gemini.home_block(%App.Config{}) == ""
   end
