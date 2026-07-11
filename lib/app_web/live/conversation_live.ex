@@ -10,6 +10,7 @@ defmodule AppWeb.ConversationLive do
 
   alias App.Memory
   alias App.Reminders
+  alias App.Lists
   alias App.Google.Accounts, as: GoogleAccounts
   alias App.Google.Connectors
 
@@ -36,6 +37,8 @@ defmodule AppWeb.ConversationLive do
       Memory.subscribe()
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{sid}")
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
+      Phoenix.PubSub.subscribe(App.PubSub, "lists:#{sid}")
+      Phoenix.PubSub.subscribe(App.PubSub, "lists:household")
       Phoenix.PubSub.subscribe(App.PubSub, "presence:voice")
       if kiosk, do: send(self(), :refresh_ambient)
     end
@@ -66,6 +69,7 @@ defmodule AppWeb.ConversationLive do
      )
      |> load_memory()
      |> load_reminders()
+     |> load_lists()
      |> load_google_accounts()}
   end
 
@@ -131,7 +135,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders connectors settings)a
+  @valid_modals ~w(memory reminders lists connectors settings)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -166,6 +170,54 @@ defmodule AppWeb.ConversationLive do
     end
 
     {:noreply, load_reminders(socket)}
+  end
+
+  def handle_event("toggle_list_item", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    case find_list_item(socket, id) do
+      nil -> :ok
+      %{checked_at: nil} = item -> Lists.check_item(item)
+      item -> Lists.uncheck_item(item)
+    end
+
+    {:noreply, load_lists(socket)}
+  end
+
+  def handle_event("add_list_item", %{"list_id" => list_id, "text" => text}, socket) do
+    text = String.trim(text)
+    list_id = String.to_integer(list_id)
+
+    if text != "" do
+      case Enum.find(socket.assigns.lists, &(&1.id == list_id)) do
+        nil -> :ok
+        list -> Lists.add_item(list, text)
+      end
+    end
+
+    {:noreply, load_lists(socket)}
+  end
+
+  def handle_event("clear_list_checked", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    case Enum.find(socket.assigns.lists, &(&1.id == id)) do
+      nil -> :ok
+      list -> Lists.clear_checked(list)
+    end
+
+    {:noreply, load_lists(socket)}
+  end
+
+  def handle_event("delete_list", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    case Enum.find(socket.assigns.lists, &(&1.id == id)) do
+      nil -> :ok
+      list -> Lists.delete_list(list)
+    end
+
+    {:noreply, load_lists(socket)}
   end
 
   def handle_event("disconnect_connection", %{"account" => id, "connector" => connector}, socket) do
@@ -297,6 +349,10 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_reminders(socket)}
   end
 
+  def handle_info({:lists_changed}, socket) do
+    {:noreply, load_lists(socket)}
+  end
+
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
     do: {:noreply, assign(socket, present: present_list())}
 
@@ -370,6 +426,14 @@ defmodule AppWeb.ConversationLive do
       upcoming: Reminders.list_upcoming(uid),
       due: Reminders.list_unacknowledged(uid)
     )
+  end
+
+  defp load_lists(socket) do
+    assign(socket, lists: Lists.list_visible(socket.assigns.current_user.id))
+  end
+
+  defp find_list_item(socket, id) do
+    socket.assigns.lists |> Enum.flat_map(& &1.items) |> Enum.find(&(&1.id == id))
   end
 
   defp clear_live_fsm(socket) do
@@ -522,6 +586,15 @@ defmodule AppWeb.ConversationLive do
               <button
                 type="button"
                 phx-click="open_modal"
+                phx-value-modal="lists"
+                aria-label="Lists"
+                class="sbtn"
+              >
+                <.icon name="hero-clipboard-document-list" class="size-4" />
+              </button>
+              <button
+                type="button"
+                phx-click="open_modal"
                 phx-value-modal="connectors"
                 aria-label="Connectors"
                 class="sbtn"
@@ -666,6 +739,15 @@ defmodule AppWeb.ConversationLive do
           <button
             type="button"
             phx-click="open_modal"
+            phx-value-modal="lists"
+            class="nbtn"
+            title="Lists"
+          >
+            <.icon name="hero-clipboard-document-list" class="size-5" /><span class="nlabel">Lists</span>
+          </button>
+          <button
+            type="button"
+            phx-click="open_modal"
             phx-value-modal="connectors"
             class="nbtn"
             title="Connectors"
@@ -681,6 +763,8 @@ defmodule AppWeb.ConversationLive do
             <.memory_panel facts={@facts} summary={@summary} assistant_name={@assistant_name} />
           <% :reminders -> %>
             <.reminders_panel due={@due} upcoming={@upcoming} />
+          <% :lists -> %>
+            <.lists_panel lists={@lists} />
           <% :connectors -> %>
             <.connectors_panel google_accounts={@google_accounts} grant={@grant} />
           <% :settings -> %>

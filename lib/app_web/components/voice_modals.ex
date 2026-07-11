@@ -60,6 +60,7 @@ defmodule AppWeb.VoiceModals do
 
   defp modal_title(:memory), do: "Memory"
   defp modal_title(:reminders), do: "Reminders"
+  defp modal_title(:lists), do: "Lists"
   defp modal_title(:connectors), do: "Connectors"
   defp modal_title(:settings), do: "Settings"
   defp modal_title(_), do: ""
@@ -130,6 +131,74 @@ defmodule AppWeb.VoiceModals do
     local = DateTime.shift_zone!(dt, App.Config.default().timezone)
     Calendar.strftime(local, "%b %-d %-I:%M%P")
   end
+
+  @doc """
+  Lists modal contents: the user's visible lists (own + household), each with check-off items, an
+  add-item field, a clear-done button, and a delete-list button. Household lists get the shared
+  badge (reuses the reminders panel's accent-badge style).
+  """
+  attr :lists, :list, required: true
+
+  def lists_panel(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <div :for={list <- @lists} class="space-y-2 rounded-box border border-base-300 p-3">
+        <div class="flex items-center gap-2">
+          <span class="flex-1 font-semibold">{list.name}</span>
+          <span :if={list.household} class="badge badge-sm badge-accent">shared</span>
+          <button
+            :if={done_count(list) > 0}
+            class="btn btn-ghost btn-xs"
+            phx-click="clear_list_checked"
+            phx-value-id={list.id}
+          >
+            Clear done
+          </button>
+          <button
+            class="btn btn-ghost btn-xs"
+            phx-click="delete_list"
+            phx-value-id={list.id}
+            data-confirm={"Delete the #{list.name} list?"}
+            aria-label="delete list"
+          >
+            ✕
+          </button>
+        </div>
+
+        <ul class="space-y-1">
+          <li :for={item <- sorted_items(list)} class="flex items-center gap-2">
+            <input
+              type="checkbox"
+              class="checkbox checkbox-xs"
+              checked={item.checked_at != nil}
+              phx-click="toggle_list_item"
+              phx-value-id={item.id}
+            />
+            <span class={["flex-1", item.checked_at && "line-through opacity-50"]}>{item.text}</span>
+          </li>
+          <li :if={list.items == []} class="text-sm opacity-50">Nothing on it yet.</li>
+        </ul>
+
+        <form phx-submit="add_list_item" class="flex gap-2">
+          <input type="hidden" name="list_id" value={list.id} />
+          <input
+            type="text"
+            name="text"
+            value=""
+            placeholder={"Add to #{list.name}…"}
+            class="input input-bordered input-sm flex-1"
+          />
+          <button class="btn btn-sm" type="submit">Add</button>
+        </form>
+      </div>
+
+      <p :if={@lists == []} class="text-sm opacity-50">No lists yet — just ask to add something.</p>
+    </div>
+    """
+  end
+
+  defp sorted_items(list), do: Enum.sort_by(list.items, &(&1.checked_at != nil))
+  defp done_count(list), do: Enum.count(list.items, &(&1.checked_at != nil))
 
   @doc "Connectors modal contents: Google connection rows + inline grant step when @grant is set."
   attr :google_accounts, :list, required: true

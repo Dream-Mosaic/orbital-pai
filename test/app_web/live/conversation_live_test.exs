@@ -82,6 +82,7 @@ defmodule AppWeb.ConversationLiveTest do
     for {key, title} <- [
           {"memory", "Memory"},
           {"reminders", "Reminders"},
+          {"lists", "Lists"},
           {"connectors", "Connectors"},
           {"settings", "Settings"}
         ] do
@@ -156,6 +157,116 @@ defmodule AppWeb.ConversationLiveTest do
     html = lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
 
     assert html =~ "follow-up"
+  end
+
+  test "lists modal: shows the user's visible lists with items", %{conn: conn, user: user} do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "To-do"})
+      |> App.Repo.insert()
+
+    {:ok, _item} = App.Lists.add_item(list, "call the plumber")
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+
+    assert html =~ "To-do"
+    assert html =~ "call the plumber"
+  end
+
+  test "lists modal: a household list shows the shared badge", %{conn: conn, user: user} do
+    {:ok, _list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+
+    assert html =~ "shared"
+  end
+
+  test "toggling a list item checks it off, then unchecks it", %{conn: conn, user: user} do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries"})
+      |> App.Repo.insert()
+
+    {:ok, item} = App.Lists.add_item(list, "milk")
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+
+    lv |> element(~s|input[phx-click="toggle_list_item"]|) |> render_click()
+    assert App.Repo.get!(App.Lists.Item, item.id).checked_at != nil
+
+    lv |> element(~s|input[phx-click="toggle_list_item"]|) |> render_click()
+    assert App.Repo.get!(App.Lists.Item, item.id).checked_at == nil
+  end
+
+  test "adding an item via the panel form shows it without a remount", %{conn: conn, user: user} do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+
+    html =
+      lv
+      |> form(~s(form[phx-submit="add_list_item"]), %{"list_id" => list.id, "text" => "butter"})
+      |> render_submit()
+
+    assert html =~ "butter"
+  end
+
+  test "clear-checked removes done items from the panel", %{conn: conn, user: user} do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries"})
+      |> App.Repo.insert()
+
+    {:ok, item} = App.Lists.add_item(list, "milk")
+    {:ok, _} = App.Lists.check_item(item)
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    assert render(lv) =~ "milk"
+
+    lv |> element(~s|button[phx-click="clear_list_checked"]|) |> render_click()
+    refute render(lv) =~ "milk"
+  end
+
+  test "deleting a list removes it from the panel", %{conn: conn, user: user} do
+    {:ok, _list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Plants"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    assert render(lv) =~ "Plants"
+
+    lv |> element(~s|button[phx-click="delete_list"]|) |> render_click()
+    refute render(lv) =~ "Plants"
+  end
+
+  test "a household list's change from elsewhere refreshes the panel via lists:household", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
+      |> App.Repo.insert()
+
+    App.Lists.broadcast_changed(list.user_id, true)
+
+    assert render(lv) =~ "Groceries"
   end
 
   defp google_account(attrs) do
