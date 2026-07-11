@@ -272,4 +272,76 @@ defmodule App.Tools.HomeAssistantTest do
     assert Tool.cache_ttl("home_control") == nil
     assert Tool.bridge("home_control") != []
   end
+
+  # ---- home_index (v1.1) ----
+
+  # GET /api/states → entities; POST /api/template → the areas JSON string (text body).
+  defp stub_states_and_areas(entities, areas_json) do
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} -> Req.Test.json(conn, entities)
+        {"POST", "/api/template"} -> Plug.Conn.send_resp(conn, 200, areas_json)
+      end
+    end)
+  end
+
+  test "declarations include home_index (no required args)" do
+    idx = Enum.find(Tool.declarations(), &(&1.name == "home_index"))
+    assert idx
+    assert idx.parameters.required == []
+  end
+
+  test "home_index returns area + domain counts, total, and no_area" do
+    entities = [
+      %{
+        "entity_id" => "light.kitchen",
+        "state" => "on",
+        "attributes" => %{"friendly_name" => "Kitchen Light"}
+      },
+      %{
+        "entity_id" => "switch.kfan",
+        "state" => "off",
+        "attributes" => %{"friendly_name" => "Kitchen Fan"}
+      },
+      %{
+        "entity_id" => "climate.hall",
+        "state" => "heat",
+        "attributes" => %{"friendly_name" => "Hall"}
+      },
+      %{"entity_id" => "sun.sun", "state" => "above_horizon", "attributes" => %{}}
+    ]
+
+    stub_states_and_areas(entities, ~s([["light.kitchen","Kitchen"],["switch.kfan","Kitchen"]]))
+
+    assert {:ok, idx} = Tool.execute("home_index", %{}, @ctx)
+    assert idx.total == 3
+    assert idx.no_area == 1
+    assert %{name: "Kitchen", count: 2} in idx.areas
+    assert %{name: "light", count: 1} in idx.domains
+  end
+
+  test "home_index degrades to empty areas when the template call fails (no area requested)" do
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} ->
+          Req.Test.json(conn, [%{"entity_id" => "light.a", "state" => "on", "attributes" => %{}}])
+
+        {"POST", "/api/template"} ->
+          Plug.Conn.send_resp(conn, 500, "boom")
+      end
+    end)
+
+    assert {:ok, %{areas: [], no_area: 1, total: 1}} = Tool.execute("home_index", %{}, @ctx)
+  end
+
+  test "home_index flattens an unreachable hub to an error note" do
+    Req.Test.stub(HaToolStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
+    assert {:ok, %{error: err}} = Tool.execute("home_index", %{}, @ctx)
+    assert err =~ "home hub"
+  end
+
+  test "home_index caches ~60s and has a bridge" do
+    assert Tool.cache_ttl("home_index") == 60_000
+    assert Tool.bridge("home_index") != []
+  end
 end

@@ -22,6 +22,15 @@ defmodule App.Tools.HomeAssistant do
   def declarations do
     [
       %{
+        name: "home_index",
+        description:
+          "A compact map of the smart home (Home Assistant): the rooms (areas) with device " <>
+            "counts, the device types (domains) with counts, the total device count, and how " <>
+            "many devices have no room assigned. Call this to learn what rooms and device types " <>
+            "exist before searching with home_find.",
+        parameters: %{type: "object", properties: %{}, required: []}
+      },
+      %{
         name: "home_state",
         description:
           "Current state of the smart-home devices (Home Assistant): lights, switches, scenes, " <>
@@ -87,6 +96,7 @@ defmodule App.Tools.HomeAssistant do
   end
 
   @impl true
+  def cache_ttl("home_index"), do: 60_000
   def cache_ttl("home_state"), do: 10_000
   def cache_ttl(_), do: nil
 
@@ -106,6 +116,8 @@ defmodule App.Tools.HomeAssistant do
   def cache_invalidates(_), do: []
 
   @impl true
+  def bridge("home_index"), do: ["Let me look at the house.", "One sec — checking the house."]
+
   def bridge("home_state"),
     do: ["Let me check the house.", "One sec, looking at the house.", "Checking on that now."]
 
@@ -113,6 +125,13 @@ defmodule App.Tools.HomeAssistant do
   def bridge(_), do: []
 
   @impl true
+  def execute("home_index", _args, _ctx) do
+    case HomeAssistant.states() do
+      {:ok, raw} -> {:ok, Entities.index(raw, area_map_or_empty())}
+      {:error, reason} -> {:ok, %{error: reach_note(reason)}}
+    end
+  end
+
   def execute("home_state", args, _ctx) do
     case HomeAssistant.states() do
       {:ok, raw} ->
@@ -217,6 +236,14 @@ defmodule App.Tools.HomeAssistant do
     do: "the home hub didn't recognize that service for #{inspect(id)}"
 
   defp service_note(reason, _id), do: reach_note(reason)
+
+  # areas_map is best-effort for the index (no area was requested): degrade to no areas on failure.
+  defp area_map_or_empty do
+    case HomeAssistant.areas_map() do
+      {:ok, map} -> map
+      {:error, _} -> %{}
+    end
+  end
 
   defp reach_note(:not_configured), do: "the home hub isn't configured on this server"
 
