@@ -32,7 +32,8 @@ defmodule App.Reminders.Scheduler do
       case Reminders.mark_fired(r) do
         {:ok, fired} ->
           Logger.info(
-            "[reminders] firing ##{fired.id} #{inspect(fired.body)} → reminders:#{fired.user_id}"
+            "[reminders] firing ##{fired.id} #{inspect(fired.body)} " <>
+              "(household=#{fired.household}) → reminders:#{fired.user_id}"
           )
 
           Phoenix.PubSub.broadcast(
@@ -41,8 +42,17 @@ defmodule App.Reminders.Scheduler do
             {:reminder_due, fired}
           )
 
-          # spoken delivery rides the agenda framework; the broadcast above stays UI-only
-          App.Agenda.deliver(fired.user_id, App.Agenda.reminder_item(fired))
+          if fired.household do
+            # visual backstop: refresh EVERY member's panel (both LiveViews watch this topic)
+            Phoenix.PubSub.broadcast(App.PubSub, "reminders:household", {:reminders_changed})
+            # spoken: wall-USER-first (the user logged into the kiosk), else any active member
+            case App.Reminders.Delivery.target(AppWeb.Presence.list("presence:voice")) do
+              nil -> :ok
+              target_uid -> App.Agenda.deliver(target_uid, App.Agenda.reminder_item(fired))
+            end
+          else
+            App.Agenda.deliver(fired.user_id, App.Agenda.reminder_item(fired))
+          end
 
         {:error, reason} ->
           Logger.warning("[reminders] mark_fired failed: #{inspect(reason)}")
