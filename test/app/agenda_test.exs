@@ -16,7 +16,7 @@ defmodule App.AgendaTest do
     assert item.lead_interjected == "Oh, before I forget —"
     assert item.prompt =~ ~s|A reminder you set earlier just came due: "check the weather"|
     assert item.prompt =~ "If it's not something you can do, just remind me of it, briefly."
-    assert item.ack == {App.Reminders, :acknowledge, [r]}
+    assert item.ack == {App.Reminders, :mark_delivered, [r]}
     assert item.expires_at == nil
   end
 
@@ -42,7 +42,7 @@ defmodule App.AgendaTest do
 
     assert item.prompt =~ ~s|Context: "I'm emailing Bob about the contract"|
     assert item.prompt =~ "Ask the user about it naturally and briefly"
-    assert item.ack == {App.Reminders, :acknowledge, [r]}
+    assert item.ack == {App.Reminders, :mark_delivered, [r]}
   end
 
   test "followup without context omits the context sentence" do
@@ -77,6 +77,27 @@ defmodule App.AgendaTest do
       })
 
     assert item.prompt =~ "you set earlier"
+  end
+
+  test "a fired reminder's ack MFA marks it DELIVERED (not acknowledged) and asks for confirmation" do
+    item = Agenda.reminder_item(%Reminder{body: "trash", due_at: ~U[2030-01-01 00:00:00Z]})
+
+    assert item.ack ==
+             {App.Reminders, :mark_delivered,
+              [%Reminder{body: "trash", due_at: ~U[2030-01-01 00:00:00Z]}]}
+
+    assert item.prompt =~ "let me know" or item.prompt =~ "tell me"
+  end
+
+  test "a household reminder also marks delivered (not acknowledged)" do
+    item =
+      Agenda.reminder_item(%Reminder{
+        household: true,
+        body: "bins",
+        due_at: ~U[2030-01-01 00:00:00Z]
+      })
+
+    assert {App.Reminders, :mark_delivered, _} = item.ack
   end
 
   test "expired?/1" do

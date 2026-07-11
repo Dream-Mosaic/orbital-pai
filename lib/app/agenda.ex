@@ -28,7 +28,7 @@ defmodule App.Agenda do
       lead_idle: "By the way —",
       lead_interjected: "Oh — while I think of it —",
       persist_as: "(follow-up: #{r.body})",
-      ack: {App.Reminders, :acknowledge, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]}
     }
   end
 
@@ -40,10 +40,11 @@ defmodule App.Agenda do
       prompt:
         "A shared household reminder just came due: \"#{r.body}\". It's for the household, not " <>
           "necessarily whoever's listening — relay it briefly as a shared reminder. If it's " <>
-          "something you can do with your tools, do it and say what it was; otherwise just remind us.",
+          "something you can do with your tools, do it and say what it was; otherwise just remind us." <>
+          " When they've got it, a quick \"got it\" is enough.",
       lead_idle: "Heads up, for the house —",
       lead_interjected: "Oh — a shared reminder —",
-      ack: {App.Reminders, :acknowledge, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]}
     }
   end
 
@@ -54,10 +55,11 @@ defmodule App.Agenda do
       prompt:
         "A reminder you set earlier just came due: \"#{r.body}\". Carry it out now — if it's " <>
           "something you can do with your tools, do it and briefly tell me what it was and the " <>
-          "result. If it's not something you can do, just remind me of it, briefly.",
+          "result. If it's not something you can do, just remind me of it, briefly." <>
+          " Then let me know when you've got it (a quick \"got it\" is enough).",
       lead_idle: "Heads up —",
       lead_interjected: "Oh, before I forget —",
-      ack: {App.Reminders, :acknowledge, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]}
     }
   end
 
