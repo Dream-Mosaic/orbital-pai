@@ -33,6 +33,7 @@ defmodule AppWeb.Router do
     end
 
     get "/auth/google/connect", GoogleAuthController, :connect
+    post "/kiosk/switch_user", KioskController, :switch_user
   end
 
   # Other scopes may use custom stacks.

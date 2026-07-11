@@ -99,12 +99,14 @@ defmodule App.Config do
             # new items embedded per account/source per tick (drains a bounded backlog over ticks).
             source_ingest_batch: 200,
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
-            weather_home: {38.52, -89.98, "Belleville, IL"}
+            weather_home: {38.52, -89.98, "Belleville, IL"},
+            # Trusted-wall user switching; enable only on the household kiosk deployment.
+            kiosk_user_switch: false
 
   @type t :: %__MODULE__{}
 
   @spec default() :: t()
-  def default, do: %__MODULE__{timezone: timezone()}
+  def default, do: %__MODULE__{timezone: timezone(), kiosk_user_switch: kiosk_user_switch?()}
 
   @doc """
   The instance timezone — one IANA zone for the whole instance, from the `TIMEZONE` env (wired to
@@ -122,4 +124,9 @@ defmodule App.Config do
     do: match?({:ok, _}, DateTime.shift_zone(~U[2024-01-01 00:00:00Z], tz))
 
   defp valid_zone?(_), do: false
+
+  # Env-backed (unlike the frozen struct-literal toggles) so tests / prod config can flip it via
+  # `Application.put_env(:app, :kiosk_user_switch, true)` without recompiling; struct default stays
+  # false either way.
+  defp kiosk_user_switch?, do: Application.get_env(:app, :kiosk_user_switch, false)
 end

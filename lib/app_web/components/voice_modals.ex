@@ -251,6 +251,8 @@ defmodule AppWeb.VoiceModals do
   attr :app_version, :string, required: true
   attr :assistant_name, :string, required: true
   attr :present, :list, default: []
+  attr :kiosk, :boolean, default: false
+  attr :switchable_users, :list, default: []
 
   def settings_panel(assigns) do
     ~H"""
@@ -339,6 +341,17 @@ defmodule AppWeb.VoiceModals do
             phx-debounce="200"
             class="range range-sm w-full"
           />
+        </form>
+      </section>
+
+      <section :if={@kiosk and @switchable_users != []} class="space-y-2">
+        <h3 class="text-sm font-semibold opacity-70">Switch user</h3>
+        <form :for={u <- @switchable_users} action="/kiosk/switch_user" method="post">
+          <input type="hidden" name="_csrf_token" value={Phoenix.Controller.get_csrf_token()} />
+          <input type="hidden" name="user_id" value={u.id} />
+          <button class="btn btn-sm btn-outline w-full">
+            {u.name} <span class="opacity-60">({u.email})</span>
+          </button>
         </form>
       </section>
 

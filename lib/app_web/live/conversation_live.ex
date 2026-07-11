@@ -21,6 +21,13 @@ defmodule AppWeb.ConversationLive do
     sid = to_string(socket.assigns.current_user.id)
     kiosk = params["kiosk"] == "1"
 
+    switchable_users =
+      if kiosk and App.Config.default().kiosk_user_switch do
+        App.Users.list() |> Enum.reject(&(&1.id == socket.assigns.current_user.id))
+      else
+        []
+      end
+
     if connected?(socket) do
       Memory.subscribe()
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{sid}")
@@ -39,6 +46,7 @@ defmodule AppWeb.ConversationLive do
        user_name: socket.assigns.current_user.name,
        page_title: App.Config.default().name,
        kiosk: kiosk,
+       switchable_users: switchable_users,
        modal_open: false,
        modal: nil,
        grant: nil,
@@ -665,6 +673,8 @@ defmodule AppWeb.ConversationLive do
               app_version={@app_version}
               assistant_name={@assistant_name}
               present={@present}
+              kiosk={@kiosk}
+              switchable_users={@switchable_users}
             />
           <% _ -> %>
         <% end %>
