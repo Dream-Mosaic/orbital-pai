@@ -102,13 +102,15 @@ function waitForDimensions(video) {
   })
 }
 
-// Prefer the rear camera, but fall back to any camera. Some webviews (notably Fully Kiosk on the
-// wall) reject the facingMode constraint outright instead of treating `ideal` as a soft preference;
-// the plain `{video: true}` retry works around that. If THAT rejects too, its error (the real
-// access/no-camera reason) propagates to the caller and is reported to the server for the log.
+// Prefer the FRONT (user-facing) camera, falling back to any camera. On the wall tablet the front
+// camera faces the room (the rear faces the wall); on a phone it's the selfie camera. Bonus: it
+// avoids the rear-camera attempt that fails on the tablet, so capture is faster. Some webviews
+// (notably Fully Kiosk) reject the facingMode constraint outright instead of treating `ideal` as a
+// soft preference; the plain `{video: true}` retry works around that. If THAT rejects too, its
+// error (the real access/no-camera reason) propagates to the caller and is logged server-side.
 async function getCameraStream() {
   try {
-    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } })
+    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" } } })
   } catch (_e) {
     return await navigator.mediaDevices.getUserMedia({ video: true })
   }

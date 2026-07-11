@@ -49,17 +49,22 @@ defmodule App.MemoryTest do
     assert Memory.get_summary(d).content == ""
   end
 
-  test "forget wipes one user's facts + summary entirely, leaving the other user", %{d: d, t: t} do
+  test "forget wipes one user's facts + summary + turns, leaving the other user", %{d: d, t: t} do
     {:ok, _} = Memory.create_fact(%{content: "d1", source: "user", user_id: d})
     {:ok, _} = Memory.create_fact(%{content: "d2", source: "auto", user_id: d})
     Memory.put_summary(d, "d summary")
+    {:ok, _} = Memory.persist_turn(%{user_id: d, user_text: "d hi", brain_text: "d yo"})
     {:ok, _} = Memory.create_fact(%{content: "t1", source: "user", user_id: t})
+    {:ok, _} = Memory.persist_turn(%{user_id: t, user_text: "t hi", brain_text: "t yo"})
 
     Memory.forget(d)
 
     assert Memory.list_facts(d) == []
     assert Memory.get_summary(d).content == ""
+    # Wipe memory is a full amnesia — the conversation goes too (was left behind before).
+    assert Memory.recent_turns(d) == []
     assert Enum.map(Memory.list_facts(t), & &1.content) == ["t1"]
+    assert Enum.map(Memory.recent_turns(t), & &1.user_text) == ["t hi"]
   end
 
   test "persist_turn + recent_turns returns chronological, bounded history for the user", %{d: d} do

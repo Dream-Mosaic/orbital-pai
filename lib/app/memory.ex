@@ -122,10 +122,15 @@ defmodule App.Memory do
     :ok
   end
 
-  @doc "Forget EVERYTHING about a user: all profile facts (auto AND user) + their summary."
+  @doc """
+  Forget EVERYTHING about a user: all profile facts (auto AND user), their summary, and their
+  conversation turns — a full amnesia (the UI "Wipe memory" button). The transcript goes too, so
+  the raw turns can't keep feeding recent-context after the wipe.
+  """
   def forget(user_id) do
     Repo.delete_all(from f in ProfileFact, where: f.user_id == ^user_id)
     Repo.delete_all(from s in Summary, where: s.user_id == ^user_id)
+    Repo.delete_all(from t in Turn, where: t.user_id == ^user_id)
     purge_vectors(user_id)
     App.Sources.Items.delete_for_user(user_id)
     broadcast_updated()

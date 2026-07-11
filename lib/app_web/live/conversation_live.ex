@@ -122,7 +122,12 @@ defmodule AppWeb.ConversationLive do
   def handle_event("forget_me", _params, socket) do
     Memory.forget(socket.assigns.current_user.id)
     clear_live_fsm(socket)
-    {:noreply, socket |> put_flash(:info, "Memory cleared.") |> load_memory()}
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Memory cleared.")
+     |> load_memory()
+     |> push_event("clear_log", %{})}
   end
 
   @valid_modals ~w(memory reminders connectors settings)a
