@@ -367,6 +367,23 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "email"
   end
 
+  test "brain prompt no longer lists smart home as a can't-do" do
+    prompt = Gemini.brain_prompt("Henry")
+    refute prompt =~ "smart home"
+    # the graceful can't-do line itself survives
+    assert prompt =~ "genuinely can't do yet"
+  end
+
+  test "home_block teaches the smart home ONLY when the tool is registered" do
+    with_ha = %App.Config{tools: [App.Tools.Weather, App.Tools.HomeAssistant]}
+    block = Gemini.home_block(with_ha)
+    assert block =~ "home_state"
+    assert block =~ "home_control"
+    assert block =~ ~r/view-only/i
+
+    assert Gemini.home_block(%App.Config{}) == ""
+  end
+
   test "memory_block leads with identity, with or without notes" do
     with_notes =
       Gemini.memory_block(%{user_name: "David", profile: "- likes drones", summary: ""})

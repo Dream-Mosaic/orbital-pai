@@ -38,4 +38,25 @@ defmodule App.ConfigTest do
       assert Config.default().vision == false
     end
   end
+
+  describe "home assistant flag" do
+    test "default/0 leaves the tool OFF when :home_assistant is unconfigured" do
+      refute Config.home_assistant?()
+      refute App.Tools.HomeAssistant in Config.default().tools
+    end
+
+    test "default/0 registers the tool when url+token are configured" do
+      Application.put_env(:app, :home_assistant, %{url: "https://ha.example.test", token: "tok"})
+      on_exit(fn -> Application.delete_env(:app, :home_assistant) end)
+
+      assert Config.home_assistant?()
+      assert App.Tools.HomeAssistant in Config.default().tools
+    end
+
+    test "an empty url or token does not count as configured (no boot crash, no tool)" do
+      Application.put_env(:app, :home_assistant, %{url: "", token: "tok"})
+      on_exit(fn -> Application.delete_env(:app, :home_assistant) end)
+      refute Config.home_assistant?()
+    end
+  end
 end

@@ -145,3 +145,14 @@ end
 if System.get_env("VISION") in ~w(false 0) do
   config :app, :vision, false
 end
+
+# Home Assistant (smart home): instance-wide shared hub — one public URL (Nabu Casa / tunnel) +
+# one long-lived access token for the whole household, NOT per-user. Both must be set (and
+# HOME_ASSISTANT not "false"/"0") or the config stays absent and the tool never registers —
+# Henry simply has no smart-home surface. See specs/2026-07-11-home-assistant-design.md.
+ha_url = System.get_env("HOME_ASSISTANT_URL", "")
+ha_token = System.get_env("HOME_ASSISTANT_TOKEN", "")
+
+if ha_url != "" and ha_token != "" and System.get_env("HOME_ASSISTANT") not in ~w(false 0) do
+  config :app, :home_assistant, %{url: String.trim_trailing(ha_url, "/"), token: ha_token}
+end

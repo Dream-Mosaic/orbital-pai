@@ -110,12 +110,17 @@ defmodule App.Config do
   @type t :: %__MODULE__{}
 
   @spec default() :: t()
-  def default,
-    do: %__MODULE__{
+  def default do
+    base = %__MODULE__{
       timezone: timezone(),
       kiosk_user_switch: kiosk_user_switch?(),
       vision: vision?()
     }
+
+    # Guarded registration: the smart-home tool exists for the brain ONLY when the hub is
+    # configured (URL + token). A missing token can't crash boot — the tool simply isn't there.
+    if home_assistant?(), do: %{base | tools: base.tools ++ [App.Tools.HomeAssistant]}, else: base
+  end
 
   @doc """
   The instance timezone — one IANA zone for the whole instance, from the `TIMEZONE` env (wired to
@@ -143,4 +148,23 @@ defmodule App.Config do
   # recompile; anything else (or unset) leaves it on. Nothing happens without ALSO the explicit
   # look-phrase and browser camera permission, so on-by-default is safe.
   defp vision?, do: Application.get_env(:app, :vision, true)
+
+  @doc """
+  Home Assistant configured? True iff `:app, :home_assistant` carries a non-empty url + token
+  (set in config/runtime.exs from HOME_ASSISTANT_URL / HOME_ASSISTANT_TOKEN; HOME_ASSISTANT=false
+  is the kill switch that skips the config entirely). Gates the tool registration in `default/0`,
+  so an unconfigured instance's brain never sees the tool. Instance-wide: one house, one token —
+  NOT per-user.
+  """
+  @spec home_assistant?() :: boolean()
+  def home_assistant? do
+    case Application.get_env(:app, :home_assistant) do
+      %{url: url, token: token}
+      when is_binary(url) and url != "" and is_binary(token) and token != "" ->
+        true
+
+      _ ->
+        false
+    end
+  end
 end
