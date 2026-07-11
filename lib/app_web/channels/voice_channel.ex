@@ -120,8 +120,16 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
-  def handle_in("vision_frame", %{"ref" => ref, "data" => data}, socket)
+  def handle_in("vision_frame", %{"ref" => ref, "data" => data} = payload, socket)
       when is_integer(ref) and (is_binary(data) or is_nil(data)) do
+    # A nil frame means the browser couldn't capture — log the client's reason (getUserMedia error
+    # name + camera count) so a wall-kiosk failure is diagnosable from companion.log.
+    if is_nil(data) do
+      Logger.info(
+        "[vision] client sent no frame: #{inspect(Map.get(payload, "error", "(no reason)"))}"
+      )
+    end
+
     Conversation.vision_frame(socket.assigns.conversation, ref, data)
     {:reply, :ok, socket}
   end

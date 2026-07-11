@@ -507,7 +507,7 @@ export const Voice = {
   // the server stops waiting immediately instead of burning the full capture timeout.
   async onCaptureFrame(ref) {
     if (!this.talking) {
-      this.channel.push("vision_frame", { ref, data: null })
+      this.channel.push("vision_frame", { ref, data: null, error: "not_talking" })
       return
     }
     try {
@@ -515,8 +515,19 @@ export const Voice = {
       this.channel.push("vision_frame", { ref, data })
       this.attachShot(data)
     } catch (err) {
-      console.warn("[vision] capture failed", err && err.name)
-      this.channel.push("vision_frame", { ref, data: null })
+      // Report WHY (the getUserMedia error name) + how many cameras the web layer can even see, so
+      // the server log names the cause on the wall (the kiosk console is otherwise unreachable):
+      //   NotFoundError (videoinputs=0) = no camera exposed to the webview (FKB/OS/hardware)
+      //   NotAllowedError (videoinputs=1) = a camera exists but permission is denied
+      //   NotReadableError (videoinputs=1) = camera present but in use / hardware error
+      const name = (err && err.name) || "unknown"
+      let cams = "?"
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices()
+        cams = String(devs.filter((d) => d.kind === "videoinput").length)
+      } catch (_e) {}
+      console.warn("[vision] capture failed", name, "videoinputs=", cams)
+      this.channel.push("vision_frame", { ref, data: null, error: `${name} (videoinputs=${cams})` })
     }
   },
 

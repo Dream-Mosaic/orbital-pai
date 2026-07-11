@@ -6,10 +6,7 @@ const MAX_EDGE = 768
 const JPEG_QUALITY = 0.7
 
 export async function captureFrame() {
-  // Rear camera on a phone ("look at this thing"); whatever exists on the wall. Falls back to any.
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: "environment" } },
-  })
+  const stream = await getCameraStream()
 
   try {
     const video = document.createElement("video")
@@ -43,5 +40,17 @@ export async function captureFrame() {
     return dataUrl.replace(/^data:image\/jpeg;base64,/, "")
   } finally {
     for (const t of stream.getTracks()) t.stop()
+  }
+}
+
+// Prefer the rear camera, but fall back to any camera. Some webviews (notably Fully Kiosk on the
+// wall) reject the facingMode constraint outright instead of treating `ideal` as a soft preference;
+// the plain `{video: true}` retry works around that. If THAT rejects too, its error (the real
+// access/no-camera reason) propagates to the caller and is reported to the server for the log.
+async function getCameraStream() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } })
+  } catch (_e) {
+    return await navigator.mediaDevices.getUserMedia({ video: true })
   }
 }
