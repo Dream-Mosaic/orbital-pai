@@ -82,6 +82,14 @@ defmodule AppWeb.VoiceModals do
             <span class="text-xs opacity-60 font-mono">{fmt_due(r.due_at)}</span>
             <button
               class="btn btn-ghost btn-xs"
+              phx-click="ack_reminder"
+              phx-value-id={r.id}
+              aria-label="acknowledge reminder"
+            >
+              ✓
+            </button>
+            <button
+              class="btn btn-ghost btn-xs"
               phx-click="dismiss_reminder"
               phx-value-id={r.id}
               aria-label="dismiss reminder"

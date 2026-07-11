@@ -157,6 +157,17 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_reminders(socket)}
   end
 
+  def handle_event("ack_reminder", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    case Enum.find(socket.assigns.due, &(&1.id == id)) do
+      nil -> :ok
+      reminder -> Reminders.acknowledge(reminder)
+    end
+
+    {:noreply, load_reminders(socket)}
+  end
+
   def handle_event("disconnect_connection", %{"account" => id, "connector" => connector}, socket) do
     account = account_by_id(socket, id)
     connector = parse_connector(connector, hd(Connectors.all()))

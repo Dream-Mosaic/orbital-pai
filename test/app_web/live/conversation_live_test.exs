@@ -328,6 +328,20 @@ defmodule AppWeb.ConversationLiveTest do
     refute render(lv) =~ "call mom"
   end
 
+  test "acknowledging a pending reminder from the panel clears it", %{conn: conn, user: user} do
+    {:ok, r} =
+      App.Reminders.create(%{body: "take out the trash", due_at: past(-30), user_id: user.id})
+
+    {:ok, _fired} = App.Reminders.mark_fired(r)
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
+    assert render(lv) =~ "take out the trash"
+
+    lv |> element(~s|button[phx-click="ack_reminder"]|) |> render_click()
+    refute render(lv) =~ "take out the trash"
+  end
+
   test "reminders modal: creating a reminder shows it in Upcoming without a remount", %{
     conn: conn,
     user: user
