@@ -27,8 +27,10 @@ defmodule App.Conversations.Conversation do
   @brain_blank "Sorry, I lost that one — mind asking again?"
 
   # Vision ("look at this"): how long to hold the brain waiting for the client's frame before
-  # answering text-only. App-env override (:vision_capture_timeout_ms) is the test hook.
-  @vision_capture_timeout_ms 2_000
+  # answering text-only. 5s (not 2s) because a real capture legitimately needs getUserMedia +
+  # a camera warm-up (the first frames are black) + downscale; the reflex masks the wait.
+  # App-env override (:vision_capture_timeout_ms) is the test hook.
+  @vision_capture_timeout_ms 5_000
   @vision_unavailable_note "\n\n(Note: the camera wasn't available just now — answer from what " <>
                              "was said and do not describe or invent an image.)"
 
