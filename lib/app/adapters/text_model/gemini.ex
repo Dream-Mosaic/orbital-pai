@@ -56,10 +56,11 @@ defmodule App.Adapters.TextModel.Gemini do
     cfg = Keyword.fetch!(opts, :config)
     thinking = Keyword.fetch!(opts, :thinking)
     sid = Keyword.get(opts, :session_id)
+    image = Keyword.get(opts, :image)
     tool_ctx = %{session_id: sid, user_id: App.Users.id_from_session(sid), config: cfg}
 
     system = system_for(:brain, cfg, ctx)
-    contents = build_contents(ctx, time_note(cfg) <> transcript)
+    contents = build_contents(ctx, time_note(cfg) <> transcript, image)
     run_rounds(contents, system, cfg, thinking, tool_ctx, target, 0)
   end
 
@@ -319,7 +320,9 @@ defmodule App.Adapters.TextModel.Gemini do
   # The brain gets the recent turns as real multi-turn dialogue so it has short-term
   # memory of the exchange (the rolling summary only covers older context and lags a
   # turn). The reflex/memory tiers pass `ctx = %{}`, so they get only the current line.
-  def build_contents(%{recent: recent}, transcript) when is_list(recent) do
+  def build_contents(ctx, transcript, image \\ nil)
+
+  def build_contents(%{recent: recent}, transcript, image) when is_list(recent) do
     history =
       recent
       |> Enum.filter(&(present?(&1.user_text) and present?(&1.brain_text)))
@@ -336,10 +339,20 @@ defmodule App.Adapters.TextModel.Gemini do
         ]
       end)
 
-    history ++ [%{role: "user", parts: [%{text: transcript}]}]
+    history ++ [user_message(transcript, image)]
   end
 
-  def build_contents(_ctx, transcript), do: [%{role: "user", parts: [%{text: transcript}]}]
+  def build_contents(_ctx, transcript, image), do: [user_message(transcript, image)]
+
+  # The final user message: text alone, or text + one inline JPEG (the "look at this" frame).
+  defp user_message(transcript, nil), do: %{role: "user", parts: [%{text: transcript}]}
+
+  defp user_message(transcript, image) when is_binary(image) do
+    %{
+      role: "user",
+      parts: [%{text: transcript}, %{inlineData: %{mimeType: "image/jpeg", data: image}}]
+    }
+  end
 
   defp present?(s), do: is_binary(s) and String.trim(s) != ""
 

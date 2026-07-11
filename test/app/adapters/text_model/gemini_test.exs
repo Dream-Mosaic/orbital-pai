@@ -208,6 +208,37 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert [%{text: "what did I say to plant?"}] = live.parts
   end
 
+  describe "build_contents/3 image part" do
+    test "no image -> a single text part on the final user message" do
+      [msg] = Gemini.build_contents(%{}, "what's up")
+      assert msg == %{role: "user", parts: [%{text: "what's up"}]}
+    end
+
+    test "with an image -> a text part plus an inlineData jpeg part" do
+      [msg] = Gemini.build_contents(%{}, "what is this", "BASE64DATA")
+
+      assert msg == %{
+               role: "user",
+               parts: [
+                 %{text: "what is this"},
+                 %{inlineData: %{mimeType: "image/jpeg", data: "BASE64DATA"}}
+               ]
+             }
+    end
+
+    test "with recent history, the image lands on the LAST user message only" do
+      ctx = %{recent: [%{user_text: "hi", brain_text: "hello", inserted_at: nil}]}
+      contents = Gemini.build_contents(ctx, "what is this", "IMG")
+      last = List.last(contents)
+
+      assert %{role: "user", parts: [%{text: "what is this"}, %{inlineData: %{data: "IMG"}}]} =
+               last
+
+      # history turns are untouched (no inlineData anywhere but the last message)
+      assert Enum.count(contents, &match?(%{parts: [_, %{inlineData: _}]}, &1)) == 1
+    end
+  end
+
   test "extract_calls pulls functionCall parts (with the thought_signature) out of a chunk" do
     decoded = %{
       "candidates" => [
