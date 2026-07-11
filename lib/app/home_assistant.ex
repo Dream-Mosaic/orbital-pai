@@ -15,6 +15,18 @@ defmodule App.HomeAssistant do
   service POST is safe).
   """
 
+  # ONE template that loops areas() (12) not states (553): linear, small payload, area-less
+  # entities skipped for free. Renders JSON `[["light.kitchen","Kitchen"], …]`. See areas_map/0.
+  @areas_template """
+  {% set ns = namespace(items=[]) %}
+  {%- for a in areas() -%}
+  {%- for e in area_entities(a) -%}
+  {% set ns.items = ns.items + [[e, area_name(a)]] %}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ ns.items | tojson }}
+  """
+
   @doc "True when both URL and token are configured (App.Config.home_assistant?/0 gates on this)."
   def configured?, do: match?({:ok, _}, config())
 
@@ -44,6 +56,55 @@ defmodule App.HomeAssistant do
         {:ok, %{status: s}} -> {:error, {:http, s}}
         {:error, reason} -> {:error, reason}
       end
+    end
+  end
+
+  @doc """
+  Render a Jinja template server-side: `POST /api/template` with `%{template: jinja}` →
+  `{:ok, rendered_plaintext}`. HA returns text/plain; the body stays a string. A template
+  render error surfaces as HA's `400` → `{:error, {:http, 400}}`.
+  """
+  def template(jinja) when is_binary(jinja) do
+    with {:ok, %{url: url, token: token}} <- config() do
+      case Req.post("#{url}/api/template", req_opts(token, json: %{template: jinja})) do
+        {:ok, %{status: 200, body: body}} -> {:ok, to_string(body)}
+        {:ok, %{status: 401}} -> {:error, :unauthorized}
+        {:ok, %{status: s}} -> {:error, {:http, s}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  ONE entity's live state: `GET /api/states/<entity_id>` → `{:ok, entity_map}` (carries
+  `attributes` incl. `device_class` for the garage check + the attrs `service_for` needs).
+  `home_control` uses this instead of pulling all 553 states per call. 404 → `:not_found`.
+  """
+  def state(entity_id) when is_binary(entity_id) do
+    with {:ok, %{url: url, token: token}} <- config() do
+      case Req.get("#{url}/api/states/#{entity_id}", req_opts(token, [])) do
+        {:ok, %{status: 200, body: body}} when is_map(body) -> {:ok, body}
+        {:ok, %{status: 200}} -> {:error, :bad_body}
+        {:ok, %{status: 401}} -> {:error, :unauthorized}
+        {:ok, %{status: 404}} -> {:error, :not_found}
+        {:ok, %{status: s}} -> {:error, {:http, s}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  `%{entity_id => area_name}` for every area-assigned entity, via ONE `/api/template` render
+  that loops `areas()`. This is the SOLE area source — no separate cache; the tool-level
+  caches gate its fetch frequency. Area-less entities are simply absent from the map.
+  """
+  def areas_map do
+    with {:ok, rendered} <- template(@areas_template),
+         {:ok, pairs} when is_list(pairs) <- Jason.decode(rendered) do
+      {:ok, Map.new(pairs, fn [id, area] -> {id, area} end)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :bad_body}
     end
   end
 
