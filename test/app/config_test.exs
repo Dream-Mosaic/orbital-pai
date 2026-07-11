@@ -25,6 +25,7 @@ defmodule App.ConfigTest do
     tools = Config.default().tools
     assert App.Tools.Weather in tools
     assert App.Tools.Reminders in tools
+    assert App.Tools.Lists in tools
   end
 
   describe "vision flag" do

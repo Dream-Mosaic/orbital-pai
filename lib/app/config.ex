@@ -48,6 +48,7 @@ defmodule App.Config do
             tools: [
               App.Tools.Weather,
               App.Tools.Reminders,
+              App.Tools.Lists,
               App.Tools.Calendar,
               App.Tools.Gmail,
               App.Tools.Recall
