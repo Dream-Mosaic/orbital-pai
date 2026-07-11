@@ -15,6 +15,7 @@ defmodule App.Tools.HomeAssistant do
 
   alias App.HomeAssistant
   alias App.HomeAssistant.Entities
+  alias App.HomeAssistant.Media
 
   # Soft cap on home_find rows before the result shape switches to a summary (Task 5).
   @find_cap 20
@@ -97,6 +98,45 @@ defmodule App.Tools.HomeAssistant do
           },
           required: ["entity_id", "action"]
         }
+      },
+      %{
+        name: "play_music",
+        description:
+          "Play music through the smart home (Music Assistant). Give what to play (query) and, " <>
+            "if the user names a room/speaker, the player. Infer media_type from how they " <>
+            "phrase it (an artist, a specific song/track, an album, a playlist, or a radio " <>
+            "station) — omit it if you're not sure and let Music Assistant guess. enqueue " <>
+            "defaults to \"replace\" (play now); use \"add\" to queue at the end or \"next\" to " <>
+            "play right after the current track. To pause, skip, change volume, or ask what's " <>
+            "playing, use home_control on that speaker instead.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            query: %{
+              type: "string",
+              description: "What to play — an artist, song, album, playlist, or station name."
+            },
+            player: %{
+              type: "string",
+              description:
+                "Room or speaker name to play on (e.g. \"kitchen\"). Omit if there's only one " <>
+                  "player or the user didn't say."
+            },
+            media_type: %{
+              type: "string",
+              enum: ["artist", "track", "album", "playlist", "radio"],
+              description: "What kind of thing query refers to; omit if unsure."
+            },
+            enqueue: %{
+              type: "string",
+              enum: ["replace", "add", "next"],
+              description:
+                "replace (default, play now), add (queue at the end), or next (play right " <>
+                  "after the current track)."
+            }
+          },
+          required: ["query"]
+        }
       }
     ]
   end
@@ -128,6 +168,7 @@ defmodule App.Tools.HomeAssistant do
   def bridge("home_find"), do: ["Let me find that.", "One sec — looking.", "Checking the house."]
 
   def bridge("home_control"), do: ["On it.", "Sure — one sec.", "Doing that now."]
+  def bridge("play_music"), do: ["Cueing that up.", "One sec — let's get that going.", "On it."]
   def bridge(_), do: []
 
   @impl true
@@ -174,6 +215,26 @@ defmodule App.Tools.HomeAssistant do
            "home_control needs an entity_id and an action — call home_find first to find the entity_id"
        }}
 
+  def execute("play_music", %{"query" => query} = args, _ctx)
+      when is_binary(query) and query != "" do
+    case HomeAssistant.states() do
+      {:ok, raw} ->
+        play(
+          Media.ma_players(raw),
+          query,
+          str(Map.get(args, "player")),
+          str(Map.get(args, "media_type")),
+          str(Map.get(args, "enqueue"))
+        )
+
+      {:error, reason} ->
+        {:ok, %{error: reach_note(reason)}}
+    end
+  end
+
+  def execute("play_music", _args, _ctx),
+    do: {:ok, %{note: "play_music needs a query — what you want to play"}}
+
   defp control(entity, id, action, value) do
     case Entities.service_for(entity, action, value) do
       {:ok, {domain, service, data}} ->
@@ -211,6 +272,41 @@ defmodule App.Tools.HomeAssistant do
          }}
     end
   end
+
+  defp play([], _query, _player, _media_type, _enqueue),
+    do: {:ok, %{note: "no music players are set up (Music Assistant not configured?)"}}
+
+  defp play(players, query, player_name, media_type, enqueue) do
+    case Media.resolve_player(players, player_name) do
+      {:error, :none} ->
+        {:ok,
+         %{
+           note: "I don't see a speaker called #{player_name} — I have: #{player_names(players)}"
+         }}
+
+      {:error, :ambiguous} ->
+        {:ok,
+         %{
+           note: "which room? I can play on: #{player_names(players)}",
+           players: Enum.map(players, & &1.name)
+         }}
+
+      {:ok, p} ->
+        data =
+          Media.play_media_data(query, media_type, enqueue) |> Map.put(:entity_id, p.entity_id)
+
+        case HomeAssistant.call_service("music_assistant", "play_media", data) do
+          {:ok, _} ->
+            {:ok, %{playing: query, player: p.name, enqueue: data.enqueue}}
+
+          {:error, reason} ->
+            {:ok,
+             %{error: "couldn't play that — the music service had trouble (#{inspect(reason)})"}}
+        end
+    end
+  end
+
+  defp player_names(players), do: players |> Enum.map(& &1.name) |> Enum.join(", ")
 
   # Gemini occasionally sends numbers as strings — coerce, never crash.
   defp num(v) when is_number(v), do: v

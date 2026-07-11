@@ -452,4 +452,185 @@ defmodule App.Tools.HomeAssistantTest do
     assert Tool.cache_ttl("home_control") == nil
     assert Tool.bridge("home_control") != []
   end
+
+  # ---- play_music (v1.2) ----
+
+  @ma_players [
+    %{
+      "entity_id" => "media_player.sonos_kitchen",
+      "state" => "idle",
+      "attributes" => %{"friendly_name" => "Sonos Kitchen", "active_queue" => "q1"}
+    },
+    %{
+      "entity_id" => "media_player.sonos_basement",
+      "state" => "idle",
+      "attributes" => %{"friendly_name" => "Sonos Basement", "active_queue" => "q2"}
+    },
+    # native Sonos entity (no active_queue) — must never be targeted
+    %{
+      "entity_id" => "media_player.office",
+      "state" => "idle",
+      "attributes" => %{"friendly_name" => "Office"}
+    }
+  ]
+
+  defp stub_states_and_service(entities) do
+    parent = self()
+
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} ->
+          Req.Test.json(conn, entities)
+
+        {"POST", "/api/services/music_assistant/play_media"} ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:play_media_called, Jason.decode!(body)})
+          Req.Test.json(conn, [])
+      end
+    end)
+  end
+
+  test "declarations include play_music (query required; player/media_type/enqueue optional)" do
+    pm = Enum.find(Tool.declarations(), &(&1.name == "play_music"))
+    assert pm
+    assert pm.parameters.required == ["query"]
+
+    for k <- [:query, :player, :media_type, :enqueue] do
+      assert Map.has_key?(pm.parameters.properties, k), "play_music should accept #{k}"
+    end
+
+    assert "artist" in pm.parameters.properties.media_type.enum
+    assert "replace" in pm.parameters.properties.enqueue.enum
+  end
+
+  test "play_music posts entity_id + media_id + media_type + enqueue to music_assistant/play_media" do
+    stub_states_and_service(@ma_players)
+
+    assert {:ok, %{playing: "The Beatles", player: "Sonos Kitchen", enqueue: "replace"}} =
+             Tool.execute(
+               "play_music",
+               %{"query" => "The Beatles", "player" => "kitchen", "media_type" => "artist"},
+               @ctx
+             )
+
+    assert_received {:play_media_called,
+                     %{
+                       "entity_id" => "media_player.sonos_kitchen",
+                       "media_id" => "The Beatles",
+                       "media_type" => "artist",
+                       "enqueue" => "replace"
+                     }}
+  end
+
+  test "media_type omitted from the request body when not given; enqueue passed through" do
+    stub_states_and_service(@ma_players)
+
+    assert {:ok, %{enqueue: "add"}} =
+             Tool.execute(
+               "play_music",
+               %{"query" => "Discover Weekly", "player" => "basement", "enqueue" => "add"},
+               @ctx
+             )
+
+    assert_received {:play_media_called, body}
+    refute Map.has_key?(body, "media_type")
+    assert body["enqueue"] == "add"
+  end
+
+  test "no player name + a single MA player → plays there without asking" do
+    stub_states_and_service([hd(@ma_players)])
+
+    assert {:ok, %{player: "Sonos Kitchen"}} =
+             Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+
+    assert_received {:play_media_called, %{"entity_id" => "media_player.sonos_kitchen"}}
+  end
+
+  test "no player name + multiple MA players → asks which room, no service call" do
+    stub_states_and_service(@ma_players)
+
+    assert {:ok, %{note: note}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+    assert note =~ "which room"
+    refute_received {:play_media_called, _}
+  end
+
+  test "player name with no match → a note listing the real players, no service call" do
+    stub_states_and_service(@ma_players)
+
+    assert {:ok, %{note: note}} =
+             Tool.execute(
+               "play_music",
+               %{"query" => "jazz", "player" => "garage"},
+               @ctx
+             )
+
+    assert note =~ "garage"
+    assert note =~ "Sonos Kitchen"
+    refute_received {:play_media_called, _}
+  end
+
+  test "no MA players configured → a graceful note, no service call" do
+    # a states list with zero active_queue entities (only the native, non-MA Sonos entity)
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} ->
+          Req.Test.json(conn, [
+            %{
+              "entity_id" => "media_player.office",
+              "state" => "idle",
+              "attributes" => %{"friendly_name" => "Office"}
+            }
+          ])
+
+        {"POST", "/api/services/music_assistant/play_media"} ->
+          flunk("should never call play_media with no MA players")
+      end
+    end)
+
+    assert {:ok, %{note: note}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+    assert note =~ "music players"
+  end
+
+  test "a play_media failure flattens to an error note" do
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} ->
+          Req.Test.json(conn, @ma_players)
+
+        {"POST", "/api/services/music_assistant/play_media"} ->
+          Plug.Conn.send_resp(conn, 500, "boom")
+      end
+    end)
+
+    assert {:ok, %{error: err}} =
+             Tool.execute(
+               "play_music",
+               %{"query" => "jazz", "player" => "kitchen"},
+               @ctx
+             )
+
+    assert err =~ "music service"
+  end
+
+  test "an unreachable hub flattens to an error note (no states fetched)" do
+    Req.Test.stub(HaToolStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
+    assert {:ok, %{error: err}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+    assert err =~ "home hub"
+  end
+
+  test "malformed args (no query) → a guidance note, no HTTP call" do
+    Req.Test.stub(HaToolStub, fn _conn -> flunk("play_music must not call HA with no query") end)
+
+    assert {:ok, %{note: note}} = Tool.execute("play_music", %{}, @ctx)
+    assert note =~ "query"
+
+    assert {:ok, %{note: _}} = Tool.execute("play_music", %{"query" => ""}, @ctx)
+    assert {:ok, %{note: _}} = Tool.execute("play_music", %{"query" => 42}, @ctx)
+  end
+
+  test "play_music has a bridge and no cache" do
+    assert Tool.bridge("play_music") != []
+    assert Tool.cache_ttl("play_music") == nil
+    assert Tool.cache_invalidates("play_music") == []
+  end
 end
