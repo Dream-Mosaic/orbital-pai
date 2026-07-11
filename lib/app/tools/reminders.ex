@@ -9,6 +9,8 @@ defmodule App.Tools.Reminders do
   @behaviour App.Tools.Tool
 
   alias App.Reminders
+  alias App.Reminders.Target
+  alias App.Users
 
   @impl true
   def declarations do
@@ -29,6 +31,13 @@ defmodule App.Tools.Reminders do
             due_at: %{
               type: "string",
               description: "When to fire, ISO8601 UTC (e.g. 2026-06-16T22:00:00Z)."
+            },
+            for: %{
+              type: "string",
+              description:
+                "Who the reminder is for. Omit for the current user. Use \"household\" when they " <>
+                  "say remind US / we / both / the house. Use a person's name (\"David\"/\"Tanya\") " <>
+                  "when they name someone else."
             }
           },
           required: ["body", "due_at"]
@@ -75,15 +84,30 @@ defmodule App.Tools.Reminders do
   def execute("create_reminder", _args, %{user_id: nil}),
     do: {:ok, %{note: "no user session — reminder not saved"}}
 
-  def execute("create_reminder", %{"body" => body, "due_at" => due_at}, ctx) do
+  def execute("create_reminder", %{"body" => body, "due_at" => due_at} = args, ctx) do
+    target =
+      Target.resolve(args["for"], %{
+        session_user_id: uid(ctx),
+        active_scope: Map.get(ctx, :active_scope, :personal),
+        gate_on: App.Config.default().kiosk_user_switch,
+        users: Users.list()
+      })
+
     with {:ok, dt, _offset} <- DateTime.from_iso8601(due_at),
          {:ok, r} <-
            Reminders.create(%{
-             user_id: uid(ctx),
+             user_id: target.user_id,
+             household: target.household,
              body: body,
              due_at: DateTime.truncate(dt, :second)
            }) do
-      {:ok, %{body: r.body, due_at: DateTime.to_iso8601(r.due_at)}}
+      {:ok,
+       %{
+         body: r.body,
+         due_at: DateTime.to_iso8601(r.due_at),
+         assigned_to: target.assigned,
+         household: r.household
+       }}
     else
       {:error, %Ecto.Changeset{}} -> {:error, :invalid_reminder}
       _ -> {:error, :invalid_due_at}
@@ -99,7 +123,14 @@ defmodule App.Tools.Reminders do
       ctx
       |> uid()
       |> Reminders.list_upcoming()
-      |> Enum.map(&%{body: &1.body, due_at: DateTime.to_iso8601(&1.due_at), kind: &1.kind})
+      |> Enum.map(
+        &%{
+          body: &1.body,
+          due_at: DateTime.to_iso8601(&1.due_at),
+          kind: &1.kind,
+          shared: &1.household
+        }
+      )
 
     {:ok, %{reminders: items}}
   end
