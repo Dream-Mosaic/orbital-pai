@@ -24,6 +24,7 @@ defmodule AppWeb.ConversationLive do
     if connected?(socket) do
       Memory.subscribe()
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{sid}")
+      Phoenix.PubSub.subscribe(App.PubSub, "presence:voice")
       if kiosk, do: send(self(), :refresh_ambient)
     end
 
@@ -47,7 +48,8 @@ defmodule AppWeb.ConversationLive do
        briefing_time: socket.assigns.current_user.briefing_time,
        relock_seconds: socket.assigns.current_user.relock_seconds,
        assistant_name: App.Config.default().name,
-       ambient: %{weather: nil, next_event: nil}
+       ambient: %{weather: nil, next_event: nil},
+       present: if(connected?(socket), do: present_list(), else: [])
      )
      |> load_memory()
      |> load_reminders()
@@ -266,6 +268,9 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_reminders(socket)}
   end
 
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
+    do: {:noreply, assign(socket, present: present_list())}
+
   # Self-rearming ambient refresh — only kiosk mount ever sends the first message (see mount/3), so
   # a non-kiosk LiveView never enters this clause and never fetches. `%{}` args for the calendar
   # call default its window to now→+24h (App.Tools.Calendar.time_min/time_max), which is exactly
@@ -317,6 +322,11 @@ defmodule AppWeb.ConversationLive do
     [ambient.weather, ambient.next_event, reminders]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
+  end
+
+  defp present_list do
+    AppWeb.Presence.list("presence:voice")
+    |> Enum.map(fn {_id, %{metas: [m | _]}} -> %{name: m.name, kiosk: m.kiosk} end)
   end
 
   defp load_memory(socket) do
@@ -654,6 +664,7 @@ defmodule AppWeb.ConversationLive do
               relock_seconds={@relock_seconds}
               app_version={@app_version}
               assistant_name={@assistant_name}
+              present={@present}
             />
           <% _ -> %>
         <% end %>

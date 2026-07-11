@@ -85,6 +85,19 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "history", %{turns: []}
   end
 
+  test "joining tracks presence with the kiosk flag", %{bob: bob} do
+    {:ok, _reply, _socket} = join_voice(bob, %{"kiosk" => true})
+    bob_id = to_string(bob.id)
+
+    # Presence tracking happens in handle_info({:track_presence, _}, socket), which is queued
+    # (via send/2) alongside :after_join and runs after join/3 already returned to the test —
+    # so wait for it to land instead of asserting immediately.
+    assert wait_until(fn -> Map.has_key?(AppWeb.Presence.list("presence:voice"), bob_id) end)
+
+    assert %{} = presences = AppWeb.Presence.list("presence:voice")
+    assert [%{name: _, kiosk: true, online_at: _}] = presences[bob_id][:metas]
+  end
+
   test "joining with a live session REBINDS instead of restarting it", %{sid: sid, alice: alice} do
     {:ok, pid} = Sessions.lookup(sid)
 
@@ -255,10 +268,12 @@ defmodule AppWeb.VoiceChannelTest do
 
   # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
   # for tests that need a fresh channel bound after some pre-join state (e.g. seeded turns).
-  defp join_voice(user) do
+  # `payload` defaults to the setup block's bare `%{}` join; pass %{"kiosk" => true} to join
+  # as a kiosk client.
+  defp join_voice(user, payload \\ %{}) do
     token = AppWeb.UserAuth.socket_token(user.id)
     {:ok, socket} = connect(AppWeb.UserSocket, %{"token" => token})
-    result = subscribe_and_join(socket, "voice:#{user.id}", %{})
+    result = subscribe_and_join(socket, "voice:#{user.id}", payload)
     on_exit(fn -> Sessions.stop(to_string(user.id)) end)
     result
   end

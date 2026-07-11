@@ -25,13 +25,14 @@ defmodule AppWeb.VoiceChannel do
   @history_turns 12
 
   @impl true
-  def join("voice:" <> _ignored, _payload, socket) do
+  def join("voice:" <> _ignored, payload, socket) do
     session_id = to_string(socket.assigns.user_id)
 
     case bind_session(session_id) do
       {:ok, pid} ->
         Process.monitor(pid)
         send(self(), :after_join)
+        send(self(), {:track_presence, payload["kiosk"] == true})
         {:ok, assign(socket, session_id: session_id, conversation: pid)}
 
       {:error, reason} ->
@@ -123,6 +124,21 @@ defmodule AppWeb.VoiceChannel do
   @impl true
   def handle_info(:after_join, socket) do
     push(socket, "history", %{turns: history(socket.assigns.session_id)})
+    {:noreply, socket}
+  end
+
+  # Tracked via handle_info (not inline in join/3) so join returns fast; Presence auto-untracks
+  # on channel death, so no terminate change is needed.
+  def handle_info({:track_presence, kiosk?}, socket) do
+    user = App.Users.get(socket.assigns.user_id)
+
+    {:ok, _} =
+      AppWeb.Presence.track(self(), "presence:voice", to_string(socket.assigns.user_id), %{
+        name: user && user.name,
+        kiosk: kiosk?,
+        online_at: System.system_time(:second)
+      })
+
     {:noreply, socket}
   end
 

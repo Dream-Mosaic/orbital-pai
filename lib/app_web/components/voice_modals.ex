@@ -250,6 +250,7 @@ defmodule AppWeb.VoiceModals do
   attr :relock_seconds, :integer, default: 15
   attr :app_version, :string, required: true
   attr :assistant_name, :string, required: true
+  attr :present, :list, default: []
 
   def settings_panel(assigns) do
     ~H"""
@@ -259,6 +260,14 @@ defmodule AppWeb.VoiceModals do
         <p>{@current_user.name}</p>
         <p class="text-sm opacity-60">{@current_user.email}</p>
         <.link href={~p"/logout"} method="delete" class="btn btn-sm btn-outline">Sign out</.link>
+      </section>
+
+      <section class="space-y-1">
+        <h3 class="text-sm font-semibold opacity-70">Active now</h3>
+        <p :for={p <- @present} class="text-sm">
+          {p.name} <span class="opacity-60">({if p.kiosk, do: "wall", else: "phone"})</span>
+        </p>
+        <p :if={@present == []} class="text-sm opacity-50">No one connected.</p>
       </section>
 
       <section class="space-y-2">

@@ -16,6 +16,7 @@ defmodule App.Application do
       {Ecto.Migrator, repos: Application.fetch_env!(:app, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:app, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: App.PubSub},
+      AppWeb.Presence,
       App.Tools.Cache,
       # HTTP pool for Gemini + Cartesia REST (sized for reflex+brain+tts+memory concurrency).
       # Connect timeout covers TCP+TLS AND a possible IPv6→IPv4 fallback (some hosts, e.g. the

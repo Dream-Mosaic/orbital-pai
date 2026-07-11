@@ -137,7 +137,7 @@ export const Voice = {
     })
     this.socket.connect()
     // Topic suffix is ignored server-side; the auth token determines the session.
-    this.channel = this.socket.channel(`voice:${this.sessionId}`, {})
+    this.channel = this.socket.channel(`voice:${this.sessionId}`, { kiosk: this.kiosk })
     this.channel.onError((reason) => {
       console.warn("[conn] channel error", reason)
       this.setConnStatus("connecting")
