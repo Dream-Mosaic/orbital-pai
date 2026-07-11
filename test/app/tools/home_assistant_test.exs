@@ -344,4 +344,144 @@ defmodule App.Tools.HomeAssistantTest do
     assert Tool.cache_ttl("home_index") == 60_000
     assert Tool.bridge("home_index") != []
   end
+
+  # ---- home_find (v1.1) ----
+
+  @find_home [
+    %{
+      "entity_id" => "light.kitchen_main",
+      "state" => "on",
+      "attributes" => %{"friendly_name" => "Kitchen Main Light", "brightness" => 255}
+    },
+    %{
+      "entity_id" => "light.kitchen_under",
+      "state" => "off",
+      "attributes" => %{"friendly_name" => "Under Cabinet Light"}
+    },
+    %{
+      "entity_id" => "climate.living",
+      "state" => "heat_cool",
+      "attributes" => %{
+        "friendly_name" => "Living Room Thermostat",
+        "target_temp_high" => 74,
+        "target_temp_low" => 70,
+        "current_temperature" => 72
+      }
+    },
+    %{
+      "entity_id" => "cover.garage_door",
+      "state" => "closed",
+      "attributes" => %{"friendly_name" => "Garage Door", "device_class" => "garage"}
+    },
+    %{"entity_id" => "sun.sun", "state" => "above_horizon", "attributes" => %{}}
+  ]
+
+  @find_areas ~s([["light.kitchen_main","Kitchen"],["light.kitchen_under","Kitchen"],["climate.living","Living Room"],["cover.garage_door","Garage"]])
+
+  test "declarations include home_find (all optional args)" do
+    f = Enum.find(Tool.declarations(), &(&1.name == "home_find"))
+    assert f
+    assert f.parameters.required == []
+
+    for k <- [:name, :area, :domain, :state] do
+      assert Map.has_key?(f.parameters.properties, k), "home_find should accept #{k}"
+    end
+  end
+
+  test "home_find (≤20) returns rank-ordered lean rows with area enrichment" do
+    stub_states_and_areas(@find_home, @find_areas)
+
+    assert {:ok, %{entities: rows, count: 2}} =
+             Tool.execute("home_find", %{"area" => "Kitchen", "domain" => "light"}, @ctx)
+
+    assert Enum.sort(Enum.map(rows, & &1.entity_id)) == [
+             "light.kitchen_main",
+             "light.kitchen_under"
+           ]
+
+    assert Enum.all?(rows, &(&1.area == "Kitchen"))
+  end
+
+  test "a single match carries the extended attribute set (M5)" do
+    stub_states_and_areas(@find_home, @find_areas)
+
+    assert {:ok, %{entities: [row], count: 1}} =
+             Tool.execute("home_find", %{"name" => "living room thermostat"}, @ctx)
+
+    assert row.entity_id == "climate.living"
+    assert row.target_temp_high == 74 and row.target_temp_low == 70
+    assert row.current_temperature == 72
+  end
+
+  test "C1: area given but the rooms template failed → error, ZERO rows (never the unfiltered set)" do
+    Req.Test.stub(HaToolStub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/states"} -> Req.Test.json(conn, @find_home)
+        {"POST", "/api/template"} -> Plug.Conn.send_resp(conn, 500, "boom")
+      end
+    end)
+
+    assert {:ok, result} = Tool.execute("home_find", %{"area" => "Kitchen"}, @ctx)
+    assert Map.has_key?(result, :error)
+    refute Map.has_key?(result, :entities)
+  end
+
+  test "empty result returns close_matches + an ask-the-user note (C3)" do
+    stub_states_and_areas(@find_home, @find_areas)
+
+    assert {:ok, %{entities: [], close_matches: close, note: note}} =
+             Tool.execute("home_find", %{"name" => "kitchen lamp"}, @ctx)
+
+    assert is_list(close) and close != []
+    assert note =~ "ASK"
+  end
+
+  test "over cap WITH a name → top 20 by rank + a narrow note" do
+    many =
+      for i <- 1..30 do
+        %{
+          "entity_id" => "light.l#{i}",
+          "state" => "on",
+          "attributes" => %{"friendly_name" => "Ceiling Light #{i}"}
+        }
+      end
+
+    stub_states_and_areas(many, ~s([]))
+
+    assert {:ok, %{entities: rows, count: 30, note: note}} =
+             Tool.execute("home_find", %{"name" => "light"}, @ctx)
+
+    assert length(rows) == 20
+    assert note =~ "closest"
+  end
+
+  test "over cap with NO name → area×count breakdown, NOT rows" do
+    many =
+      for i <- 1..30 do
+        %{
+          "entity_id" => "light.l#{i}",
+          "state" => "on",
+          "attributes" => %{"friendly_name" => "Light #{i}"}
+        }
+      end
+
+    pairs =
+      for i <- 1..30, do: ["light.l#{i}", if(rem(i, 2) == 0, do: "Kitchen", else: "Bedroom")]
+
+    stub_states_and_areas(many, Jason.encode!(pairs))
+
+    assert {:ok, result} = Tool.execute("home_find", %{"domain" => "light"}, @ctx)
+    assert result.count == 30
+    assert result.by_area["Kitchen"] == 15
+    assert result.by_area["Bedroom"] == 15
+    assert result.note =~ "too many"
+    refute Map.has_key?(result, :entities)
+  end
+
+  test "home_find caches ~10s keyed on the normalized arg set" do
+    assert Tool.cache_ttl("home_find") == 10_000
+
+    assert Tool.cache_key("home_find", %{"name" => " Kitchen "}) ==
+             Tool.cache_key("home_find", %{"name" => "kitchen"})
+  end
 end
