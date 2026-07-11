@@ -14,7 +14,7 @@ defmodule App.Conversations.Conversation do
   """
   @behaviour :gen_statem
 
-  alias App.Conversations.{Backchannel, Policy, WakeWord}
+  alias App.Conversations.{Backchannel, LookIntent, Policy, WakeWord}
   alias App.Agenda.Item
   alias App.Config
   require Logger
@@ -25,6 +25,12 @@ defmodule App.Conversations.Conversation do
   # Spoken when the brain finishes a turn with no text at all (e.g. it ran tools but produced an
   # empty answer). Better a short, honest line than dead air — a re-ask usually succeeds.
   @brain_blank "Sorry, I lost that one — mind asking again?"
+
+  # Vision ("look at this"): how long to hold the brain waiting for the client's frame before
+  # answering text-only. App-env override (:vision_capture_timeout_ms) is the test hook.
+  @vision_capture_timeout_ms 2_000
+  @vision_unavailable_note "\n\n(Note: the camera wasn't available just now — answer from what " <>
+                             "was said and do not describe or invent an image.)"
 
   # ---- public API ----
   def start_link(opts) do
@@ -53,6 +59,9 @@ defmodule App.Conversations.Conversation do
   def eager_end(pid, text), do: :gen_statem.cast(pid, {:stt_eager_end, text})
   def resume(pid), do: :gen_statem.cast(pid, {:stt_resume})
   def turn_start(pid), do: :gen_statem.cast(pid, {:stt_turn_start})
+
+  @doc "Deliver (or fail, with nil) the webcam frame the server requested for a vision turn."
+  def vision_frame(pid, ref, image), do: :gen_statem.cast(pid, {:vision_frame, ref, image})
 
   def set_allow_interruptions(pid, enabled),
     do: :gen_statem.cast(pid, {:set_allow_interruptions, enabled})
@@ -117,6 +126,12 @@ defmodule App.Conversations.Conversation do
       # the "look at this" frame (base64 jpeg) for the CURRENT turn, consumed by start_brain_now
       # and reset per-turn; nil = a normal (no-image) turn.
       vision_image: nil,
+      # this turn asked us to look (LookIntent matched) — set in generate_reflex, read by start_brain.
+      vision_wanted: false,
+      # while holding the brain for a frame: %{ref: integer, t: transcript} | nil.
+      vision_pending: nil,
+      # monotonically increasing capture-request id, so a stale frame can't attach to a new turn.
+      vision_seq: 0,
       # set once we've fallen back to the batch brain (so we don't loop)
       brain_fallback: false,
       # monotonic ms at which all audio sent so far will have finished playing
@@ -347,6 +362,18 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :ptt_press, _s, _data), do: :keep_state_and_data
 
+  # The client delivered (image) or failed (nil) the frame we asked for. Match the ref so a stale
+  # frame from an earlier request can't attach here; then start the brain (with the image, or
+  # text-only + a note). Cancel the capture timeout either way.
+  def handle_event(:cast, {:vision_frame, ref, image}, _s, %{vision_pending: %{ref: ref}} = data) do
+    data = %{data | vision_pending: nil, vision_wanted: false, vision_image: image}
+    data = if is_nil(image), do: note_camera_unavailable(data), else: data
+    {data, acts} = start_brain_now(data, [{{:timeout, :vision_capture}, :infinity, :cancel}])
+    {:keep_state, data, acts}
+  end
+
+  def handle_event(:cast, {:vision_frame, _ref, _image}, _s, data), do: {:keep_state, data}
+
   def handle_event(:cast, {:push_audio, pcm, from}, _s, %{client: from} = data),
     do: {:keep_state, push_to_stt(pcm, data)}
 
@@ -397,6 +424,16 @@ defmodule App.Conversations.Conversation do
   end
 
   def handle_event({:timeout, :prewarm_ttl}, :expire, _s, data), do: {:keep_state, data}
+
+  # The frame never came within the window — answer from text, honestly noting no camera.
+  def handle_event({:timeout, :vision_capture}, :expire, _s, %{vision_pending: %{}} = data) do
+    Logger.info("[vision] capture timed out — answering text-only")
+    data = %{data | vision_pending: nil, vision_wanted: false, vision_image: nil}
+    {data, acts} = start_brain_now(note_camera_unavailable(data), [])
+    {:keep_state, data, acts}
+  end
+
+  def handle_event({:timeout, :vision_capture}, :expire, _s, data), do: {:keep_state, data}
 
   def handle_event({:timeout, :relock}, :relock, _s, %{voice_activation: false} = data),
     do: {:keep_state, data}
@@ -1128,7 +1165,11 @@ defmodule App.Conversations.Conversation do
         ttb: nil,
         transcript: with_pending(data, t),
         pending_request: nil,
-        reflex_text: nil
+        reflex_text: nil,
+        # per-turn reset so a prior turn's frame can never leak into this one
+        vision_image: nil,
+        vision_pending: nil,
+        vision_wanted: vision_wanted?(t, data)
     }
 
     case {data.agenda_turn, data.speculative_reflex} do
@@ -1152,7 +1193,21 @@ defmodule App.Conversations.Conversation do
     end
   end
 
-  defp run_effect({:start_brain, _t}, {data, acts}), do: start_brain_now(data, acts)
+  defp run_effect({:start_brain, t}, {data, acts}) do
+    if vision_capture?(data) do
+      # Hold the brain and ask the client for one frame. The reflex effect already ran (it's the
+      # prior effect in the endpoint list), so it fires and masks this ~1s. Keep the pre-warm alive
+      # (do NOT cancel :prewarm_ttl here) so start_brain_now can still adopt it when the frame lands.
+      seq = data.vision_seq + 1
+      send(data.client, {:to_client, :thinking})
+      send(data.client, {:to_client, {:capture_frame, seq}})
+
+      {%{data | vision_seq: seq, vision_pending: %{ref: seq, t: t}},
+       [{{:timeout, :vision_capture}, vision_capture_timeout_ms(), :expire} | acts]}
+    else
+      start_brain_now(data, acts)
+    end
+  end
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
     send(data.client, {:to_client, {:speak_start, reflex_source(data), text}})
@@ -1202,8 +1257,15 @@ defmodule App.Conversations.Conversation do
          commit_speculative?: false,
          interrupt_pending?: false,
          reflex_ms: 0,
-         brain_ms: 0
-     }, [{{:timeout, :interrupt_pending}, :infinity, :cancel} | acts]}
+         brain_ms: 0,
+         vision_wanted: false,
+         vision_pending: nil,
+         vision_image: nil
+     },
+     [
+       {{:timeout, :interrupt_pending}, :infinity, :cancel},
+       {{:timeout, :vision_capture}, :infinity, :cancel} | acts
+     ]}
   end
 
   defp run_effect(:cancel_reflex, {data, acts}), do: {cancel_reflex_tasks(data), acts}
@@ -1224,6 +1286,12 @@ defmodule App.Conversations.Conversation do
      ]}
   end
 
+  defp vision_capture?(data),
+    do: data.vision_wanted and is_nil(data.vision_image) and is_pid(data.client)
+
+  defp vision_capture_timeout_ms,
+    do: Application.get_env(:app, :vision_capture_timeout_ms, @vision_capture_timeout_ms)
+
   defp announce_heard(t, data) do
     Logger.info("[turn] ▶ heard: #{inspect(t)}")
     send(data.client, {:to_client, {:transcript, t}})
@@ -1238,6 +1306,16 @@ defmodule App.Conversations.Conversation do
 
   defp agenda_recent_context(nil), do: true
   defp agenda_recent_context({%Item{recent_context: rc}, _mode}), do: rc
+
+  # Should THIS turn grab a webcam frame? Only a real user turn (not an agenda/reminder turn),
+  # with vision enabled, a live client to capture from, and an explicit look-phrase.
+  defp vision_wanted?(t, data) do
+    is_nil(data.agenda_turn) and data.config.vision and is_pid(data.client) and
+      LookIntent.wants_look?(t, data.config)
+  end
+
+  defp note_camera_unavailable(data),
+    do: %{data | transcript: data.transcript <> @vision_unavailable_note}
 
   # A briefing is a daily singleton: ignore a second one while one is already queued or in-flight,
   # so the scheduler broadcast and the pull-on-connect injection can't double-speak it.

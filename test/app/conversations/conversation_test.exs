@@ -1573,4 +1573,92 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:fake_brain_image, nil}, 1000
     end
   end
+
+  describe "vision capture" do
+    test "a look-phrase turn asks the client for a frame and holds the brain" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "Henry, look at this, what is it?")
+
+      assert_receive {:to_client, {:capture_frame, ref}}, 1000
+      assert is_integer(ref)
+      # brain is HELD until the frame lands — no transcript reaches the brain yet
+      refute_receive {:fake_brain_transcript, _}, 300
+    end
+
+    test "a delivered frame starts the brain with that image attached" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "look at this")
+      assert_receive {:to_client, {:capture_frame, ref}}, 1000
+
+      Conversation.vision_frame(pid, ref, "JPEGBYTES")
+
+      assert_receive {:fake_brain_transcript, "look at this"}, 1000
+      assert_receive {:fake_brain_image, "JPEGBYTES"}, 1000
+    end
+
+    test "a client failure (nil frame) starts the brain text-only, no wait for the timeout" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "look at this")
+      assert_receive {:to_client, {:capture_frame, ref}}, 1000
+
+      Conversation.vision_frame(pid, ref, nil)
+
+      # brain starts promptly (well under the 2s capture timeout) with no image + a camera note
+      assert_receive {:fake_brain_image, nil}, 500
+      assert_receive {:fake_brain_transcript, transcript}, 1000
+      assert transcript =~ "look at this"
+      assert transcript =~ "camera wasn't available"
+    end
+
+    test "no frame within the timeout -> the brain starts text-only with a note" do
+      Process.register(self(), :fake_brain_observer)
+      Application.put_env(:app, :vision_capture_timeout_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :vision_capture_timeout_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "look at this")
+      assert_receive {:to_client, {:capture_frame, _ref}}, 1000
+
+      # never deliver a frame; the timeout fires
+      assert_receive {:fake_brain_image, nil}, 1000
+      assert_receive {:fake_brain_transcript, transcript}, 1000
+      assert transcript =~ "camera wasn't available"
+    end
+
+    test "a stale frame ref (from a prior request) is ignored" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "look at this")
+      assert_receive {:to_client, {:capture_frame, ref}}, 1000
+
+      Conversation.vision_frame(pid, ref + 999, "STALE")
+
+      # the wrong ref must NOT start the brain
+      refute_receive {:fake_brain_transcript, _}, 300
+    end
+
+    test "vision disabled -> no capture request, brain starts normally" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv(%Config{vision: false})
+
+      Conversation.endpoint(pid, "look at this")
+
+      refute_receive {:to_client, {:capture_frame, _ref}}, 300
+      assert_receive {:fake_brain_transcript, "look at this"}, 1000
+      assert_receive {:fake_brain_image, nil}, 1000
+    end
+  end
 end
