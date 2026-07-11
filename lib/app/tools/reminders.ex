@@ -49,6 +49,24 @@ defmodule App.Tools.Reminders do
         parameters: %{type: "object", properties: %{}, required: []}
       },
       %{
+        name: "acknowledge_reminder",
+        description:
+          "Mark a reminder the user just confirmed (\"got it\", \"done\", \"already did it\") as " <>
+            "acknowledged, so it stops being pending and Henry stops asking. Call this whenever the " <>
+            "user confirms a reminder you delivered or asked them about.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            reminder: %{
+              type: "string",
+              description:
+                "The short task phrase of the reminder being confirmed (e.g. \"take out the trash\")."
+            }
+          },
+          required: ["reminder"]
+        }
+      },
+      %{
         name: "create_followup",
         description:
           "Create a follow-up: something to check back on later (an open loop — waiting on a " <>
@@ -134,6 +152,22 @@ defmodule App.Tools.Reminders do
 
     {:ok, %{reminders: items}}
   end
+
+  def execute("acknowledge_reminder", _args, %{user_id: nil}),
+    do: {:ok, %{note: "no user session — nothing to acknowledge"}}
+
+  def execute("acknowledge_reminder", %{"reminder" => phrase}, ctx) do
+    case Reminders.find_pending(uid(ctx), phrase) do
+      nil ->
+        {:ok, %{note: "couldn't find a pending reminder matching #{inspect(phrase)}"}}
+
+      r ->
+        Reminders.acknowledge(r)
+        {:ok, %{acknowledged: r.body}}
+    end
+  end
+
+  def execute("acknowledge_reminder", _args, _ctx), do: {:error, :missing_args}
 
   def execute("create_followup", _args, %{user_id: nil}),
     do: {:ok, %{note: "no user session — follow-up not saved"}}

@@ -238,4 +238,34 @@ defmodule App.RemindersTest do
       refute_receive {:reminders_changed}, 300
     end
   end
+
+  describe "find_pending/2" do
+    test "best-matches a spoken phrase against the user's pending reminders (own + household)", %{
+      d: d
+    } do
+      {:ok, mine} = Reminders.create(%{user_id: d, body: "take out the trash", due_at: at(-3600)})
+      {:ok, _} = Reminders.mark_fired(mine)
+
+      {:ok, shared} =
+        Reminders.create(%{
+          user_id: d,
+          body: "take out the bins",
+          due_at: at(-3600),
+          household: true
+        })
+
+      {:ok, _} = Reminders.mark_fired(shared)
+
+      assert Reminders.find_pending(d, "trash").body == "take out the trash"
+      assert Reminders.find_pending(d, "bins").body == "take out the bins"
+      assert Reminders.find_pending(d, "nonexistent thing") == nil
+    end
+
+    test "ignores already-acknowledged reminders", %{d: d} do
+      {:ok, r} = Reminders.create(%{user_id: d, body: "call mom", due_at: at(-3600)})
+      {:ok, r} = Reminders.mark_fired(r)
+      {:ok, _} = Reminders.acknowledge(r)
+      assert Reminders.find_pending(d, "call mom") == nil
+    end
+  end
 end

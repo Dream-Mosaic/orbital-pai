@@ -84,6 +84,30 @@ defmodule App.Reminders do
     |> Repo.all()
   end
 
+  @doc """
+  The user's best-matching PENDING (fired, un-acked) reminder for a spoken phrase — own OR household.
+  Matches case-insensitively when the phrase is contained in the body or vice versa; most recently
+  fired wins ties. nil when nothing matches (so the brain can say it couldn't find it).
+  """
+  def find_pending(user_id, phrase) when is_binary(phrase) do
+    p = phrase |> String.downcase() |> String.trim()
+
+    if p == "" do
+      nil
+    else
+      user_id
+      |> list_unacknowledged()
+      |> Enum.filter(fn r ->
+        b = String.downcase(r.body)
+        String.contains?(b, p) or String.contains?(p, b)
+      end)
+      |> Enum.sort_by(& &1.fired_at, {:desc, DateTime})
+      |> List.first()
+    end
+  end
+
+  def find_pending(_user_id, _phrase), do: nil
+
   @doc "Upcoming household (shared) reminders only — backs the Shared-scope view."
   def list_household_upcoming do
     now = now()

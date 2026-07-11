@@ -110,4 +110,39 @@ defmodule App.Tools.RemindersTest do
                )
     end
   end
+
+  describe "acknowledge_reminder" do
+    defp past_due,
+      do: DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+    test "acks the matching pending reminder", %{user: user} do
+      {:ok, r} =
+        App.Reminders.create(%{user_id: user.id, body: "take out the trash", due_at: past_due()})
+
+      {:ok, _} = App.Reminders.mark_fired(r)
+
+      assert {:ok, %{acknowledged: "take out the trash"}} =
+               Tool.execute("acknowledge_reminder", %{"reminder" => "trash"}, ctx(user))
+
+      assert App.Reminders.list_unacknowledged(user.id) == []
+    end
+
+    test "with no match returns a note, not an error", %{user: user} do
+      assert {:ok, %{note: note}} =
+               Tool.execute("acknowledge_reminder", %{"reminder" => "nope"}, ctx(user))
+
+      assert note =~ "couldn't find"
+    end
+
+    test "with no user session returns a note, not an error" do
+      assert {:ok, %{note: note}} =
+               Tool.execute(
+                 "acknowledge_reminder",
+                 %{"reminder" => "trash"},
+                 %{session_id: "default", user_id: nil, config: App.Config.default()}
+               )
+
+      assert note =~ "no user session"
+    end
+  end
 end
