@@ -42,6 +42,46 @@ defmodule App.Tools.HomeAssistant do
           },
           required: []
         }
+      },
+      %{
+        name: "home_control",
+        description:
+          "Act on ONE smart-home device by entity_id (find it with home_state first). " <>
+            "Actions: on, off, toggle, set_brightness (value 0-100), set_temperature " <>
+            "(value in °F), activate (scene/script), play, pause, next, volume_set " <>
+            "(value 0-100). Locks, alarm panels, and garage doors cannot be operated — " <>
+            "this tool is structurally unable to; report their state instead.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            entity_id: %{
+              type: "string",
+              description: "The exact entity_id from home_state (e.g. \"light.kitchen\")."
+            },
+            action: %{
+              type: "string",
+              enum: [
+                "on",
+                "off",
+                "toggle",
+                "set_brightness",
+                "set_temperature",
+                "activate",
+                "play",
+                "pause",
+                "next",
+                "volume_set"
+              ],
+              description: "The semantic action to perform."
+            },
+            value: %{
+              type: "number",
+              description:
+                "For set_brightness / volume_set: 0-100. For set_temperature: degrees F."
+            }
+          },
+          required: ["entity_id", "action"]
+        }
       }
     ]
   end
@@ -62,9 +102,14 @@ defmodule App.Tools.HomeAssistant do
   def cache_key(_, args), do: args
 
   @impl true
+  def cache_invalidates("home_control"), do: ["home_state"]
+  def cache_invalidates(_), do: []
+
+  @impl true
   def bridge("home_state"),
     do: ["Let me check the house.", "One sec, looking at the house.", "Checking on that now."]
 
+  def bridge("home_control"), do: ["On it.", "Sure — one sec.", "Doing that now."]
   def bridge(_), do: []
 
   @impl true
@@ -77,6 +122,25 @@ defmodule App.Tools.HomeAssistant do
         {:ok, %{error: reach_note(reason)}}
     end
   end
+
+  def execute("home_control", %{"entity_id" => id, "action" => action} = args, _ctx)
+      when is_binary(id) and is_binary(action) do
+    case HomeAssistant.states() do
+      {:ok, raw} ->
+        control(Enum.find(raw, &(&1["entity_id"] == id)), id, action, num(Map.get(args, "value")))
+
+      {:error, reason} ->
+        {:ok, %{error: reach_note(reason)}}
+    end
+  end
+
+  def execute("home_control", _args, _ctx),
+    do:
+      {:ok,
+       %{
+         note:
+           "home_control needs an entity_id and an action — call home_state first to find the entity_id"
+       }}
 
   defp state_result([]),
     do: %{
@@ -94,6 +158,65 @@ defmodule App.Tools.HomeAssistant do
   end
 
   defp state_result(entities), do: %{entities: entities, count: length(entities)}
+
+  defp control(nil, id, _action, _value),
+    do:
+      {:ok,
+       %{note: "no device with entity_id #{inspect(id)} — call home_state to find the right one"}}
+
+  defp control(entity, id, action, value) do
+    case Entities.service_for(entity, action, value) do
+      {:ok, {domain, service, data}} ->
+        case HomeAssistant.call_service(domain, service, Map.put(data, :entity_id, id)) do
+          {:ok, _} ->
+            {:ok, %{done: action, entity: Entities.compact(entity).name, entity_id: id}}
+
+          {:error, reason} ->
+            {:ok, %{error: service_note(reason, id)}}
+        end
+
+      {:error, :not_controllable} ->
+        {:ok,
+         %{
+           note:
+             "#{Entities.compact(entity).name} is view-only — I'm not set up to control locks, " <>
+               "alarms, or the garage. I can report its state."
+         }}
+
+      {:error, :unknown_action} ->
+        {:ok,
+         %{
+           note:
+             "#{inspect(action)} isn't something I can do to a #{Entities.domain(entity)} — " <>
+               "actions: on, off, toggle, set_brightness, set_temperature, activate, play, " <>
+               "pause, next, volume_set"
+         }}
+
+      {:error, :needs_value} ->
+        {:ok,
+         %{
+           note:
+             "#{inspect(action)} needs a numeric value (brightness/volume 0-100, temperature in °F)"
+         }}
+    end
+  end
+
+  # Gemini occasionally sends numbers as strings — coerce, never crash.
+  defp num(v) when is_number(v), do: v
+
+  defp num(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> f
+      :error -> nil
+    end
+  end
+
+  defp num(_), do: nil
+
+  defp service_note(:not_found, id),
+    do: "the home hub didn't recognize that service for #{inspect(id)}"
+
+  defp service_note(reason, _id), do: reach_note(reason)
 
   defp reach_note(:not_configured), do: "the home hub isn't configured on this server"
 
