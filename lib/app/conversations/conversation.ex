@@ -1228,6 +1228,7 @@ defmodule App.Conversations.Conversation do
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
     send(data.client, {:to_client, {:speak_start, reflex_source(data), text}})
+    maybe_offer_ack(data)
     {spawn_reflex_tts(text, data), acts}
   end
 
@@ -1317,6 +1318,14 @@ defmodule App.Conversations.Conversation do
   # The audio source/label for the reflex slot: an agenda turn's lead is labeled by item.kind.
   defp reflex_source(%{agenda_turn: {%Item{kind: kind}, _mode}}), do: kind
   defp reflex_source(_), do: :reflex
+
+  # When the lead being spoken belongs to a persisted reminder, tell the client its id so it can
+  # offer an inline "Ack" chip on the reminder line. nil id (unpersisted) or a non-agenda turn: no-op.
+  defp maybe_offer_ack(%{agenda_turn: {%Item{reminder_id: id}, _mode}, client: client})
+       when is_integer(id),
+       do: send(client, {:to_client, {:reminder_ack_offer, id}})
+
+  defp maybe_offer_ack(_), do: :ok
 
   defp lead_for(%Item{lead_idle: lead}, :idle), do: lead
   defp lead_for(%Item{lead_interjected: lead}, :interjected), do: lead

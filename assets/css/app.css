@@ -729,6 +729,36 @@ main:has(#voice) > header .duedot {
   color: oklch(0.75 0.12 300);
 }
 
+/* Inline "Ack" chip on a just-delivered reminder line — a small tappable pill in the reminder
+   accent (amber). Tapping it acknowledges the reminder via the LiveView ack_reminder handler. */
+.ack-chip {
+  display: inline-block;
+  margin-top: 0.45rem;
+  padding: 0.35rem 0.85rem;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.18em;
+  text-transform: lowercase;
+  color: var(--you);
+  background: color-mix(in srgb, var(--you) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--you) 45%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
+}
+.ack-chip:hover {
+  background: color-mix(in srgb, var(--you) 20%, transparent);
+}
+.ack-chip.acked {
+  color: rgba(200, 206, 220, 0.5);
+  background: transparent;
+  border-color: rgba(200, 206, 220, 0.25);
+  cursor: default;
+}
+
 /* reflex — a hollow (unlit) node on the spine; quieter than a real answer. */
 .who-reflex {
   margin-top: 0.55rem;

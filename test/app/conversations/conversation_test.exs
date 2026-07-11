@@ -903,6 +903,21 @@ defmodule App.Conversations.ConversationTest do
 
     assert_receive {:to_client, {:speak_start, :reminder, "Heads up —"}}, 1000
     assert_receive {:to_client, {:audio, :reminder, _}}, 1000
+    # no id (unpersisted) → no inline-ack offer
+    refute_receive {:to_client, {:reminder_ack_offer, _}}, 300
+  end
+
+  test "a due reminder WITH an id offers an inline ack (reminder_ack_offer carrying that id)" do
+    stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+    pid = start_conv_session()
+
+    send(
+      pid,
+      {:agenda_due, App.Agenda.reminder_item(%App.Reminders.Reminder{id: 42, body: "call mom"})}
+    )
+
+    assert_receive {:to_client, {:speak_start, :reminder, "Heads up —"}}, 1000
+    assert_receive {:to_client, {:reminder_ack_offer, 42}}, 1000
   end
 
   test "an idle reminder starts a reminder turn: canned lead, brain fulfills it, no you: line" do

@@ -28,7 +28,8 @@ defmodule App.Agenda do
       lead_idle: "By the way —",
       lead_interjected: "Oh — while I think of it —",
       persist_as: "(follow-up: #{r.body})",
-      ack: {App.Reminders, :mark_delivered, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]},
+      reminder_id: r.id
     }
   end
 
@@ -44,7 +45,8 @@ defmodule App.Agenda do
           " Then wait for a \"got it\" from someone — don't mark it done yourself.",
       lead_idle: "Heads up, for the house —",
       lead_interjected: "Oh — a shared reminder —",
-      ack: {App.Reminders, :mark_delivered, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]},
+      reminder_id: r.id
     }
   end
 
@@ -60,7 +62,8 @@ defmodule App.Agenda do
           "don't mark it done yourself.",
       lead_idle: "Heads up —",
       lead_interjected: "Oh, before I forget —",
-      ack: {App.Reminders, :mark_delivered, [r]}
+      ack: {App.Reminders, :mark_delivered, [r]},
+      reminder_id: r.id
     }
   end
 

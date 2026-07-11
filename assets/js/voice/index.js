@@ -200,6 +200,8 @@ export const Voice = {
     this.channel.on("brain_delta", ({ delta }) => this.appendBrainDelta(delta))
     this.channel.on("tool_call", ({ name }) => this.addToolChip(name))
     this.channel.on("capture_frame", ({ ref }) => this.onCaptureFrame(ref))
+    // A just-delivered reminder offers an inline "Ack" chip on its transcript line.
+    this.channel.on("reminder_ack_offer", ({ id }) => this.offerAck(id))
     // Latency HUD: one dim line per turn, updated as ttfa (reflex) then ttb (brain) land.
     this.channel.on("metrics", ({ ttfa, ttb }) => this.renderMetrics(ttfa, ttb))
     // Binary channel frame: payload IS the ArrayBuffer (no JSON envelope, no base64).
@@ -608,7 +610,29 @@ export const Voice = {
     line.appendChild(label)
     line.appendChild(body)
     if (who === "you") this.lastYouLine = line
+    // reminder + followup leads can be acknowledged; remember the line so a following
+    // reminder_ack_offer can attach its Ack chip to it.
+    if (who === "reminder" || who === "followup") this.lastAckableLine = line
     this.logEl.appendChild(line)
     this.logEl.scrollTop = this.logEl.scrollHeight
+  },
+
+  // Attach a tappable "Ack" chip to the reminder line just delivered. Clicking pushes to the
+  // LiveView's existing ack_reminder handler (id as a STRING — it does String.to_integer/1).
+  offerAck(id) {
+    const line = this.lastAckableLine
+    if (!line || line.querySelector(".ack-chip")) return
+    const chip = document.createElement("button")
+    chip.type = "button"
+    chip.className = "ack-chip"
+    chip.textContent = "Ack"
+    chip.addEventListener("click", () => {
+      if (chip.disabled) return
+      this.pushEvent("ack_reminder", { id: String(id) })
+      chip.textContent = "Acked ✓"
+      chip.classList.add("acked")
+      chip.disabled = true
+    })
+    line.appendChild(chip)
   },
 }

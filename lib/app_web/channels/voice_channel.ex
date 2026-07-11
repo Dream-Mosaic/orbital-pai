@@ -165,6 +165,12 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # A just-delivered reminder's id — the client attaches an inline "Ack" chip to its transcript line.
+  def handle_info({:to_client, {:reminder_ack_offer, id}}, socket) do
+    push(socket, "reminder_ack_offer", %{id: id})
+    {:noreply, socket}
+  end
+
   def handle_info({:to_client, {:audio, _source, pcm}}, socket) do
     # Raw PCM as a binary channel frame — no base64 (25% smaller, no client-side atob loop).
     # The client ignores the source for audio (speak_start carries the labeled text).

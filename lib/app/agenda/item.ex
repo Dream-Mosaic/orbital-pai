@@ -22,7 +22,10 @@ defmodule App.Agenda.Item do
             # drop (never speak) if delivery would happen after this moment
             expires_at: nil,
             # {m, f, a} run async when the turn starts (e.g. reminder acknowledge)
-            ack: nil
+            ack: nil,
+            # the source reminder's id, when this item delivers a persisted reminder — lets the
+            # client offer an inline "Ack" chip that acknowledges exactly this reminder. nil = no chip.
+            reminder_id: nil
 
   @type t :: %__MODULE__{}
 end

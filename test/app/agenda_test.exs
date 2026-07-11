@@ -19,6 +19,8 @@ defmodule App.AgendaTest do
     # delivery must not self-acknowledge — Henry waits for the human's "got it"
     assert item.prompt =~ "don't mark it done yourself"
     assert item.ack == {App.Reminders, :mark_delivered, [r]}
+    # carries the reminder id so the client can offer an inline Ack chip
+    assert item.reminder_id == 7
     assert item.expires_at == nil
   end
 
@@ -45,6 +47,7 @@ defmodule App.AgendaTest do
     assert item.prompt =~ ~s|Context: "I'm emailing Bob about the contract"|
     assert item.prompt =~ "Ask the user about it naturally and briefly"
     assert item.ack == {App.Reminders, :mark_delivered, [r]}
+    assert item.reminder_id == 9
   end
 
   test "followup without context omits the context sentence" do
@@ -61,6 +64,7 @@ defmodule App.AgendaTest do
   test "a household reminder speaks as shared, not as one the listener set" do
     item =
       Agenda.reminder_item(%Reminder{
+        id: 11,
         household: true,
         body: "bins",
         due_at: ~U[2030-01-01 00:00:00Z]
@@ -68,6 +72,7 @@ defmodule App.AgendaTest do
 
     assert item.prompt =~ "shared household reminder"
     refute item.prompt =~ "you set earlier"
+    assert item.reminder_id == 11
   end
 
   test "a personal reminder keeps the personal phrasing" do
