@@ -105,6 +105,8 @@ defmodule App.HomeAssistant.Entities do
       name: attrs["friendly_name"] || entity["entity_id"],
       domain: domain(entity),
       state: entity["state"],
+      target_temp_high: attrs["target_temp_high"],
+      target_temp_low: attrs["target_temp_low"],
       device_class: attrs["device_class"],
       unit: attrs["unit_of_measurement"],
       brightness_pct: brightness_pct(attrs["brightness"]),
@@ -147,6 +149,167 @@ defmodule App.HomeAssistant.Entities do
   end
 
   defp filter_query(list, _), do: list
+
+  @doc """
+  Fuzzy name match, RANK-ORDERED (best Jaro first, so callers truncate by rank). Tokenize
+  `name` (downcase, strip punctuation, plural-fold each token), keep entities whose
+  name+entity_id contains ALL tokens, then order by `String.jaro_distance/2` (entity name vs
+  the whole query) descending. Empty/blank name → the input list unchanged.
+  """
+  def match_name(entities, name) when is_binary(name) do
+    toks = tokens(name)
+
+    if toks == [] do
+      entities
+    else
+      q = String.downcase(name)
+
+      entities
+      |> Enum.filter(&all_tokens?(&1, toks))
+      |> Enum.sort_by(&name_jaro(&1, q), :desc)
+    end
+  end
+
+  def match_name(entities, _), do: entities
+
+  @doc """
+  Top-`k` entity NAMES by Jaro against the full inventory, IGNORING the ALL-tokens gate —
+  the "no exact match, did you mean…" list so the brain self-corrects in the same round.
+  """
+  def close_matches(entities, name, k \\ 3) when is_binary(name) do
+    q = String.downcase(name)
+
+    entities
+    |> Enum.sort_by(&name_jaro(&1, q), :desc)
+    |> Enum.take(k)
+    |> Enum.map(& &1.name)
+  end
+
+  @doc "Add `:area` to a compacted entity from `area_map` (left off when the entity has no area)."
+  def enrich(entity, area_map) do
+    case Map.get(area_map, entity.entity_id) do
+      nil -> entity
+      area -> Map.put(entity, :area, area)
+    end
+  end
+
+  @doc """
+  Compose filters over compacted+enriched entities: area (case-insensitive exact, else UNIQUE
+  substring — ambiguous matches nothing, never widens), domain (exact), state (exact), then
+  `match_name` (which sets the final order). Any nil/blank criterion leaves that dimension open.
+  """
+  def filter(entities, criteria) do
+    entities
+    |> filter_area(Map.get(criteria, :area))
+    |> filter_domain(Map.get(criteria, :domain))
+    |> filter_state(Map.get(criteria, :state))
+    |> filter_name(Map.get(criteria, :name))
+  end
+
+  @doc """
+  House map over the model-visible set (`:ignore` dropped): `%{areas: [%{name, count}],
+  domains: [%{name, count}], total: n, no_area: n}`. `no_area` = devices unreachable by an
+  area filter. `entities` are RAW `/api/states` maps; `area_map` supplies the areas.
+  """
+  def index(entities, area_map) do
+    visible =
+      entities
+      |> Enum.filter(&(classify(&1) != :ignore))
+      |> Enum.map(&compact/1)
+      |> Enum.map(&enrich(&1, area_map))
+
+    %{
+      areas: counts(visible, & &1[:area]),
+      domains: counts(visible, & &1.domain),
+      total: length(visible),
+      no_area: Enum.count(visible, &is_nil(&1[:area]))
+    }
+  end
+
+  # -- filter helpers --
+
+  defp filter_area(entities, area) when is_binary(area) do
+    q = area |> String.downcase() |> String.trim()
+
+    cond do
+      q == "" ->
+        entities
+
+      Enum.any?(entities, &(&1[:area] && String.downcase(&1[:area]) == q)) ->
+        Enum.filter(entities, &(&1[:area] && String.downcase(&1[:area]) == q))
+
+      true ->
+        matching =
+          entities
+          |> Enum.map(& &1[:area])
+          |> Enum.reject(&is_nil/1)
+          |> Enum.filter(&String.contains?(String.downcase(&1), q))
+          |> Enum.uniq()
+
+        case matching do
+          [only] -> Enum.filter(entities, &(&1[:area] == only))
+          _ -> []
+        end
+    end
+  end
+
+  defp filter_area(entities, _), do: entities
+
+  defp filter_domain(entities, domain) when is_binary(domain) do
+    d = domain |> String.downcase() |> String.trim()
+    if d == "", do: entities, else: Enum.filter(entities, &(&1.domain == d))
+  end
+
+  defp filter_domain(entities, _), do: entities
+
+  defp filter_state(entities, state) when is_binary(state) do
+    s = String.trim(state)
+    if s == "", do: entities, else: Enum.filter(entities, &(&1.state == s))
+  end
+
+  defp filter_state(entities, _), do: entities
+
+  defp filter_name(entities, name) when is_binary(name) do
+    if String.trim(name) == "", do: entities, else: match_name(entities, name)
+  end
+
+  defp filter_name(entities, _), do: entities
+
+  # -- name matching helpers --
+
+  defp tokens(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9\s]/, " ")
+    |> String.split()
+    |> Enum.map(&fold_plural/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp fold_plural(token) do
+    cond do
+      Regex.match?(~r/(ch|sh|x|s|z)es$/, token) -> String.replace_suffix(token, "es", "")
+      String.ends_with?(token, "ss") -> token
+      String.ends_with?(token, "s") -> String.replace_suffix(token, "s", "")
+      true -> token
+    end
+  end
+
+  defp all_tokens?(entity, toks) do
+    hay = String.downcase("#{entity.name} #{entity.entity_id}")
+    Enum.all?(toks, &String.contains?(hay, &1))
+  end
+
+  defp name_jaro(entity, query), do: String.jaro_distance(String.downcase(entity.name), query)
+
+  defp counts(entities, keyfun) do
+    entities
+    |> Enum.map(keyfun)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+    |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
+    |> Enum.sort_by(& &1.name)
+  end
 
   defp device_class(%{"attributes" => %{"device_class" => dc}}), do: dc
   defp device_class(_), do: nil

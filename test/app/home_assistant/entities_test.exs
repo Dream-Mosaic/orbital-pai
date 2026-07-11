@@ -216,4 +216,194 @@ defmodule App.HomeAssistant.EntitiesTest do
       assert length(Entities.compact_states(raw, "  ")) == 3
     end
   end
+
+  # Build a compacted + area-enriched entity, the shape match_name/filter operate on.
+  defp enriched(id, area, attrs \\ %{}, state \\ "on") do
+    entity(id, attrs, state) |> Entities.compact() |> Map.put(:area, area)
+  end
+
+  describe "compact/1 — temperature band (v1.1, C2)" do
+    test "a heat_cool entity yields target_temp_high/low" do
+      hc =
+        Entities.compact(
+          entity(
+            "climate.living",
+            %{
+              "friendly_name" => "Living Room",
+              "target_temp_high" => 75,
+              "target_temp_low" => 70
+            },
+            "heat_cool"
+          )
+        )
+
+      assert hc.target_temp_high == 75 and hc.target_temp_low == 70
+    end
+
+    test "a single-setpoint device has no band keys (nils dropped)" do
+      sc = Entities.compact(entity("climate.hall", %{"temperature" => 72}, "heat"))
+      refute Map.has_key?(sc, :target_temp_high)
+      refute Map.has_key?(sc, :target_temp_low)
+      assert sc.temperature == 72
+    end
+  end
+
+  describe "match_name/2 — fuzzy, rank-ordered, plural-folded" do
+    test "requires ALL tokens (order-independent) and folds plurals" do
+      ents = [
+        enriched("light.bedroom_night", nil, %{"friendly_name" => "Bedroom Night Light"}),
+        enriched("light.kitchen", nil, %{"friendly_name" => "Kitchen Light"}),
+        enriched("switch.porch", nil, %{"friendly_name" => "Porch Switch"})
+      ]
+
+      # "night lights" → tokens [night, light]; only Bedroom Night Light has both.
+      assert Entities.match_name(ents, "night lights") |> Enum.map(& &1.entity_id) ==
+               ["light.bedroom_night"]
+    end
+
+    test "plural fold: -es after ch/sh/x/s/z, single -s otherwise, never -ss" do
+      switches = [
+        enriched("switch.a", nil, %{"friendly_name" => "Hallway Switch"}),
+        enriched("light.b", nil, %{"friendly_name" => "Hallway Light"})
+      ]
+
+      # "switches" → "switch"
+      assert Entities.match_name(switches, "switches") |> Enum.map(& &1.entity_id) == ["switch.a"]
+
+      glass = [
+        enriched("sensor.g", nil, %{"friendly_name" => "Glass Break"}),
+        enriched("sensor.h", nil, %{"friendly_name" => "Motion"})
+      ]
+
+      # "glass" must NOT fold to "glas" (never strip -ss) — it still matches "Glass Break".
+      assert Entities.match_name(glass, "glass") |> Enum.map(& &1.entity_id) == ["sensor.g"]
+    end
+
+    test "ranks by Jaro descending (best first)" do
+      ents = [
+        enriched("light.kitchen_far", nil, %{"friendly_name" => "Kitchen Ceiling Fixture"}),
+        enriched("light.kitchen", nil, %{"friendly_name" => "Kitchen Light"})
+      ]
+
+      # Both contain "kitchen"; "Kitchen Light" is the closer Jaro match to the query.
+      assert Entities.match_name(ents, "kitchen light") |> hd() |> Map.get(:entity_id) ==
+               "light.kitchen"
+    end
+
+    test "empty / blank name returns the input order unchanged" do
+      ents = [enriched("light.a", nil), enriched("light.b", nil)]
+      assert Entities.match_name(ents, "") == ents
+    end
+  end
+
+  describe "close_matches/3 — top-k names ignoring the token gate (C3)" do
+    test "suggests the nearest names even with no exact token match" do
+      ents = [
+        enriched("light.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Light"}),
+        enriched("fan.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Fan"}),
+        enriched("light.kit", "Kitchen", %{"friendly_name" => "Kitchen Light"}),
+        enriched("light.gar", "Garage", %{"friendly_name" => "Garage Bulb"})
+      ]
+
+      # NOTE (plan deviation): the plan's own fixture used the query "master bedroom lamp".
+      # Verified against the real `String.jaro_distance/2` (mix run), that query scores
+      # "Master Bedroom Fan" (0.9103) ABOVE "Master Bedroom Light" (0.8807) — plain Jaro
+      # favors "fan"/"lamp" (shorter, higher match-ratio) over "light"/"lamp" for this
+      # specific pair, regardless of prefix bonus tried (Jaro-Winkler doesn't flip the order
+      # either, since both share the same length-4-capped common prefix). This is a property
+      # of the algorithm, not a code bug, so the corrected fixture uses a query where the
+      # intended candidate genuinely IS the closer Jaro match, while still not being an exact
+      # token ("lite" != "light" under match_name's token gate).
+      close = Entities.close_matches(ents, "master bedroom lite", 3)
+      assert length(close) == 3
+      assert hd(close) == "Master Bedroom Light"
+    end
+  end
+
+  describe "enrich/2" do
+    test "adds :area from the map, or leaves it off when absent" do
+      c = Entities.compact(entity("light.kitchen", %{"friendly_name" => "Kitchen Light"}))
+      assert Entities.enrich(c, %{"light.kitchen" => "Kitchen"}).area == "Kitchen"
+      refute Map.has_key?(Entities.enrich(c, %{}), :area)
+    end
+  end
+
+  describe "filter/2 — area (exact-or-unique-substring), domain, state, then name (M2)" do
+    test "area: exact match, unique substring, ambiguous → none" do
+      ents = [
+        enriched("light.kitchen", "Kitchen"),
+        enriched("light.family", "Family Room"),
+        enriched("light.living", "Living Room")
+      ]
+
+      # exact (case-insensitive)
+      assert Entities.filter(ents, %{area: "kitchen"}) |> Enum.map(& &1.entity_id) ==
+               ["light.kitchen"]
+
+      # unique substring
+      assert Entities.filter(ents, %{area: "famil"}) |> Enum.map(& &1.entity_id) ==
+               ["light.family"]
+
+      # ambiguous substring ("room" ⊂ both Family Room and Living Room) → no match, no widening
+      assert Entities.filter(ents, %{area: "room"}) == []
+    end
+
+    test "domain + state compose; nil dimensions are unfiltered" do
+      ents = [
+        enriched("light.a", "Kitchen", %{}, "on"),
+        enriched("light.b", "Kitchen", %{}, "off"),
+        enriched("switch.c", "Kitchen", %{}, "on")
+      ]
+
+      assert Entities.filter(ents, %{domain: "light"}) |> Enum.map(& &1.entity_id) ==
+               ["light.a", "light.b"]
+
+      assert Entities.filter(ents, %{domain: "light", state: "off"}) |> Enum.map(& &1.entity_id) ==
+               ["light.b"]
+
+      assert Entities.filter(ents, %{}) == ents
+    end
+
+    test "name filter runs last and sets the result order (rank)" do
+      ents = [
+        enriched("light.kitchen_main", "Kitchen", %{"friendly_name" => "Kitchen Main Light"}),
+        enriched("light.kitchen_under", "Kitchen", %{"friendly_name" => "Under Cabinet Light"}),
+        enriched("switch.kitchen_fan", "Kitchen", %{"friendly_name" => "Kitchen Fan"})
+      ]
+
+      assert Entities.filter(ents, %{area: "Kitchen", domain: "light", name: "main"})
+             |> Enum.map(& &1.entity_id) == ["light.kitchen_main"]
+    end
+  end
+
+  describe "index/2 — house map with no_area (M2)" do
+    test "counts areas + domains, total, and no_area over the visible set (noise dropped)" do
+      raw = [
+        entity("light.kitchen"),
+        entity("light.bedroom"),
+        entity("switch.fan"),
+        entity("climate.hall"),
+        entity("sun.sun")
+      ]
+
+      area_map = %{
+        "light.kitchen" => "Kitchen",
+        "switch.fan" => "Kitchen",
+        "light.bedroom" => "Bedroom"
+      }
+
+      idx = Entities.index(raw, area_map)
+
+      assert idx.total == 4
+      assert idx.no_area == 1
+      assert %{name: "Kitchen", count: 2} in idx.areas
+      assert %{name: "Bedroom", count: 1} in idx.areas
+
+      assert Enum.sort_by(idx.domains, & &1.name) == [
+               %{name: "climate", count: 1},
+               %{name: "light", count: 2},
+               %{name: "switch", count: 1}
+             ]
+    end
+  end
 end
