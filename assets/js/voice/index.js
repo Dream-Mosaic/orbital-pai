@@ -238,10 +238,11 @@ export const Voice = {
       this.brainEl = null
       // RE-ANCHOR: match the existing `locked` handler's exact caption wording (index.js).
       this.setCaption(locked ? `Say “Wake up ${this.assistantName}”` : "")
-      if (this.talking) {
-        this.turnState = phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle"
-        this.applyOrbState()
-      }
+      // Re-anchor the wake lock from the snapshot too (a rebind after an offline relock carries
+      // `locked` here but no separate `locked` push) so the ambient orb tint matches the caption.
+      this.wakeLocked = locked
+      if (this.talking) this.turnState = phase === "busy" ? "thinking" : this.pttHeld ? "listening" : "idle"
+      this.applyOrbState()
     })
     // One-shot backfill after join. Only into an empty log — a rebind (wire pack) re-pushes
     // history and must not duplicate lines already on screen.

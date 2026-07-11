@@ -304,6 +304,21 @@ defmodule AppWeb.ConversationLive do
 
   def handle_async(:ambient, {:exit, _reason}, socket), do: {:noreply, socket}
 
+  # Kiosk ambient strip: the present segments joined with " · " — a missing/errored source (nil
+  # weather or next_event, or zero due reminders) simply drops out, with no dangling separator.
+  defp ambient_line(ambient, due) do
+    reminders =
+      case length(due) do
+        0 -> nil
+        1 -> "1 reminder due"
+        n -> "#{n} reminders due"
+      end
+
+    [ambient.weather, ambient.next_event, reminders]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+  end
+
   defp load_memory(socket) do
     uid = socket.assigns.current_user.id
     assign(socket, facts: Memory.list_facts(uid), summary: Memory.get_summary(uid).content)
@@ -486,9 +501,7 @@ defmodule AppWeb.ConversationLive do
              layer in start_async (handle_info(:refresh_ambient, ...) below), refreshed every 5 min;
              @ambient is always assigned in mount/3 (even off-kiosk) so these reads never crash. --%>
         <div :if={@kiosk} id="ambient-strip" class="text-center text-sm opacity-60">
-          <span :if={@ambient.weather}>{@ambient.weather}</span>
-          <span :if={@ambient.next_event}> · {@ambient.next_event}</span>
-          <span :if={@due != []}> · {length(@due)} reminder{if length(@due) != 1, do: "s"} due</span>
+          {ambient_line(@ambient, @due)}
         </div>
 
         <section
