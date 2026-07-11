@@ -127,11 +127,28 @@ defmodule App.Tools.RemindersTest do
       assert App.Reminders.list_unacknowledged(user.id) == []
     end
 
-    test "with no match returns a note, not an error", %{user: user} do
+    test "with no match returns a benign note, not an error or a lost-reminder implication", %{
+      user: user
+    } do
       assert {:ok, %{note: note}} =
                Tool.execute("acknowledge_reminder", %{"reminder" => "nope"}, ctx(user))
 
-      assert note =~ "couldn't find"
+      assert note =~ "nothing to clear"
+    end
+
+    test "an already-acknowledged reminder reads as already-done, not a failed lookup", %{
+      user: user
+    } do
+      {:ok, r} =
+        App.Reminders.create(%{user_id: user.id, body: "take out the trash", due_at: past_due()})
+
+      {:ok, r} = App.Reminders.mark_fired(r)
+      {:ok, _} = App.Reminders.acknowledge(r)
+
+      # Henry (or the user) confirms a second time — it's no longer pending, but we must NOT imply
+      # it was never saved. It reports as already cleared.
+      assert {:ok, %{already_done: "take out the trash"}} =
+               Tool.execute("acknowledge_reminder", %{"reminder" => "trash"}, ctx(user))
     end
 
     test "with no user session returns a note, not an error" do

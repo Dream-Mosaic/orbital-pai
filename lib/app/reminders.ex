@@ -108,6 +108,36 @@ defmodule App.Reminders do
 
   def find_pending(_user_id, _phrase), do: nil
 
+  @doc """
+  The user's best-matching ALREADY-ACKNOWLEDGED reminder for a phrase — own OR household. Same
+  matching as `find_pending/2`, but over fired + acknowledged rows, so the ack tool can tell
+  "already cleared" apart from "never existed" (else the brain confabulates a lost reminder when it
+  finds nothing pending). Most recently acknowledged wins; nil when nothing matches.
+  """
+  def find_acknowledged(user_id, phrase) when is_binary(phrase) do
+    p = phrase |> String.downcase() |> String.trim()
+
+    if p == "" do
+      nil
+    else
+      Reminder
+      |> where(
+        [r],
+        (r.user_id == ^user_id or r.household == true) and not is_nil(r.fired_at) and
+          not is_nil(r.acknowledged_at)
+      )
+      |> Repo.all()
+      |> Enum.filter(fn r ->
+        b = String.downcase(r.body)
+        String.contains?(b, p) or String.contains?(p, b)
+      end)
+      |> Enum.sort_by(& &1.acknowledged_at, {:desc, DateTime})
+      |> List.first()
+    end
+  end
+
+  def find_acknowledged(_user_id, _phrase), do: nil
+
   @doc "Upcoming household (shared) reminders only — backs the Shared-scope view."
   def list_household_upcoming do
     now = now()

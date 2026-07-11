@@ -51,9 +51,10 @@ defmodule App.Tools.Reminders do
       %{
         name: "acknowledge_reminder",
         description:
-          "Mark a reminder the user just confirmed (\"got it\", \"done\", \"already did it\") as " <>
-            "acknowledged, so it stops being pending and Henry stops asking. Call this whenever the " <>
-            "user confirms a reminder you delivered or asked them about.",
+          "Mark a reminder the USER just confirmed (\"got it\", \"done\", \"already did it\") as " <>
+            "acknowledged, so it stops being pending. Call this ONLY when the user themselves " <>
+            "confirms — in their words, not yours. Delivering or reading out a reminder is not " <>
+            "acknowledging it; never call this on your own initiative.",
         parameters: %{
           type: "object",
           properties: %{
@@ -157,9 +158,20 @@ defmodule App.Tools.Reminders do
     do: {:ok, %{note: "no user session — nothing to acknowledge"}}
 
   def execute("acknowledge_reminder", %{"reminder" => phrase}, ctx) do
-    case Reminders.find_pending(uid(ctx), phrase) do
+    uid = uid(ctx)
+
+    case Reminders.find_pending(uid, phrase) do
       nil ->
-        {:ok, %{note: "couldn't find a pending reminder matching #{inspect(phrase)}"}}
+        # Nothing pending. Distinguish "already cleared" (benign) from "never existed" so the brain
+        # relays a calm "that's already taken care of" instead of confabulating a lost/failed save.
+        case Reminders.find_acknowledged(uid, phrase) do
+          nil ->
+            {:ok, %{note: "no pending reminder by that name — nothing to clear"}}
+
+          r ->
+            {:ok,
+             %{already_done: r.body, note: "that one's already been cleared — no action needed"}}
+        end
 
       r ->
         Reminders.acknowledge(r)

@@ -268,4 +268,25 @@ defmodule App.RemindersTest do
       assert Reminders.find_pending(d, "call mom") == nil
     end
   end
+
+  describe "find_acknowledged/2" do
+    test "matches an already-acknowledged reminder (the complement of find_pending)", %{d: d} do
+      {:ok, r} = Reminders.create(%{user_id: d, body: "take out the trash", due_at: at(-3600)})
+      {:ok, r} = Reminders.mark_fired(r)
+      {:ok, _} = Reminders.acknowledge(r)
+
+      # Not pending anymore, but findable as already-cleared so the tool can say so.
+      assert Reminders.find_pending(d, "trash") == nil
+      assert Reminders.find_acknowledged(d, "trash").body == "take out the trash"
+    end
+
+    test "returns nil for a phrase that never existed, and for a pending (unacked) one", %{d: d} do
+      {:ok, pending} = Reminders.create(%{user_id: d, body: "water plants", due_at: at(-3600)})
+      {:ok, _} = Reminders.mark_fired(pending)
+
+      assert Reminders.find_acknowledged(d, "never set this") == nil
+      # a still-pending reminder is NOT "already acknowledged"
+      assert Reminders.find_acknowledged(d, "water plants") == nil
+    end
+  end
 end

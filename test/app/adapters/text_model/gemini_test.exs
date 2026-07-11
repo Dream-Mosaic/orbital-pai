@@ -350,6 +350,15 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "confirm"
   end
 
+  test "brain prompt forbids Henry from acknowledging a reminder on his own (delivery != ack)" do
+    prompt = Gemini.brain_prompt("Henry")
+    # It must teach the ack tool...
+    assert prompt =~ "acknowledge_reminder"
+    # ...but explicitly that delivering is NOT acking, and he must not self-ack.
+    assert prompt =~ "never call acknowledge_reminder on your own"
+    assert prompt =~ ~r/not acknowledging it/i
+  end
+
   test "brain prompt treats email (Gmail) as a real capability, not a can't-do" do
     prompt = Gemini.brain_prompt("Henry")
     # Gmail shipped — email must NOT be listed among things Henry can't do yet.

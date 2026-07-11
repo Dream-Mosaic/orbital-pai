@@ -16,6 +16,8 @@ defmodule App.AgendaTest do
     assert item.lead_interjected == "Oh, before I forget —"
     assert item.prompt =~ ~s|A reminder you set earlier just came due: "check the weather"|
     assert item.prompt =~ "If it's not something you can do, just remind me of it, briefly."
+    # delivery must not self-acknowledge — Henry waits for the human's "got it"
+    assert item.prompt =~ "don't mark it done yourself"
     assert item.ack == {App.Reminders, :mark_delivered, [r]}
     assert item.expires_at == nil
   end
