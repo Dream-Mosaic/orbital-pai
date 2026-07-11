@@ -56,6 +56,29 @@ defmodule App.AgendaTest do
     refute App.Agenda.reminder_item(r).prompt =~ "Context:"
   end
 
+  test "a household reminder speaks as shared, not as one the listener set" do
+    item =
+      Agenda.reminder_item(%Reminder{
+        household: true,
+        body: "bins",
+        due_at: ~U[2030-01-01 00:00:00Z]
+      })
+
+    assert item.prompt =~ "shared household reminder"
+    refute item.prompt =~ "you set earlier"
+  end
+
+  test "a personal reminder keeps the personal phrasing" do
+    item =
+      Agenda.reminder_item(%Reminder{
+        household: false,
+        body: "call mom",
+        due_at: ~U[2030-01-01 00:00:00Z]
+      })
+
+    assert item.prompt =~ "you set earlier"
+  end
+
   test "expired?/1" do
     refute Agenda.expired?(%Item{kind: :x, prompt: "p"})
     refute Agenda.expired?(%Item{kind: :x, prompt: "p", expires_at: minutes_from_now(5)})

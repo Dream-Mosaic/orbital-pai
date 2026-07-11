@@ -90,7 +90,7 @@ defmodule App.Tools.Reminders do
         session_user_id: uid(ctx),
         active_scope: Map.get(ctx, :active_scope, :personal),
         gate_on: App.Config.default().kiosk_user_switch,
-        users: Users.list()
+        users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
       })
 
     with {:ok, dt, _offset} <- DateTime.from_iso8601(due_at),

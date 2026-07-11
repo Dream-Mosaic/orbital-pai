@@ -32,6 +32,21 @@ defmodule App.Agenda do
     }
   end
 
+  # A fired HOUSEHOLD (shared) reminder — phrase it as shared so whoever's listening isn't told
+  # they set it, and the brain relays it as a household reminder.
+  def reminder_item(%Reminder{household: true} = r) do
+    %Item{
+      kind: :reminder,
+      prompt:
+        "A shared household reminder just came due: \"#{r.body}\". It's for the household, not " <>
+          "necessarily whoever's listening — relay it briefly as a shared reminder. If it's " <>
+          "something you can do with your tools, do it and say what it was; otherwise just remind us.",
+      lead_idle: "Heads up, for the house —",
+      lead_interjected: "Oh — a shared reminder —",
+      ack: {App.Reminders, :acknowledge, [r]}
+    }
+  end
+
   # A fired reminder as an agenda item (text identical to the old App.Reminders.Notice).
   def reminder_item(%Reminder{} = r) do
     %Item{
