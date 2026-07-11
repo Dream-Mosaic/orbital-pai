@@ -126,6 +126,10 @@ defmodule AppWeb.VoiceChannel do
     {:reply, :ok, socket}
   end
 
+  # An off-shape vision_frame (client bug) must not crash the channel — ignore it. The
+  # Conversation's own 2s :vision_capture timeout then degrades that turn to text-only.
+  def handle_in("vision_frame", _payload, socket), do: {:reply, :error, socket}
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do

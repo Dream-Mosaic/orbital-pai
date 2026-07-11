@@ -278,6 +278,15 @@ defmodule AppWeb.VoiceChannelTest do
       # channel still alive + responsive
       assert Process.alive?(socket.channel_pid)
     end
+
+    test "a malformed vision_frame is rejected without crashing the channel", %{socket: socket} do
+      ref = push(socket, "vision_frame", %{"ref" => "not-an-int", "data" => nil})
+      assert_reply ref, :error
+      # a missing "data" key also must not crash
+      ref2 = push(socket, "vision_frame", %{"ref" => 1})
+      assert_reply ref2, :error
+      assert Process.alive?(socket.channel_pid)
+    end
   end
 
   # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
