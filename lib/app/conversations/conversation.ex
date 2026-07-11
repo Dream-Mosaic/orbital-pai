@@ -114,6 +114,9 @@ defmodule App.Conversations.Conversation do
       # exists: {pid, ref} | nil. Adopted (BrainStream.begin/3) by the next :start_brain effect,
       # or killed by the :prewarm_ttl timer if the turn never materializes.
       prewarm_brain: nil,
+      # the "look at this" frame (base64 jpeg) for the CURRENT turn, consumed by start_brain_now
+      # and reset per-turn; nil = a normal (no-image) turn.
+      vision_image: nil,
       # set once we've fallen back to the batch brain (so we don't loop)
       brain_fallback: false,
       # monotonic ms at which all audio sent so far will have finished playing
@@ -649,6 +652,48 @@ defmodule App.Conversations.Conversation do
 
   defp brain_failed(data), do: feed(:brain_done, data)
 
+  # Start the streaming brain now, attaching this turn's vision_image (nil on a normal turn).
+  # Adopts a live pre-warm (BrainStream.begin/4) or cold-starts; either way the image rides along.
+  defp start_brain_now(data, acts) do
+    send(data.client, {:to_client, :thinking})
+
+    # agenda turns choose their own context isolation (reminders: no recent turns)
+    recent? = agenda_recent_context(data.agenda_turn)
+
+    {pid, ref, data} =
+      case data.prewarm_brain do
+        {pid, ref} when data.agenda_turn == nil ->
+          # a prewarmed brain matches this turn's context policy (default recent-context) —
+          # adopt it: the Cartesia WS handshake is already done or in flight.
+          if Process.alive?(pid) do
+            brain_stream_mod().begin(pid, data.transcript, recent?, data.vision_image)
+            {pid, ref, %{data | prewarm_brain: nil}}
+          else
+            Process.demonitor(ref, [:flush])
+            cold_start_brain(%{data | prewarm_brain: nil}, recent?)
+          end
+
+        {pid, ref} ->
+          # agenda turns manage their own context — refuse the prewarm
+          Process.demonitor(ref, [:flush])
+          if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+          cold_start_brain(%{data | prewarm_brain: nil}, recent?)
+
+        nil ->
+          cold_start_brain(data, recent?)
+      end
+
+    {%{
+       data
+       | brain_pid: pid,
+         brain_ref: ref,
+         brain_buffer: [],
+         audio_until: nil,
+         brain_text: nil,
+         brain_fallback: false
+     }, [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
+  end
+
   # Start a fresh BrainStream with a transcript already in hand (no prewarm to adopt, or the
   # prewarm was unusable/refused). Mirrors what run_effect({:start_brain, _}, _) used to do
   # unconditionally before prewarm adoption existed.
@@ -659,7 +704,8 @@ defmodule App.Conversations.Conversation do
         transcript: data.transcript,
         session_id: data.session_id,
         recent_context: recent?,
-        config: data.config
+        config: data.config,
+        image: data.vision_image
       )
 
     {pid, Process.monitor(pid), data}
@@ -1106,45 +1152,7 @@ defmodule App.Conversations.Conversation do
     end
   end
 
-  defp run_effect({:start_brain, _t}, {data, acts}) do
-    send(data.client, {:to_client, :thinking})
-
-    # agenda turns choose their own context isolation (reminders: no recent turns)
-    recent? = agenda_recent_context(data.agenda_turn)
-
-    {pid, ref, data} =
-      case data.prewarm_brain do
-        {pid, ref} when data.agenda_turn == nil ->
-          # a prewarmed brain matches this turn's context policy (default recent-context) —
-          # adopt it: the Cartesia WS handshake is already done or in flight.
-          if Process.alive?(pid) do
-            brain_stream_mod().begin(pid, data.transcript, recent?)
-            {pid, ref, %{data | prewarm_brain: nil}}
-          else
-            Process.demonitor(ref, [:flush])
-            cold_start_brain(%{data | prewarm_brain: nil}, recent?)
-          end
-
-        {pid, ref} ->
-          # agenda turns manage their own context — refuse the prewarm
-          Process.demonitor(ref, [:flush])
-          if Process.alive?(pid), do: Process.exit(pid, :shutdown)
-          cold_start_brain(%{data | prewarm_brain: nil}, recent?)
-
-        nil ->
-          cold_start_brain(data, recent?)
-      end
-
-    {%{
-       data
-       | brain_pid: pid,
-         brain_ref: ref,
-         brain_buffer: [],
-         audio_until: nil,
-         brain_text: nil,
-         brain_fallback: false
-     }, [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
-  end
+  defp run_effect({:start_brain, _t}, {data, acts}), do: start_brain_now(data, acts)
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
     send(data.client, {:to_client, {:speak_start, reflex_source(data), text}})

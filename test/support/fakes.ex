@@ -19,26 +19,28 @@ defmodule App.Test.Fakes do
     def start(opts), do: GenServer.start(__MODULE__, opts)
     def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-    def begin(pid, transcript, recent_context),
-      do: GenServer.cast(pid, {:begin, transcript, recent_context})
+    def begin(pid, transcript, recent_context, image \\ nil),
+      do: GenServer.cast(pid, {:begin, transcript, recent_context, image})
 
     @impl true
     def init(opts) do
       case Keyword.get(opts, :transcript) do
         nil ->
-          # pre-warm: no transcript yet — announce and wait for begin/3
+          # pre-warm: no transcript yet — announce and wait for begin/4
           if pid = Process.whereis(:fake_brain_observer), do: send(pid, {:fake_brain_prewarmed})
           {:ok, %{owner: Keyword.fetch!(opts, :owner)}}
 
         transcript ->
           notify_observer(transcript, Keyword.get(opts, :recent_context, true))
+          notify_image(Keyword.get(opts, :image))
           {:ok, %{owner: Keyword.fetch!(opts, :owner)}, {:continue, :emit}}
       end
     end
 
     @impl true
-    def handle_cast({:begin, transcript, recent_context}, state) do
+    def handle_cast({:begin, transcript, recent_context, image}, state) do
       notify_observer(transcript, recent_context)
+      notify_image(image)
       {:noreply, state, {:continue, :emit}}
     end
 
@@ -47,6 +49,10 @@ defmodule App.Test.Fakes do
         send(pid, {:fake_brain_transcript, transcript})
         send(pid, {:fake_brain_recent_context, recent_context})
       end
+    end
+
+    defp notify_image(image) do
+      if pid = Process.whereis(:fake_brain_observer), do: send(pid, {:fake_brain_image, image})
     end
 
     @impl true

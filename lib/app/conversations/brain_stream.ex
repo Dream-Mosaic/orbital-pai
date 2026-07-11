@@ -27,12 +27,12 @@ defmodule App.Conversations.BrainStream do
   Supply the transcript to a pre-warmed (transcript-less) stream. The Gemini call starts once
   BOTH the Cartesia WS is ready and the transcript has arrived.
   """
-  def begin(pid, transcript, recent_context),
-    do: GenServer.cast(pid, {:begin, transcript, recent_context})
+  def begin(pid, transcript, recent_context, image \\ nil),
+    do: GenServer.cast(pid, {:begin, transcript, recent_context, image})
 
   @impl true
-  def handle_cast({:begin, transcript, recent_context}, state) do
-    state = %{state | transcript: transcript, recent_context: recent_context}
+  def handle_cast({:begin, transcript, recent_context, image}, state) do
+    state = %{state | transcript: transcript, recent_context: recent_context, image: image}
 
     if state.ready and is_nil(state.gemini_task),
       do: {:noreply, start_gemini(state)},
@@ -52,6 +52,8 @@ defmodule App.Conversations.BrainStream do
       # include recent conversation turns in the brain context? false for reminder turns, so a
       # fired reminder is fulfilled in isolation (no conversation bleed / repetition).
       recent_context: Keyword.get(opts, :recent_context, true),
+      # the "look at this" frame (base64 jpeg) to attach to the brain's final user message; nil = none
+      image: Keyword.get(opts, :image),
       config: Keyword.fetch!(opts, :config),
       # Cartesia context base + a sequence we bump on each expiry. A context auto-expires 1s after
       # its last AUDIO output (Cartesia docs), so a long tool round (silent bridge→answer gap) kills
@@ -220,6 +222,7 @@ defmodule App.Conversations.BrainStream do
       sid = state.session_id
       cfg = state.config
       recent? = state.recent_context
+      image = state.image
 
       {:ok, task} =
         Task.start_link(fn ->
@@ -235,7 +238,7 @@ defmodule App.Conversations.BrainStream do
           Gemini.stream_brain(
             transcript,
             ctx,
-            [config: cfg, thinking: cfg.brain_thinking, session_id: sid],
+            [config: cfg, thinking: cfg.brain_thinking, session_id: sid, image: image],
             pid
           )
         end)

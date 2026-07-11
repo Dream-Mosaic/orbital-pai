@@ -1560,4 +1560,17 @@ defmodule App.Conversations.ConversationTest do
       refute_receive {:fake_stt_push, _}, 100
     end
   end
+
+  describe "brain image plumbing" do
+    test "a normal (non-vision) turn starts the brain with image: nil" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "ok"} end)
+      pid = start_conv()
+
+      Conversation.endpoint(pid, "what's the weather?")
+
+      assert_receive {:fake_brain_transcript, "what's the weather?"}, 1000
+      assert_receive {:fake_brain_image, nil}, 1000
+    end
+  end
 end
