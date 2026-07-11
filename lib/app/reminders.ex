@@ -3,6 +3,7 @@ defmodule App.Reminders do
   Local reminders: create, list, find-due, and acknowledge. Times are stored UTC. Persistence
   + queries, plus a thin notify seam: create/acknowledge/delete broadcast `{:reminders_changed}`
   on `"reminders:<user_id>"` so the LiveView panel stays live (same pattern as `App.Memory`).
+  Household (shared) rows also notify `"reminders:household"` so every member's panel updates.
   The `App.Reminders.Scheduler` drives firing (and broadcasts `{:reminder_due, r}`).
   """
   import Ecto.Query
@@ -12,7 +13,7 @@ defmodule App.Reminders do
   def create(attrs) do
     case %Reminder{} |> Reminder.changeset(attrs) |> Repo.insert() do
       {:ok, r} ->
-        broadcast_changed(r.user_id)
+        broadcast_changed(r.user_id, r.household)
         {:ok, r}
 
       other ->
@@ -23,7 +24,7 @@ defmodule App.Reminders do
   def delete(%Reminder{} = r) do
     case Repo.delete(r) do
       {:ok, deleted} ->
-        broadcast_changed(deleted.user_id)
+        broadcast_changed(deleted.user_id, deleted.household)
         {:ok, deleted}
 
       other ->
@@ -37,7 +38,7 @@ defmodule App.Reminders do
   def acknowledge(%Reminder{} = r) do
     case r |> Reminder.changeset(%{acknowledged_at: now()}) |> Repo.update() do
       {:ok, updated} ->
-        broadcast_changed(updated.user_id)
+        broadcast_changed(updated.user_id, updated.household)
         {:ok, updated}
 
       other ->
@@ -49,7 +50,10 @@ defmodule App.Reminders do
     now = now()
 
     Reminder
-    |> where([r], r.user_id == ^user_id and is_nil(r.fired_at) and r.due_at >= ^now)
+    |> where(
+      [r],
+      (r.user_id == ^user_id or r.household == true) and is_nil(r.fired_at) and r.due_at >= ^now
+    )
     |> order_by([r], asc: r.due_at, asc: r.id)
     |> Repo.all()
   end
@@ -59,9 +63,20 @@ defmodule App.Reminders do
     Reminder
     |> where(
       [r],
-      r.user_id == ^user_id and not is_nil(r.fired_at) and is_nil(r.acknowledged_at)
+      (r.user_id == ^user_id or r.household == true) and not is_nil(r.fired_at) and
+        is_nil(r.acknowledged_at)
     )
     |> order_by([r], desc: r.fired_at, desc: r.id)
+    |> Repo.all()
+  end
+
+  @doc "Upcoming household (shared) reminders only — backs the Shared-scope view."
+  def list_household_upcoming do
+    now = now()
+
+    Reminder
+    |> where([r], r.household == true and is_nil(r.fired_at) and r.due_at >= ^now)
+    |> order_by([r], asc: r.due_at, asc: r.id)
     |> Repo.all()
   end
 
@@ -78,10 +93,17 @@ defmodule App.Reminders do
     r |> Reminder.changeset(%{fired_at: now()}) |> Repo.update()
   end
 
-  @doc "Tell subscribers the reminder set changed (create/acknowledge/delete)."
+  @doc "Tell subscribers the reminder set changed. Household rows also notify every member's panel."
   def broadcast_changed(user_id) do
     Phoenix.PubSub.broadcast(App.PubSub, "reminders:#{user_id}", {:reminders_changed})
   end
+
+  def broadcast_changed(user_id, true) do
+    broadcast_changed(user_id)
+    Phoenix.PubSub.broadcast(App.PubSub, "reminders:household", {:reminders_changed})
+  end
+
+  def broadcast_changed(user_id, false), do: broadcast_changed(user_id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end

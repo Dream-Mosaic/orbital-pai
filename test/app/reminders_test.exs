@@ -175,4 +175,53 @@ defmodule App.RemindersTest do
       assert %{kind: _} = errors_on(changeset)
     end
   end
+
+  describe "household (shared) reminders" do
+    test "list_upcoming returns the user's own + all household reminders, not other users' personal",
+         %{d: d, t: t} do
+      {:ok, _mine} = Reminders.create(%{user_id: d, body: "mine", due_at: at(3600)})
+      {:ok, _theirs} = Reminders.create(%{user_id: t, body: "theirs", due_at: at(3600)})
+
+      {:ok, _shared} =
+        Reminders.create(%{user_id: t, body: "bins", due_at: at(3600), household: true})
+
+      bodies = Reminders.list_upcoming(d) |> Enum.map(& &1.body) |> Enum.sort()
+      assert bodies == ["bins", "mine"]
+    end
+
+    test "list_unacknowledged returns the user's own + all household fired reminders, not other users' personal",
+         %{d: d, t: t} do
+      {:ok, mine} = Reminders.create(%{user_id: d, body: "mine", due_at: at(-60)})
+      {:ok, _} = Reminders.mark_fired(mine)
+
+      {:ok, theirs} = Reminders.create(%{user_id: t, body: "theirs", due_at: at(-60)})
+      {:ok, _} = Reminders.mark_fired(theirs)
+
+      {:ok, shared} =
+        Reminders.create(%{user_id: t, body: "bins", due_at: at(-60), household: true})
+
+      {:ok, _} = Reminders.mark_fired(shared)
+
+      bodies = Reminders.list_unacknowledged(d) |> Enum.map(& &1.body) |> Enum.sort()
+      assert bodies == ["bins", "mine"]
+    end
+
+    test "list_household_upcoming returns only household rows", %{d: d} do
+      {:ok, _} = Reminders.create(%{user_id: d, body: "mine", due_at: at(3600)})
+      {:ok, _} = Reminders.create(%{user_id: d, body: "bins", due_at: at(3600), household: true})
+      assert Reminders.list_household_upcoming() |> Enum.map(& &1.body) == ["bins"]
+    end
+
+    test "creating a household reminder broadcasts on reminders:household", %{d: d} do
+      Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
+      {:ok, _} = Reminders.create(%{user_id: d, body: "bins", due_at: at(3600), household: true})
+      assert_receive {:reminders_changed}, 500
+    end
+
+    test "creating a PERSONAL reminder does NOT broadcast on reminders:household", %{d: d} do
+      Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
+      {:ok, _} = Reminders.create(%{user_id: d, body: "mine", due_at: at(3600)})
+      refute_receive {:reminders_changed}, 300
+    end
+  end
 end

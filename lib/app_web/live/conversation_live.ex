@@ -35,6 +35,7 @@ defmodule AppWeb.ConversationLive do
     if connected?(socket) do
       Memory.subscribe()
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{sid}")
+      Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
       Phoenix.PubSub.subscribe(App.PubSub, "presence:voice")
       if kiosk, do: send(self(), :refresh_ambient)
     end
