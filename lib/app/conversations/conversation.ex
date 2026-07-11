@@ -108,6 +108,7 @@ defmodule App.Conversations.Conversation do
       # pull-on-connect: deliver a morning briefing to a user who opens the app AFTER its ready
       # time (the scheduler's broadcast at that time reached no one). Handled post-init.
       send(self(), :pull_briefing)
+      send(self(), :pull_pending_reminders)
     end
 
     data = %{
@@ -557,6 +558,17 @@ defmodule App.Conversations.Conversation do
   # same {:agenda_due, item} the scheduler would have broadcast (rides the normal delivery path).
   def handle_event(:info, :pull_briefing, _s, %{session_id: sid} = data) do
     case App.Agenda.Briefing.pull(sid) do
+      %Item{} = item -> send(self(), {:agenda_due, item})
+      _ -> :ok
+    end
+
+    {:keep_state, data}
+  end
+
+  # pull-on-connect: surface any reminders pending the user's acknowledgement (fired earlier, not
+  # yet confirmed) as one self-initiated check-in. Rides the same {:agenda_due, item} path.
+  def handle_event(:info, :pull_pending_reminders, _s, %{session_id: sid} = data) do
+    case App.Reminders.Nudge.pull(sid) do
       %Item{} = item -> send(self(), {:agenda_due, item})
       _ -> :ok
     end
