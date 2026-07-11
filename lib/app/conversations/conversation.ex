@@ -25,6 +25,12 @@ defmodule App.Conversations.Conversation do
   # Spoken when the brain finishes a turn with no text at all (e.g. it ran tools but produced an
   # empty answer). Better a short, honest line than dead air — a re-ask usually succeeds.
   @brain_blank "Sorry, I lost that one — mind asking again?"
+  # Spoken when the model is rate-limited / out of quota: the batch fallback shares the same API key
+  # and would 429 too, so we skip it and say this — instead of leaving the user with only the reflex
+  # filler (the "Go on?" masquerade a depleted key produced in prod).
+  @brain_ratelimited "Sorry, I'm getting rate-limited right now — could be an API limit or the billing running dry. Give it a minute and try again."
+  # Spoken when the brain is fully unreachable: the stream failed AND the batch fallback failed too.
+  @brain_unreachable "Sorry, I can't reach my brain right now — give me a moment and try again."
 
   # Vision ("look at this"): how long to hold the brain waiting for the client's frame before
   # answering text-only. 8s because a real capture legitimately takes a few seconds — getUserMedia
@@ -522,7 +528,19 @@ defmodule App.Conversations.Conversation do
   def handle_event(:info, {:brain_error, reason}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
     Logger.warning("[turn] brain stream error: #{inspect(reason)}")
-    brain_failed(clear_brain(data))
+
+    if rate_limited?(reason) do
+      # The batch fallback uses the SAME key → it would 429 too (and cost ~4s). Skip it and speak
+      # an honest line. Log at :error so a depleted key / quota is unmistakable in companion.log.
+      Logger.error(
+        "[turn] brain RATE-LIMITED / quota (#{inspect(reason)}) — check the Gemini API billing/quota"
+      )
+
+      {:keep_state,
+       spawn_canned_brain(@brain_ratelimited, %{clear_brain(data) | brain_fallback: true})}
+    else
+      brain_failed(clear_brain(data))
+    end
   end
 
   # stale brain messages from an abandoned turn (after barge-in/complete) -> ignore
@@ -704,7 +722,22 @@ defmodule App.Conversations.Conversation do
     {:keep_state, spawn_brain_fallback(%{data | brain_fallback: true})}
   end
 
+  # Stream failed, the batch fallback failed too, and nothing was spoken — say so gracefully rather
+  # than leaving the user with only the reflex filler (the "Go on?" masquerade).
+  defp brain_failed(%{brain_fallback: true, ttb: nil} = data) do
+    Logger.warning(
+      "[turn] brain unreachable (stream + batch fallback failed) — speaking a graceful line"
+    )
+
+    {:keep_state, spawn_canned_brain(@brain_unreachable, data)}
+  end
+
   defp brain_failed(data), do: feed(:brain_done, data)
+
+  # A rate-limit / quota rejection (429) — the batch fallback shares the key and can't help.
+  defp rate_limited?({:http, 429}), do: true
+  defp rate_limited?({:http, 429, _body}), do: true
+  defp rate_limited?(_), do: false
 
   # Start the streaming brain now, attaching this turn's vision_image (nil on a normal turn).
   # Adopts a live pre-warm (BrainStream.begin/4) or cold-starts; either way the image rides along.

@@ -57,11 +57,19 @@ defmodule App.Test.Fakes do
 
     @impl true
     def handle_continue(:emit, state) do
-      if Application.get_env(:app, :fake_brain_error, false) do
-        send(state.owner, {:brain_error, :fake})
-        {:stop, :normal, state}
-      else
-        emit_audio(state)
+      case Application.get_env(:app, :fake_brain_error, false) do
+        false ->
+          emit_audio(state)
+
+        # `true` keeps the historic generic error; any other term is sent verbatim as the reason
+        # (e.g. `{:http, 429}`) so a test can exercise the rate-limit path.
+        true ->
+          send(state.owner, {:brain_error, :fake})
+          {:stop, :normal, state}
+
+        reason ->
+          send(state.owner, {:brain_error, reason})
+          {:stop, :normal, state}
       end
     end
 

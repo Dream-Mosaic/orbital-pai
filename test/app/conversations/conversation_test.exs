@@ -533,6 +533,49 @@ defmodule App.Conversations.ConversationTest do
     assert_receive {:to_client, {:audio, :brain, _}}, 2000
   end
 
+  test "a rate-limited (429) brain speaks an honest line and skips the doomed batch fallback" do
+    # The prod "Go on?" masquerade: a depleted key 429s every brain call, the fallback 429s too,
+    # and the user hears only the reflex filler. Now the brain says so — and skips the doomed batch.
+    Application.put_env(:app, :fake_brain_error, {:http, 429})
+    on_exit(fn -> Application.delete_env(:app, :fake_brain_error) end)
+
+    # If the batch fallback were (wrongly) attempted, this :brain stub would answer — asserting the
+    # rate-limited line instead proves we skipped it.
+    stub(App.TextModelMock, :generate, fn _t, _c, opts ->
+      case Keyword.fetch!(opts, :tier) do
+        :reflex -> {:ok, "huh"}
+        :brain -> {:ok, "SHOULD NOT BE SPOKEN — fallback must be skipped on 429"}
+        _ -> {:ok, ""}
+      end
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+
+    assert_receive {:to_client, {:speak_start, :brain, line}}, 2000
+    assert line =~ "rate-limited"
+    refute line =~ "SHOULD NOT BE SPOKEN"
+  end
+
+  test "a brain whose stream AND batch fallback both fail speaks a graceful line, not silence" do
+    Application.put_env(:app, :fake_brain_error, true)
+    on_exit(fn -> Application.delete_env(:app, :fake_brain_error) end)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, opts ->
+      case Keyword.fetch!(opts, :tier) do
+        :reflex -> {:ok, "huh"}
+        :brain -> {:error, :boom}
+        _ -> {:ok, ""}
+      end
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+
+    assert_receive {:to_client, {:speak_start, :brain, line}}, 2000
+    assert line =~ "can't reach my brain"
+  end
+
   test "streams brain text deltas to the client mid-turn" do
     Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer."])
     on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
