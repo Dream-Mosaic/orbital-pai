@@ -14,7 +14,7 @@ defmodule App.HomeAssistant.Entities do
       no code path to a service call). Don't add one.
   """
 
-  @controllable ~w(light switch scene script media_player climate cover)
+  @controllable ~w(light switch scene script media_player climate cover fan)
   @sensitive ~w(lock alarm_control_panel)
   @read_only ~w(sensor binary_sensor)
 
@@ -43,7 +43,7 @@ defmodule App.HomeAssistant.Entities do
   """
   def service_for(entity, action, value) do
     if classify(entity) == :controllable do
-      map_action(domain(entity), action, value)
+      map_action(domain(entity), action, value, entity)
     else
       {:error, :not_controllable}
     end
@@ -51,48 +51,65 @@ defmodule App.HomeAssistant.Entities do
 
   # -- the mapping table (NO lock / alarm_control_panel / garage rows — structural safety) --
 
-  defp map_action("light", "on", _), do: {:ok, {"light", "turn_on", %{}}}
-  defp map_action("light", "off", _), do: {:ok, {"light", "turn_off", %{}}}
-  defp map_action("light", "toggle", _), do: {:ok, {"light", "toggle", %{}}}
+  defp map_action("light", "on", _, _e), do: {:ok, {"light", "turn_on", %{}}}
+  defp map_action("light", "off", _, _e), do: {:ok, {"light", "turn_off", %{}}}
+  defp map_action("light", "toggle", _, _e), do: {:ok, {"light", "toggle", %{}}}
 
-  defp map_action("light", "set_brightness", v) when is_number(v),
+  defp map_action("light", "set_brightness", v, _e) when is_number(v),
     do: {:ok, {"light", "turn_on", %{brightness_pct: round(clamp(v, 0, 100))}}}
 
-  defp map_action("light", "set_brightness", _), do: {:error, :needs_value}
+  defp map_action("light", "set_brightness", _, _e), do: {:error, :needs_value}
 
-  defp map_action("switch", "on", _), do: {:ok, {"switch", "turn_on", %{}}}
-  defp map_action("switch", "off", _), do: {:ok, {"switch", "turn_off", %{}}}
-  defp map_action("switch", "toggle", _), do: {:ok, {"switch", "toggle", %{}}}
+  defp map_action("switch", "on", _, _e), do: {:ok, {"switch", "turn_on", %{}}}
+  defp map_action("switch", "off", _, _e), do: {:ok, {"switch", "turn_off", %{}}}
+  defp map_action("switch", "toggle", _, _e), do: {:ok, {"switch", "toggle", %{}}}
 
-  defp map_action("scene", a, _) when a in ["activate", "on"],
+  defp map_action("scene", a, _, _e) when a in ["activate", "on"],
     do: {:ok, {"scene", "turn_on", %{}}}
 
-  defp map_action("script", a, _) when a in ["activate", "on"],
+  defp map_action("script", a, _, _e) when a in ["activate", "on"],
     do: {:ok, {"script", "turn_on", %{}}}
 
-  defp map_action("media_player", "play", _), do: {:ok, {"media_player", "media_play", %{}}}
-  defp map_action("media_player", "pause", _), do: {:ok, {"media_player", "media_pause", %{}}}
-  defp map_action("media_player", "next", _), do: {:ok, {"media_player", "media_next_track", %{}}}
-  defp map_action("media_player", "on", _), do: {:ok, {"media_player", "turn_on", %{}}}
-  defp map_action("media_player", "off", _), do: {:ok, {"media_player", "turn_off", %{}}}
+  defp map_action("media_player", "play", _, _e), do: {:ok, {"media_player", "media_play", %{}}}
+  defp map_action("media_player", "pause", _, _e), do: {:ok, {"media_player", "media_pause", %{}}}
 
-  defp map_action("media_player", "volume_set", v) when is_number(v),
+  defp map_action("media_player", "next", _, _e),
+    do: {:ok, {"media_player", "media_next_track", %{}}}
+
+  defp map_action("media_player", "on", _, _e), do: {:ok, {"media_player", "turn_on", %{}}}
+  defp map_action("media_player", "off", _, _e), do: {:ok, {"media_player", "turn_off", %{}}}
+
+  defp map_action("media_player", "volume_set", v, _e) when is_number(v),
     do: {:ok, {"media_player", "volume_set", %{volume_level: normalize_volume(v)}}}
 
-  defp map_action("media_player", "volume_set", _), do: {:error, :needs_value}
+  defp map_action("media_player", "volume_set", _, _e), do: {:error, :needs_value}
 
-  defp map_action("climate", "set_temperature", v) when is_number(v),
-    do: {:ok, {"climate", "set_temperature", %{temperature: v}}}
+  defp map_action("climate", "set_temperature", v, e) when is_number(v),
+    do: {:ok, {"climate", "set_temperature", climate_temp_data(v, e)}}
 
-  defp map_action("climate", "set_temperature", _), do: {:error, :needs_value}
-  defp map_action("climate", "on", _), do: {:ok, {"climate", "turn_on", %{}}}
-  defp map_action("climate", "off", _), do: {:ok, {"climate", "turn_off", %{}}}
+  defp map_action("climate", "set_temperature", _, _e), do: {:error, :needs_value}
+  defp map_action("climate", "on", _, _e), do: {:ok, {"climate", "turn_on", %{}}}
+  defp map_action("climate", "off", _, _e), do: {:ok, {"climate", "turn_off", %{}}}
 
-  defp map_action("cover", "on", _), do: {:ok, {"cover", "open_cover", %{}}}
-  defp map_action("cover", "off", _), do: {:ok, {"cover", "close_cover", %{}}}
-  defp map_action("cover", "toggle", _), do: {:ok, {"cover", "toggle", %{}}}
+  defp map_action("cover", "on", _, _e), do: {:ok, {"cover", "open_cover", %{}}}
+  defp map_action("cover", "off", _, _e), do: {:ok, {"cover", "close_cover", %{}}}
+  defp map_action("cover", "toggle", _, _e), do: {:ok, {"cover", "toggle", %{}}}
 
-  defp map_action(_domain, _action, _value), do: {:error, :unknown_action}
+  defp map_action("cover", "set_position", v, _e) when is_number(v),
+    do: {:ok, {"cover", "set_cover_position", %{position: round(clamp(v, 0, 100))}}}
+
+  defp map_action("cover", "set_position", _, _e), do: {:error, :needs_value}
+
+  defp map_action("fan", "on", _, _e), do: {:ok, {"fan", "turn_on", %{}}}
+  defp map_action("fan", "off", _, _e), do: {:ok, {"fan", "turn_off", %{}}}
+  defp map_action("fan", "toggle", _, _e), do: {:ok, {"fan", "toggle", %{}}}
+
+  defp map_action("fan", "set_speed", v, _e) when is_number(v),
+    do: {:ok, {"fan", "set_percentage", %{percentage: round(clamp(v, 0, 100))}}}
+
+  defp map_action("fan", "set_speed", _, _e), do: {:error, :needs_value}
+
+  defp map_action(_domain, _action, _value, _e), do: {:error, :unknown_action}
 
   # -- compaction --
 
@@ -316,6 +333,69 @@ defmodule App.HomeAssistant.Entities do
 
   defp brightness_pct(b) when is_number(b), do: round(b / 255 * 100)
   defp brightness_pct(_), do: nil
+
+  # Discriminate on STATE first (the state IS the hvac mode): heat_cool → recentred band;
+  # else a single `temperature` attr → single setpoint; else a band present → range; else
+  # single-setpoint fallback. All temps °F.
+  defp climate_temp_data(x, entity) do
+    attrs = Map.get(entity, "attributes") || %{}
+    state = entity["state"]
+
+    cond do
+      state == "heat_cool" ->
+        range_data(x, attrs)
+
+      is_number(attrs["temperature"]) ->
+        %{temperature: clamp_round(x, attrs)}
+
+      is_number(attrs["target_temp_high"]) or is_number(attrs["target_temp_low"]) ->
+        range_data(x, attrs)
+
+      true ->
+        %{temperature: clamp_round(x, attrs)}
+    end
+  end
+
+  # Recentre the band on x preserving width; each edge clamped into [min,max] then rounded to step.
+  defp range_data(x, attrs) do
+    half = band_width(attrs) / 2
+
+    %{
+      target_temp_low: clamp_round(x - half, attrs),
+      target_temp_high: clamp_round(x + half, attrs)
+    }
+  end
+
+  # width = high - low when both present and positive; else the 4°F fallback deadband.
+  defp band_width(attrs) do
+    hi = attrs["target_temp_high"]
+    lo = attrs["target_temp_low"]
+    if is_number(hi) and is_number(lo) and hi - lo > 0, do: hi - lo, else: 4
+  end
+
+  # Clamp into [min_temp, max_temp] (out-of-range setpoints 400 some integrations), then round
+  # to target_temp_step (a step:1.0 device rejects 69.5). Whole results become integers.
+  defp clamp_round(t, attrs) do
+    t
+    |> clamp_min_max(attrs["min_temp"], attrs["max_temp"])
+    |> round_step(attrs["target_temp_step"])
+    |> normalize_number()
+  end
+
+  defp clamp_min_max(t, min_t, max_t) do
+    t
+    |> then(fn v -> if is_number(min_t), do: max(v, min_t), else: v end)
+    |> then(fn v -> if is_number(max_t), do: min(v, max_t), else: v end)
+  end
+
+  defp round_step(t, step) when is_number(step) and step > 0, do: Float.round(t / step) * step
+  defp round_step(t, _step), do: t
+
+  defp normalize_number(n) when is_float(n) do
+    if n == Float.round(n), do: trunc(n), else: n
+  end
+
+  defp normalize_number(n), do: n
 
   defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
 

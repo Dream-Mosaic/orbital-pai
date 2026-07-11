@@ -406,4 +406,139 @@ defmodule App.HomeAssistant.EntitiesTest do
              ]
     end
   end
+
+  describe "service_for/3 — attribute-aware climate (the core fix, TABLE TESTS)" do
+    test "state==heat_cool → RANGE even when `temperature` is also present (state discrimination, I2)" do
+      e =
+        entity(
+          "climate.living",
+          %{"temperature" => 72, "target_temp_high" => 74, "target_temp_low" => 70},
+          "heat_cool"
+        )
+
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 74}}}
+    end
+
+    test "band recenter preserves width — a 5° band recentred on 72 → 69.5 / 74.5" do
+      e =
+        entity(
+          "climate.living",
+          %{"target_temp_high" => 75, "target_temp_low" => 70},
+          "heat_cool"
+        )
+
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok,
+                {"climate", "set_temperature", %{target_temp_low: 69.5, target_temp_high: 74.5}}}
+    end
+
+    test "deadband fallback of 4°F when the band is absent / zero-width" do
+      e = entity("climate.living", %{}, "heat_cool")
+
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 74}}}
+    end
+
+    test "clamps the band into [min_temp, max_temp]" do
+      e =
+        entity(
+          "climate.living",
+          %{
+            "target_temp_high" => 75,
+            "target_temp_low" => 70,
+            "min_temp" => 60,
+            "max_temp" => 74
+          },
+          "heat_cool"
+        )
+
+      # width 5, recentre on 76 → 73.5 / 78.5 → clamp high to 74
+      assert Entities.service_for(e, "set_temperature", 76) ==
+               {:ok,
+                {"climate", "set_temperature", %{target_temp_low: 73.5, target_temp_high: 74}}}
+    end
+
+    test "rounds to target_temp_step — step 1.0 kills the half degree" do
+      e =
+        entity(
+          "climate.living",
+          %{"target_temp_high" => 75, "target_temp_low" => 70, "target_temp_step" => 1.0},
+          "heat_cool"
+        )
+
+      # width 5, recentre on 72 → 69.5 / 74.5 → step 1.0 → 70 / 75
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 75}}}
+    end
+
+    test "band present, non-heat_cool state, no `temperature` → STILL range" do
+      e = entity("climate.eco", %{"target_temp_high" => 76, "target_temp_low" => 72}, "auto")
+
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 74}}}
+    end
+
+    test "single-setpoint (state heat, `temperature` present) → %{temperature: …}, clamped + stepped" do
+      e =
+        entity("climate.hall", %{"temperature" => 68, "min_temp" => 60, "max_temp" => 75}, "heat")
+
+      assert Entities.service_for(e, "set_temperature", 90) ==
+               {:ok, {"climate", "set_temperature", %{temperature: 75}}}
+
+      assert Entities.service_for(e, "set_temperature", 71) ==
+               {:ok, {"climate", "set_temperature", %{temperature: 71}}}
+    end
+
+    test "no state/temperature/band info → single-setpoint fallback (v1 behaviour preserved)" do
+      e = entity("climate.plain", %{}, "on")
+
+      assert Entities.service_for(e, "set_temperature", 72) ==
+               {:ok, {"climate", "set_temperature", %{temperature: 72}}}
+
+      assert Entities.service_for(e, "set_temperature", nil) == {:error, :needs_value}
+    end
+  end
+
+  describe "service_for/3 — cover position + fan (v1.1 actions)" do
+    test "cover set_position → set_cover_position, clamped 0–100" do
+      c = entity("cover.blinds")
+
+      assert Entities.service_for(c, "set_position", 50) ==
+               {:ok, {"cover", "set_cover_position", %{position: 50}}}
+
+      assert Entities.service_for(c, "set_position", 150) ==
+               {:ok, {"cover", "set_cover_position", %{position: 100}}}
+
+      assert Entities.service_for(c, "set_position", nil) == {:error, :needs_value}
+    end
+
+    test "fan is controllable and maps on/off/toggle + set_speed" do
+      assert Entities.classify(entity("fan.bedroom")) == :controllable
+
+      f = entity("fan.bedroom")
+      assert Entities.service_for(f, "on", nil) == {:ok, {"fan", "turn_on", %{}}}
+      assert Entities.service_for(f, "off", nil) == {:ok, {"fan", "turn_off", %{}}}
+      assert Entities.service_for(f, "toggle", nil) == {:ok, {"fan", "toggle", %{}}}
+
+      assert Entities.service_for(f, "set_speed", 40) ==
+               {:ok, {"fan", "set_percentage", %{percentage: 40}}}
+
+      assert Entities.service_for(f, "set_speed", 150) ==
+               {:ok, {"fan", "set_percentage", %{percentage: 100}}}
+
+      assert Entities.service_for(f, "set_speed", nil) == {:error, :needs_value}
+    end
+
+    test "STRUCTURAL SAFETY still holds for the new actions (lock / garage)" do
+      for e <- [
+            entity("lock.front_door"),
+            entity("cover.garage_door", %{"device_class" => "garage"})
+          ],
+          action <- ~w(set_position set_speed) do
+        assert Entities.service_for(e, action, 50) == {:error, :not_controllable},
+               "#{e["entity_id"]} must stay uncontrollable (action #{action})"
+      end
+    end
+  end
 end
