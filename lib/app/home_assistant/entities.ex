@@ -190,16 +190,48 @@ defmodule App.HomeAssistant.Entities do
   def match_name(entities, _), do: entities
 
   @doc """
-  Top-`k` entity NAMES by Jaro against the full inventory, IGNORING the ALL-tokens gate —
-  the "no exact match, did you mean…" list so the brain self-corrects in the same round.
+  Up to `k` entity NAMES that plausibly match `name`, IGNORING the ALL-tokens gate — the "no exact
+  match, did you mean…" list so the brain self-corrects in the same round. A candidate must share at
+  least ONE query WORD with the entity (substring). That anchor is what whole-string Jaro lacked
+  (Jaro floored noise at ~0.6 and ranked "Home" over "Living Room Thermostat" for "thermostat"):
+  gibberish shares no word → returns [] and the brain just asks; real near-misses ("kitchen sink" →
+  "Kitchen light (sink)") survive and rank by token overlap.
   """
-  def close_matches(entities, name, k \\ 3) when is_binary(name) do
-    q = String.downcase(name)
+  def close_matches(entities, name, k \\ 3)
 
-    entities
-    |> Enum.sort_by(&name_jaro(&1, q), :desc)
-    |> Enum.take(k)
-    |> Enum.map(& &1.name)
+  def close_matches(entities, name, k) when is_binary(name) do
+    case tokens(name) do
+      [] ->
+        []
+
+      toks ->
+        entities
+        |> Enum.filter(&any_token?(&1, toks))
+        |> Enum.sort_by(&token_score(&1, toks), :desc)
+        |> Enum.take(k)
+        |> Enum.map(& &1.name)
+    end
+  end
+
+  def close_matches(_entities, _name, _k), do: []
+
+  # At least one query token appears (substring) in the entity's name/id.
+  defp any_token?(entity, toks) do
+    hay = String.downcase("#{entity.name} #{entity.entity_id}")
+    Enum.any?(toks, &String.contains?(hay, &1))
+  end
+
+  # Rank survivors: average, over the query tokens, of the best per-word Jaro against the name words.
+  defp token_score(entity, toks) do
+    case tokens(entity.name) do
+      [] ->
+        0.0
+
+      words ->
+        toks
+        |> Enum.map(fn t -> words |> Enum.map(&String.jaro_distance(t, &1)) |> Enum.max() end)
+        |> then(&(Enum.sum(&1) / length(&1)))
+    end
   end
 
   @doc "Add `:area` to a compacted entity from `area_map` (left off when the entity has no area)."
@@ -389,7 +421,9 @@ defmodule App.HomeAssistant.Entities do
   end
 
   defp round_step(t, step) when is_number(step) and step > 0, do: Float.round(t / step) * step
-  defp round_step(t, _step), do: t
+  # No target_temp_step reported → default to whole degrees (cleaner to say + set than 69.5).
+  # `t / 1.0` coerces an integer (a clamp can return one) to float so Float.round/1 accepts it.
+  defp round_step(t, _step), do: Float.round(t / 1.0)
 
   defp normalize_number(n) when is_float(n) do
     if n == Float.round(n), do: trunc(n), else: n

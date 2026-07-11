@@ -296,8 +296,8 @@ defmodule App.HomeAssistant.EntitiesTest do
     end
   end
 
-  describe "close_matches/3 — top-k names ignoring the token gate (C3)" do
-    test "suggests the nearest names even with no exact token match" do
+  describe "close_matches/3 — word-anchored suggestions ignoring the ALL-tokens gate (C3)" do
+    test "suggests names that share a query WORD, ranked by token overlap" do
       ents = [
         enriched("light.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Light"}),
         enriched("fan.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Fan"}),
@@ -305,18 +305,22 @@ defmodule App.HomeAssistant.EntitiesTest do
         enriched("light.gar", "Garage", %{"friendly_name" => "Garage Bulb"})
       ]
 
-      # NOTE (plan deviation): the plan's own fixture used the query "master bedroom lamp".
-      # Verified against the real `String.jaro_distance/2` (mix run), that query scores
-      # "Master Bedroom Fan" (0.9103) ABOVE "Master Bedroom Light" (0.8807) — plain Jaro
-      # favors "fan"/"lamp" (shorter, higher match-ratio) over "light"/"lamp" for this
-      # specific pair, regardless of prefix bonus tried (Jaro-Winkler doesn't flip the order
-      # either, since both share the same length-4-capped common prefix). This is a property
-      # of the algorithm, not a code bug, so the corrected fixture uses a query where the
-      # intended candidate genuinely IS the closer Jaro match, while still not being an exact
-      # token ("lite" != "light" under match_name's token gate).
-      close = Entities.close_matches(ents, "master bedroom lite", 3)
-      assert length(close) == 3
-      assert hd(close) == "Master Bedroom Light"
+      # "lite" is no exact token of any name (match_name's gate misses it), but "master" +
+      # "bedroom" anchor the two MBR entities (Kitchen/Garage share no word → excluded). Among
+      # the survivors, "Light" outranks "Fan" on token overlap ("lite"≈"light"). Anchoring on a
+      # shared word — not whole-string Jaro — is what makes noise return [] (next test).
+      assert Entities.close_matches(ents, "master bedroom lite", 3) ==
+               ["Master Bedroom Light", "Master Bedroom Fan"]
+    end
+
+    test "gibberish that shares no word returns [] — the brain asks instead of suggesting noise" do
+      ents = [
+        enriched("light.kit", "Kitchen", %{"friendly_name" => "Kitchen Light"}),
+        enriched("sensor.ipad", "Office", %{"friendly_name" => "iPad Z Battery"})
+      ]
+
+      assert Entities.close_matches(ents, "zzznosuchthing", 3) == []
+      assert Entities.close_matches(ents, "", 3) == []
     end
   end
 
@@ -420,7 +424,7 @@ defmodule App.HomeAssistant.EntitiesTest do
                {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 74}}}
     end
 
-    test "band recenter preserves width — a 5° band recentred on 72 → 69.5 / 74.5" do
+    test "band recenter preserves width, whole-degree default — 5° band, set 72 → 70/75 (69.5/74.5 rounded)" do
       e =
         entity(
           "climate.living",
@@ -428,9 +432,9 @@ defmodule App.HomeAssistant.EntitiesTest do
           "heat_cool"
         )
 
+      # recenter 72, width 5 → 69.5/74.5, then whole-degree default (no target_temp_step) → 70/75.
       assert Entities.service_for(e, "set_temperature", 72) ==
-               {:ok,
-                {"climate", "set_temperature", %{target_temp_low: 69.5, target_temp_high: 74.5}}}
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 70, target_temp_high: 75}}}
     end
 
     test "deadband fallback of 4°F when the band is absent / zero-width" do
@@ -453,10 +457,9 @@ defmodule App.HomeAssistant.EntitiesTest do
           "heat_cool"
         )
 
-      # width 5, recentre on 76 → 73.5 / 78.5 → clamp high to 74
+      # width 5, recentre 76 → 73.5/78.5 → clamp into [60,74] → 73.5/74 → whole-degree → 74/74
       assert Entities.service_for(e, "set_temperature", 76) ==
-               {:ok,
-                {"climate", "set_temperature", %{target_temp_low: 73.5, target_temp_high: 74}}}
+               {:ok, {"climate", "set_temperature", %{target_temp_low: 74, target_temp_high: 74}}}
     end
 
     test "rounds to target_temp_step — step 1.0 kills the half degree" do
