@@ -23,7 +23,11 @@ defmodule AppWeb.ConversationLive do
 
     switchable_users =
       if kiosk and App.Config.default().kiosk_user_switch do
-        App.Users.list() |> Enum.reject(&(&1.id == socket.assigns.current_user.id))
+        # Only allowlisted users are switchable (matches the controller gate) — a de-allowlisted
+        # but still-present DB row must not render a switch button that would just 403 on tap.
+        App.Users.list()
+        |> Enum.filter(&App.Users.allowed?(&1.email))
+        |> Enum.reject(&(&1.id == socket.assigns.current_user.id))
       else
         []
       end

@@ -130,3 +130,11 @@ if allowed = System.get_env("ALLOWED_USERS") do
 
   config :app, :allowed_users, users
 end
+
+# Trusted-wall user switching (kiosk): OFF unless explicitly enabled. Enable only on the household
+# wall deployment — see the security note in specs/2026-07-05-kiosk-identity-design.md. When ON it is
+# INSTANCE-GLOBAL (any authed allowlisted client at /?kiosk=1 can switch to any allowlisted user),
+# and switching is bounded to the allowlist. Accepts "true"/"1"; anything else (or unset) = OFF.
+if System.get_env("KIOSK_USER_SWITCH") in ~w(true 1) do
+  config :app, :kiosk_user_switch, true
+end

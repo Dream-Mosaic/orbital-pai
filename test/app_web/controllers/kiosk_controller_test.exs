@@ -90,6 +90,22 @@ defmodule AppWeb.KioskControllerTest do
       assert get_session(conn, :user_id) == alice.id
     end
 
+    test "gate on + malformed user_id (partial-parse/float/empty/whitespace) -> 403, no switch",
+         %{
+           conn: conn,
+           alice: alice
+         } do
+      Application.put_env(:app, :kiosk_user_switch, true)
+
+      # Integer.parse leaks a partial number ({1, ";drop"}) — to_int/1 must reject anything with a
+      # trailing remainder, so none of these can resolve to a real user id.
+      for bad <- ["1;drop", "1.5", "", " 5", "0x1F"] do
+        c = post(conn, ~p"/kiosk/switch_user", %{"user_id" => bad})
+        assert c.status == 403, "expected 403 for user_id=#{inspect(bad)}"
+        assert get_session(c, :user_id) == alice.id
+      end
+    end
+
     test "gate on + missing user_id param entirely -> 403, session unchanged", %{
       conn: conn,
       alice: alice
