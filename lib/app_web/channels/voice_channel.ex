@@ -120,6 +120,12 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_in("vision_frame", %{"ref" => ref, "data" => data}, socket)
+      when is_integer(ref) and (is_binary(data) or is_nil(data)) do
+    Conversation.vision_frame(socket.assigns.conversation, ref, data)
+    {:reply, :ok, socket}
+  end
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do
@@ -161,6 +167,11 @@ defmodule AppWeb.VoiceChannel do
 
   def handle_info({:to_client, {:tool_call, name}}, socket) do
     push(socket, "tool_call", %{name: name})
+    {:noreply, socket}
+  end
+
+  def handle_info({:to_client, {:capture_frame, ref}}, socket) do
+    push(socket, "capture_frame", %{ref: ref})
     {:noreply, socket}
   end
 

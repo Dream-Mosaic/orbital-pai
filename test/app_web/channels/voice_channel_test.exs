@@ -266,6 +266,20 @@ defmodule AppWeb.VoiceChannelTest do
     assert wait_until(fn -> Sessions.lookup(sid) == :error end)
   end
 
+  describe "vision frame transport" do
+    test "relays a capture_frame owner message to the client", %{socket: socket} do
+      send(socket.channel_pid, {:to_client, {:capture_frame, 7}})
+      assert_push "capture_frame", %{ref: 7}
+    end
+
+    test "an inbound vision_frame is accepted without crashing the channel", %{socket: socket} do
+      ref = push(socket, "vision_frame", %{"ref" => 1, "data" => nil})
+      assert_reply ref, :ok
+      # channel still alive + responsive
+      assert Process.alive?(socket.channel_pid)
+    end
+  end
+
   # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
   # for tests that need a fresh channel bound after some pre-join state (e.g. seeded turns).
   # `payload` defaults to the setup block's bare `%{}` join; pass %{"kiosk" => true} to join
