@@ -66,7 +66,7 @@ defmodule AppWeb.VoiceModals do
   defp modal_title(:settings), do: "Settings"
   defp modal_title(_), do: ""
 
-  @doc "Reminders modal contents: due (needs attention) list + upcoming list, each with dismiss buttons."
+  @doc "Reminders modal contents: due (needs attention) + upcoming lists, dismiss buttons, and a cadence badge on recurring rows (the ✕ on a recurring row cancels the whole series — the row IS the series)."
   attr :due, :list, required: true
   attr :upcoming, :list, required: true
 
@@ -80,6 +80,9 @@ defmodule AppWeb.VoiceModals do
             <span class="badge badge-sm badge-warning">due</span>
             <span :if={r.kind == "followup"} class="badge badge-sm badge-ghost">follow-up</span>
             <span :if={r.household} class="badge badge-sm badge-accent">shared</span>
+            <span :if={r.recurrence} class="badge badge-sm badge-info">
+              {fmt_recurrence(r.recurrence, r.due_at)}
+            </span>
             <span class="flex-1">{r.body}</span>
             <span class="text-xs opacity-60 font-mono">{fmt_due(r.due_at)}</span>
             <button
@@ -108,13 +111,16 @@ defmodule AppWeb.VoiceModals do
           <li :for={r <- @upcoming} class="flex items-center gap-2">
             <span :if={r.kind == "followup"} class="badge badge-sm badge-ghost">follow-up</span>
             <span :if={r.household} class="badge badge-sm badge-accent">shared</span>
+            <span :if={r.recurrence} class="badge badge-sm badge-info">
+              {fmt_recurrence(r.recurrence, r.due_at)}
+            </span>
             <span class="flex-1">{r.body}</span>
             <span class="text-xs opacity-60 font-mono">{fmt_due(r.due_at)}</span>
             <button
               class="btn btn-ghost btn-xs"
               phx-click="dismiss_reminder"
               phx-value-id={r.id}
-              aria-label="delete reminder"
+              aria-label={(r.recurrence && "cancel repeating reminder") || "delete reminder"}
             >
               ✕
             </button>
@@ -132,6 +138,48 @@ defmodule AppWeb.VoiceModals do
     local = DateTime.shift_zone!(dt, App.Config.default().timezone)
     Calendar.strftime(local, "%b %-d %-I:%M%P")
   end
+
+  # Humanize a recurrence rule for the cadence badge: "every Tue", "every 3 days",
+  # "monthly on the 1st", "yearly". Day-of-month/weekday fall back to due_at, rendered in the
+  # configured local timezone (same as fmt_due/1). nil rule (one-shot) → nil (no badge).
+  @doc false
+  def fmt_recurrence(nil, _due_at), do: nil
+
+  def fmt_recurrence(%{"freq" => freq} = rule, %DateTime{} = due_at) do
+    interval = rule["interval"] || 1
+    local = DateTime.shift_zone!(due_at, App.Config.default().timezone)
+
+    case freq do
+      "daily" ->
+        if interval == 1, do: "daily", else: "every #{interval} days"
+
+      "weekly" ->
+        days = byday_label(rule, local)
+        if interval == 1, do: "every #{days}", else: "every #{interval} wks: #{days}"
+
+      "monthly" ->
+        day = "the #{ordinal(local.day)}"
+        if interval == 1, do: "monthly on #{day}", else: "every #{interval} months on #{day}"
+
+      "yearly" ->
+        if interval == 1, do: "yearly", else: "every #{interval} years"
+
+      _ ->
+        "repeats"
+    end
+  end
+
+  def fmt_recurrence(_rule, _due_at), do: "repeats"
+
+  defp byday_label(%{"byday" => [_ | _] = codes}, _local),
+    do: codes |> Enum.map(&String.capitalize/1) |> Enum.join(", ")
+
+  defp byday_label(_rule, local), do: Calendar.strftime(local, "%a")
+
+  defp ordinal(n) when n in [1, 21, 31], do: "#{n}st"
+  defp ordinal(n) when n in [2, 22], do: "#{n}nd"
+  defp ordinal(n) when n in [3, 23], do: "#{n}rd"
+  defp ordinal(n), do: "#{n}th"
 
   @doc """
   Lists modal contents: the user's visible lists (own + household), each with check-off items, an

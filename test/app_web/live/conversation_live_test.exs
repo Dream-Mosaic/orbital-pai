@@ -160,6 +160,44 @@ defmodule AppWeb.ConversationLiveTest do
     assert html =~ "follow-up"
   end
 
+  test "reminders modal: a recurring reminder shows its cadence badge and cancel ends the series",
+       %{conn: conn, user: user} do
+    {:ok, r} =
+      App.Reminders.create(%{
+        body: "take out the bins",
+        due_at: past(3600),
+        user_id: user.id,
+        recurrence: %{"freq" => "weekly", "interval" => 1, "byday" => ["tue"]}
+      })
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
+
+    assert html =~ "every Tue"
+    assert html =~ "cancel repeating reminder"
+
+    # the ✕ (dismiss_reminder → Reminders.delete) removes the WHOLE series — the row IS the series
+    lv
+    |> element(~s|button[phx-click="dismiss_reminder"][phx-value-id="#{r.id}"]|)
+    |> render_click()
+
+    refute render(lv) =~ "take out the bins"
+    assert App.Reminders.list_upcoming(user.id) == []
+  end
+
+  test "reminders modal: a one-shot renders with no cadence badge (additive invariant)",
+       %{conn: conn, user: user} do
+    {:ok, _} =
+      App.Reminders.create(%{body: "call mom", due_at: past(3600), user_id: user.id})
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
+
+    assert html =~ "call mom"
+    refute html =~ "cancel repeating reminder"
+    refute html =~ "badge-info"
+  end
+
   test "lists modal: shows the user's visible lists with items", %{conn: conn, user: user} do
     {:ok, list} =
       %App.Lists.List{}
