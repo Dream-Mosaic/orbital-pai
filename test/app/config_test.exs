@@ -26,6 +26,7 @@ defmodule App.ConfigTest do
     assert App.Tools.Weather in tools
     assert App.Tools.Reminders in tools
     assert App.Tools.Lists in tools
+    assert App.Tools.Garden in tools
   end
 
   describe "vision flag" do

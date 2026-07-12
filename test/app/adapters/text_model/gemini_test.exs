@@ -357,6 +357,17 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ ~r/shared by default/i
   end
 
+  test "brain prompt teaches the garden book: loose record, seasonal archive, shared like lists" do
+    prompt = Gemini.brain_prompt("Henry")
+    assert prompt =~ "garden book"
+    assert prompt =~ "add_plant"
+    assert prompt =~ "note_plant"
+    assert prompt =~ "list_garden"
+    assert prompt =~ "close_season"
+    # reminders stay the normal reminder flow — no plant-reminder machinery in slice 1
+    assert prompt =~ "create_reminder"
+  end
+
   test "brain prompt forbids Henry from acknowledging a reminder on his own (delivery != ack)" do
     prompt = Gemini.brain_prompt("Henry")
     # It must teach the ack tool...

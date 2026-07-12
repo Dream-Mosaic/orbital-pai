@@ -49,6 +49,7 @@ defmodule App.Config do
               App.Tools.Weather,
               App.Tools.Reminders,
               App.Tools.Lists,
+              App.Tools.Garden,
               App.Tools.Calendar,
               App.Tools.Gmail,
               App.Tools.Recall
