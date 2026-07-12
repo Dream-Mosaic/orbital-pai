@@ -138,6 +138,121 @@ defmodule App.Reminders do
 
   def find_acknowledged(_user_id, _phrase), do: nil
 
+  # weekday codes for weekly byday, mapped to Date.day_of_week/1 ISO numbers (Mon=1..Sun=7).
+  @day_codes %{"mon" => 1, "tue" => 2, "wed" => 3, "thu" => 4, "fri" => 5, "sat" => 6, "sun" => 7}
+
+  @doc """
+  The single occurrence strictly after `due_at` for a recurrence rule, in UTC — or nil when the
+  series is exhausted (`remaining <= 1`: this firing was the last; or the computed next lands
+  after the inclusive `until`; or the rule is nil/unusable). Pure and DST-safe: the calendar
+  step is taken on the LOCAL wall-clock (shift into `tz`, step the local date, keep the local
+  time-of-day, resolve back to UTC) — "every day at 8am" stays 8am across a DST transition.
+  A fall-back overlap resolves to the earlier instant; a spring-forward gap lands just after it.
+  """
+  @spec next_occurrence(DateTime.t(), map() | nil, String.t()) :: DateTime.t() | nil
+  def next_occurrence(due_at, rule, tz)
+
+  def next_occurrence(_due_at, nil, _tz), do: nil
+
+  def next_occurrence(%DateTime{} = due_at, rule, tz) when is_map(rule) do
+    remaining = rule["remaining"] || rule["count"]
+
+    if is_integer(remaining) and remaining <= 1 do
+      nil
+    else
+      local = DateTime.shift_zone!(due_at, tz)
+
+      interval =
+        if is_integer(rule["interval"]) and rule["interval"] >= 1, do: rule["interval"], else: 1
+
+      with %Date{} = date <- next_date(rule["freq"], DateTime.to_date(local), interval, rule),
+           %DateTime{} = next <- resolve_local(date, DateTime.to_time(local), tz),
+           :ok <- check_until(next, rule["until"]) do
+        next
+      else
+        _ -> nil
+      end
+    end
+  end
+
+  defp next_date("daily", date, interval, _rule), do: Date.add(date, interval)
+
+  # Weekly: the next listed weekday strictly after `date` within the same ISO (Mon-start) week;
+  # when the week rolls, jump to the FIRST listed day of the week `interval` weeks later —
+  # multi-day byday fires each listed day, stepping `interval` weeks between full cycles.
+  defp next_date("weekly", date, interval, rule) do
+    dows =
+      case rule["byday"] do
+        [_ | _] = codes ->
+          codes
+          |> Enum.map(&@day_codes[&1])
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        _ ->
+          []
+      end
+
+    dows = if dows == [], do: [Date.day_of_week(date)], else: dows
+    cur = Date.day_of_week(date)
+
+    case Enum.find(dows, &(&1 > cur)) do
+      nil ->
+        monday = Date.add(date, -(cur - 1))
+        Date.add(monday, interval * 7 + (hd(dows) - 1))
+
+      dow ->
+        Date.add(date, dow - cur)
+    end
+  end
+
+  # Monthly: same day-of-month `interval` months on, clamped to the target month's last valid
+  # day. When the current date IS its month's last day we anchor to "end of month" (31) — that
+  # keeps the clamp chain Jan 31 -> Feb 28 -> Mar 31 without storing the original anchor
+  # (accepted v1 trade-off: "every 30th" created on Apr 30 rides month-ends).
+  defp next_date("monthly", date, interval, _rule) do
+    months = date.year * 12 + (date.month - 1) + interval
+    year = div(months, 12)
+    month = rem(months, 12) + 1
+    anchor = if date.day == Date.days_in_month(date), do: 31, else: date.day
+    Date.new!(year, month, min(anchor, Date.days_in_month(Date.new!(year, month, 1))))
+  end
+
+  # Yearly: same month + day `interval` years on; Feb-29 clamps to Feb 28 in a non-leap year.
+  defp next_date("yearly", date, interval, _rule) do
+    year = date.year + interval
+    Date.new!(year, date.month, min(date.day, Date.days_in_month(Date.new!(year, date.month, 1))))
+  end
+
+  defp next_date(_freq, _date, _interval, _rule), do: nil
+
+  # Resolve a LOCAL wall-clock date+time back to a UTC instant. Ambiguous (fall-back overlap):
+  # keep the earlier instant. Gap (spring-forward): the wall time doesn't exist — land just
+  # after the gap.
+  defp resolve_local(%Date{} = date, %Time{} = time, tz) do
+    case DateTime.from_naive(NaiveDateTime.new!(date, time), tz) do
+      {:ok, dt} -> to_utc(dt)
+      {:ambiguous, first, _second} -> to_utc(first)
+      {:gap, _just_before, just_after} -> to_utc(just_after)
+      {:error, _} -> nil
+    end
+  end
+
+  defp to_utc(dt), do: dt |> DateTime.shift_zone!("Etc/UTC") |> DateTime.truncate(:second)
+
+  defp check_until(_next, nil), do: :ok
+
+  defp check_until(next, until) when is_binary(until) do
+    case DateTime.from_iso8601(until) do
+      {:ok, u, _} -> if DateTime.compare(next, u) == :gt, do: :exhausted, else: :ok
+      # unparseable until (shouldn't survive Task 6's normalize) → treat as open-ended
+      _ -> :ok
+    end
+  end
+
+  defp check_until(_next, _until), do: :ok
+
   @doc "Upcoming household (shared) reminders only — backs the Shared-scope view."
   def list_household_upcoming do
     now = now()
