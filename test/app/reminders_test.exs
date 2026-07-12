@@ -304,4 +304,152 @@ defmodule App.RemindersTest do
       assert Reminders.find_acknowledged(d, "water plants") == nil
     end
   end
+
+  describe "advance/1" do
+    defp daily_rule(remaining \\ nil) do
+      base = %{"freq" => "daily", "interval" => 1}
+
+      if remaining,
+        do: Map.merge(base, %{"count" => remaining, "remaining" => remaining}),
+        else: base
+    end
+
+    test "a one-shot (nil recurrence) is untouched: :noop, no DB write", %{d: d} do
+      {:ok, r} = Reminders.create(%{body: "one-shot", due_at: at(-60), user_id: d})
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      assert Reminders.advance(fired) == :noop
+
+      reloaded = App.Repo.reload!(fired)
+      assert reloaded.fired_at == fired.fired_at
+      assert reloaded.due_at == fired.due_at
+    end
+
+    test "a recurring row resets fired/delivered/acknowledged, sets the next due_at, decrements remaining",
+         %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{body: "water", due_at: at(-60), user_id: d, recurrence: daily_rule(3)})
+
+      {:ok, fired} = Reminders.mark_fired(r)
+      {:ok, delivered} = Reminders.mark_delivered(fired)
+      {:ok, acked} = Reminders.acknowledge(delivered)
+
+      expected_next = Reminders.next_occurrence(r.due_at, r.recurrence, App.Config.timezone())
+      assert {:ok, %Reminders.Reminder{} = advanced} = Reminders.advance(acked)
+
+      reloaded = App.Repo.reload!(advanced)
+      assert reloaded.due_at == expected_next
+      assert DateTime.compare(reloaded.due_at, DateTime.utc_now()) == :gt
+      assert reloaded.fired_at == nil
+      assert reloaded.delivered_at == nil
+      assert reloaded.acknowledged_at == nil
+      assert reloaded.recurrence["remaining"] == 2
+      assert reloaded.recurrence["count"] == 3
+    end
+
+    test "no count -> remaining stays absent (open-ended series)", %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{body: "bins", due_at: at(-60), user_id: d, recurrence: daily_rule()})
+
+      {:ok, fired} = Reminders.mark_fired(r)
+      assert {:ok, advanced} = Reminders.advance(fired)
+      refute Map.has_key?(advanced.recurrence, "remaining")
+    end
+
+    test "series complete ({:ok, :complete}) leaves the row fired, due_at unchanged", %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{
+          body: "last one",
+          due_at: at(-60),
+          user_id: d,
+          recurrence: daily_rule(1)
+        })
+
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      assert Reminders.advance(fired) == {:ok, :complete}
+
+      reloaded = App.Repo.reload!(fired)
+      assert reloaded.fired_at != nil
+      assert reloaded.due_at == fired.due_at
+    end
+
+    test "advancing is idempotent: a re-call with the same fired struct lands on the same row state",
+         %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{body: "water", due_at: at(-60), user_id: d, recurrence: daily_rule(3)})
+
+      {:ok, fired} = Reminders.mark_fired(r)
+      {:ok, _} = Reminders.advance(fired)
+      # crash-replay simulation: the same pre-advance struct is advanced again
+      {:ok, _} = Reminders.advance(fired)
+
+      reloaded = App.Repo.reload!(fired)
+
+      assert reloaded.due_at ==
+               Reminders.next_occurrence(r.due_at, r.recurrence, App.Config.timezone())
+
+      assert reloaded.recurrence["remaining"] == 2
+    end
+
+    test "advance broadcasts {:reminders_changed} on the owner topic", %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{body: "water", due_at: at(-60), user_id: d, recurrence: daily_rule()})
+
+      {:ok, fired} = Reminders.mark_fired(r)
+      Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{d}")
+
+      {:ok, _} = Reminders.advance(fired)
+      assert_receive {:reminders_changed}
+    end
+  end
+
+  describe "find_active/2" do
+    test "matches a scheduled (unfired) reminder by phrase, own + household", %{d: d, t: t} do
+      {:ok, _} = Reminders.create(%{user_id: d, body: "take out the trash", due_at: at(3600)})
+
+      {:ok, _} =
+        Reminders.create(%{
+          user_id: t,
+          body: "take out the bins",
+          due_at: at(3600),
+          household: true
+        })
+
+      assert Reminders.find_active(d, "trash").body == "take out the trash"
+      assert Reminders.find_active(d, "bins").body == "take out the bins"
+      assert Reminders.find_active(d, "nonexistent") == nil
+    end
+
+    test "matches a RECURRING reminder even while fired (mid-delivery)", %{d: d} do
+      {:ok, r} =
+        Reminders.create(%{
+          user_id: d,
+          body: "water the tomatoes",
+          due_at: at(-60),
+          recurrence: %{"freq" => "daily", "interval" => 3}
+        })
+
+      {:ok, _} = Reminders.mark_fired(r)
+      assert Reminders.find_active(d, "tomatoes").id == r.id
+    end
+
+    test "does NOT match a fired one-shot (that's find_pending's territory)", %{d: d} do
+      {:ok, r} = Reminders.create(%{user_id: d, body: "call mom", due_at: at(-60)})
+      {:ok, _} = Reminders.mark_fired(r)
+      assert Reminders.find_active(d, "call mom") == nil
+    end
+
+    test "does not match another user's personal reminder; blank phrase is nil", %{d: d, t: t} do
+      {:ok, _} = Reminders.create(%{user_id: t, body: "theirs", due_at: at(3600)})
+      assert Reminders.find_active(d, "theirs") == nil
+      assert Reminders.find_active(d, "   ") == nil
+    end
+
+    test "soonest due wins when several match", %{d: d} do
+      {:ok, _} = Reminders.create(%{user_id: d, body: "water the ferns", due_at: at(7200)})
+      {:ok, soon} = Reminders.create(%{user_id: d, body: "water the tomatoes", due_at: at(3600)})
+      assert Reminders.find_active(d, "water").id == soon.id
+    end
+  end
 end

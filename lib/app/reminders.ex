@@ -253,6 +253,81 @@ defmodule App.Reminders do
 
   defp check_until(_next, _until), do: :ok
 
+  @doc """
+  Advance a RECURRING reminder to its next occurrence (called by the scheduler after
+  fire + deliver). nil recurrence → :noop (a one-shot is untouched — the additive invariant).
+  Series exhausted → {:ok, :complete}: the row stays fired and drops out of the schedule
+  naturally. Otherwise the SAME row is reset — due_at = next, fired/delivered/acknowledged
+  cleared, remaining decremented when count is set — and {:reminders_changed} is broadcast.
+  Idempotent: next is recomputed from the struct's own due_at, so replaying an advance on the
+  same fired struct converges on the same row state (the crash-between-fire-and-advance story).
+  """
+  def advance(%Reminder{recurrence: nil}), do: :noop
+
+  def advance(%Reminder{} = r) do
+    case next_occurrence(r.due_at, r.recurrence, App.Config.timezone()) do
+      nil ->
+        {:ok, :complete}
+
+      %DateTime{} = next ->
+        case r
+             |> Reminder.changeset(%{
+               due_at: next,
+               fired_at: nil,
+               delivered_at: nil,
+               acknowledged_at: nil,
+               recurrence: decrement_remaining(r.recurrence)
+             })
+             |> Repo.update() do
+          {:ok, updated} ->
+            broadcast_changed(updated.user_id, updated.household)
+            {:ok, updated}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  defp decrement_remaining(%{"count" => c} = rule) when is_integer(c) do
+    Map.update(rule, "remaining", c - 1, fn
+      n when is_integer(n) -> n - 1
+      _ -> c - 1
+    end)
+  end
+
+  defp decrement_remaining(rule), do: rule
+
+  @doc """
+  The user's best-matching ACTIVE reminder for a spoken phrase — scheduled (not yet fired) OR
+  recurring (any state, so a series is findable even mid-delivery), own OR household. Same
+  containment matching as `find_pending/2`; soonest due wins ties. Backs cancel_reminder
+  ("stop reminding me about the bins") and the recurring-ack read-back. nil when nothing matches.
+  """
+  def find_active(user_id, phrase) when is_binary(phrase) do
+    p = phrase |> String.downcase() |> String.trim()
+
+    if p == "" do
+      nil
+    else
+      Reminder
+      |> where(
+        [r],
+        (r.user_id == ^user_id or r.household == true) and
+          (is_nil(r.fired_at) or not is_nil(r.recurrence))
+      )
+      |> Repo.all()
+      |> Enum.filter(fn r ->
+        b = String.downcase(r.body)
+        String.contains?(b, p) or String.contains?(p, b)
+      end)
+      |> Enum.sort_by(& &1.due_at, {:asc, DateTime})
+      |> List.first()
+    end
+  end
+
+  def find_active(_user_id, _phrase), do: nil
+
   @doc "Upcoming household (shared) reminders only — backs the Shared-scope view."
   def list_household_upcoming do
     now = now()
