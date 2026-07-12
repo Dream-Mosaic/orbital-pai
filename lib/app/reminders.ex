@@ -256,16 +256,31 @@ defmodule App.Reminders do
   @doc """
   Advance a RECURRING reminder to its next occurrence (called by the scheduler after
   fire + deliver). nil recurrence → :noop (a one-shot is untouched — the additive invariant).
-  Series exhausted → {:ok, :complete}: the row stays fired and drops out of the schedule
-  naturally. Otherwise the SAME row is reset — due_at = next, fired/delivered/acknowledged
-  cleared, remaining decremented when count is set — and {:reminders_changed} is broadcast.
-  Idempotent: next is recomputed from the struct's own due_at, so replaying an advance on the
-  same fired struct converges on the same row state (the crash-between-fire-and-advance story).
-  """
-  def advance(%Reminder{recurrence: nil}), do: :noop
 
-  def advance(%Reminder{} = r) do
-    case next_occurrence(r.due_at, r.recurrence, App.Config.timezone()) do
+  Fast-forwards past any occurrences that were missed ENTIRELY during downtime (the app was
+  down longer than the recurrence interval — e.g. a daily reminder while the kiosk was off for
+  days): repeatedly steps `next_occurrence` until it lands strictly after `now`, so a stale
+  reminder delivers ONCE (the overdue occurrence the scheduler already fired this tick) and then
+  resumes on its normal future schedule — no catch-up storm of one delivery per scheduler tick.
+  When the very next occurrence is already in the future (the common case — no downtime), this
+  is exactly today's single-step behavior.
+
+  Series exhausted, or fast-forwarding runs the series past `until` → {:ok, :complete}: the row
+  stays fired and drops out of the schedule naturally. Otherwise the SAME row is reset — due_at
+  = the first future occurrence, fired/delivered/acknowledged cleared, remaining decremented
+  ONCE (skipped occurrences were never delivered, so they never consume count/remaining) — and
+  {:reminders_changed} is broadcast. Idempotent: next is recomputed from the struct's own
+  due_at, so replaying an advance on the same fired struct converges on the same row state
+  (the crash-between-fire-and-advance story).
+
+  `now` is injectable for deterministic tests; defaults to the real clock.
+  """
+  def advance(reminder, now \\ DateTime.utc_now())
+
+  def advance(%Reminder{recurrence: nil}, _now), do: :noop
+
+  def advance(%Reminder{} = r, %DateTime{} = now) do
+    case catch_up(r.due_at, r.recurrence, App.Config.timezone(), now) do
       nil ->
         {:ok, :complete}
 
@@ -285,6 +300,28 @@ defmodule App.Reminders do
 
           other ->
             other
+        end
+    end
+  end
+
+  # Step `next_occurrence` forward from `due_at`, skipping any occurrence that is still `<= now`
+  # (missed entirely during downtime), until the first one strictly after `now` — or nil if the
+  # series completes/exhausts along the way (next_occurrence returns nil: past `until`, or count
+  # exhausted). The rule is threaded through UNCHANGED at every hop — skipped occurrences were
+  # never delivered, so they must not consume count/remaining; only the caller's single
+  # post-catch-up `decrement_remaining` does. Defensively terminates if a hop ever failed to move
+  # time forward (next_occurrence always strictly advances in practice, but this keeps the loop
+  # provably finite rather than relying on that).
+  defp catch_up(due_at, rule, tz, now) do
+    case next_occurrence(due_at, rule, tz) do
+      nil ->
+        nil
+
+      %DateTime{} = next ->
+        cond do
+          DateTime.compare(next, now) == :gt -> next
+          DateTime.compare(next, due_at) != :gt -> next
+          true -> catch_up(next, rule, tz, now)
         end
     end
   end

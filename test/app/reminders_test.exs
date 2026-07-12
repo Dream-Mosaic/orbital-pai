@@ -404,6 +404,104 @@ defmodule App.RemindersTest do
     end
   end
 
+  describe "advance/2 catch-up (no re-fire storm after downtime)" do
+    test "normal case is unchanged: when the next occurrence is already future, one step + decrement",
+         %{d: d} do
+      due_at = at(-60)
+      rule = daily_rule(3)
+      {:ok, r} = Reminders.create(%{body: "water", due_at: due_at, user_id: d, recurrence: rule})
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      tz = App.Config.timezone()
+      expected_next = Reminders.next_occurrence(due_at, rule, tz)
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert {:ok, advanced} = Reminders.advance(fired, now)
+      assert advanced.due_at == expected_next
+      assert DateTime.compare(advanced.due_at, now) == :gt
+      assert advanced.recurrence["remaining"] == 2
+    end
+
+    test "one-shot (nil recurrence) is still :noop with an explicit now argument", %{d: d} do
+      {:ok, r} = Reminders.create(%{body: "one-shot", due_at: at(-60), user_id: d})
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      assert Reminders.advance(fired, DateTime.utc_now()) == :noop
+    end
+
+    test "multi-day downtime: fast-forwards past missed occurrences to the first future one (open-ended)",
+         %{d: d} do
+      due_at = at(-10 * 86_400)
+      rule = daily_rule()
+      {:ok, r} = Reminders.create(%{body: "bins", due_at: due_at, user_id: d, recurrence: rule})
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      tz = App.Config.timezone()
+      hop1 = Reminders.next_occurrence(due_at, rule, tz)
+      hop2 = Reminders.next_occurrence(hop1, rule, tz)
+      hop3 = Reminders.next_occurrence(hop2, rule, tz)
+      hop4 = Reminders.next_occurrence(hop3, rule, tz)
+
+      # "now" lands after hop1, hop2, hop3 (all missed entirely) but before hop4.
+      now = DateTime.add(hop3, 3600, :second)
+
+      assert {:ok, advanced} = Reminders.advance(fired, now)
+      assert advanced.due_at == hop4
+      assert DateTime.compare(advanced.due_at, now) == :gt
+      assert advanced.fired_at == nil
+      assert advanced.delivered_at == nil
+      assert advanced.acknowledged_at == nil
+    end
+
+    test "multi-day downtime preserves count: skipped occurrences do not consume remaining, only the real delivery does",
+         %{d: d} do
+      due_at = at(-10 * 86_400)
+      rule = daily_rule(5)
+      {:ok, r} = Reminders.create(%{body: "water", due_at: due_at, user_id: d, recurrence: rule})
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      tz = App.Config.timezone()
+      hop1 = Reminders.next_occurrence(due_at, rule, tz)
+      hop2 = Reminders.next_occurrence(hop1, rule, tz)
+      hop3 = Reminders.next_occurrence(hop2, rule, tz)
+
+      # "now" lands after hop1 and hop2 (both missed) but before hop3 — two occurrences skipped.
+      now = DateTime.add(hop2, 3600, :second)
+
+      assert {:ok, advanced} = Reminders.advance(fired, now)
+      assert advanced.due_at == hop3
+      # only ONE real delivery happened (the one the scheduler already fired) — remaining drops
+      # by exactly 1, NOT by 3 (the two skips + the one delivery).
+      assert advanced.recurrence["remaining"] == 4
+      assert advanced.recurrence["count"] == 5
+    end
+
+    test "catch-up that runs past `until` leaves the row fired (series complete)", %{d: d} do
+      due_at = at(-10 * 86_400)
+      tz = App.Config.timezone()
+      base_rule = %{"freq" => "daily", "interval" => 1}
+      hop1 = Reminders.next_occurrence(due_at, base_rule, tz)
+
+      # `until` is set to exactly hop1 — the occurrence AFTER hop1 falls outside the series.
+      rule = Map.put(base_rule, "until", DateTime.to_iso8601(hop1))
+
+      {:ok, r} =
+        Reminders.create(%{body: "trash day", due_at: due_at, user_id: d, recurrence: rule})
+
+      {:ok, fired} = Reminders.mark_fired(r)
+
+      # "now" is after hop1 (so hop1 is a missed occurrence needing a skip), which forces the
+      # fast-forward to probe the occurrence after hop1 — the one that falls past `until`.
+      now = DateTime.add(hop1, 3600, :second)
+
+      assert Reminders.advance(fired, now) == {:ok, :complete}
+
+      reloaded = App.Repo.reload!(fired)
+      assert reloaded.fired_at != nil
+      assert reloaded.due_at == fired.due_at
+    end
+  end
+
   describe "find_active/2" do
     test "matches a scheduled (unfired) reminder by phrase, own + household", %{d: d, t: t} do
       {:ok, _} = Reminders.create(%{user_id: d, body: "take out the trash", due_at: at(3600)})
