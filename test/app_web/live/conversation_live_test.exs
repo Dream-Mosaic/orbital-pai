@@ -83,6 +83,7 @@ defmodule AppWeb.ConversationLiveTest do
           {"memory", "Memory"},
           {"reminders", "Reminders"},
           {"lists", "Lists"},
+          {"garden", "Garden"},
           {"connectors", "Connectors"},
           {"settings", "Settings"}
         ] do
@@ -267,6 +268,99 @@ defmodule AppWeb.ConversationLiveTest do
     App.Lists.broadcast_changed(list.user_id, true)
 
     assert render(lv) =~ "Groceries"
+  end
+
+  defp garden_plant!(user, attrs) do
+    {:ok, plant} =
+      %App.Garden.Plant{}
+      |> App.Garden.Plant.changeset(Map.merge(%{user_id: user.id, name: "tomatoes"}, attrs))
+      |> App.Repo.insert()
+
+    plant
+  end
+
+  test "garden modal: shows active plants with meta and the shared badge", %{
+    conn: conn,
+    user: user
+  } do
+    garden_plant!(user, %{
+      name: "tomatoes",
+      location: "back bed",
+      count: 5,
+      household: true,
+      planted_on: ~D[2026-07-11]
+    })
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+
+    assert html =~ "tomatoes"
+    assert html =~ "back bed"
+    assert html =~ "shared"
+  end
+
+  test "garden modal: the add-note form logs a check-in", %{conn: conn, user: user} do
+    plant = garden_plant!(user, %{name: "basil"})
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+
+    html =
+      lv
+      |> form(~s(form[phx-submit="add_plant_note"]), %{
+        "plant_id" => plant.id,
+        "body" => "looking leggy"
+      })
+      |> render_submit()
+
+    assert html =~ "looking leggy"
+
+    [loaded] = App.Garden.garden(user.id).active
+    assert [%{body: "looking leggy"}] = loaded.notes
+  end
+
+  test "archiving a plant from the panel moves it to Past seasons", %{conn: conn, user: user} do
+    plant = garden_plant!(user, %{name: "basil"})
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+
+    html = lv |> element(~s|button[phx-click="archive_plant"]|) |> render_click()
+
+    assert html =~ "Past seasons"
+    assert App.Repo.get!(App.Garden.Plant, plant.id).status == "archived"
+  end
+
+  test "reviving an archived plant returns it to active", %{conn: conn, user: user} do
+    plant =
+      garden_plant!(user, %{
+        name: "basil",
+        status: "archived",
+        season: "2025",
+        archived_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    assert render(lv) =~ "2025"
+
+    lv |> element(~s|button[phx-click="revive_plant"]|) |> render_click()
+
+    assert App.Repo.get!(App.Garden.Plant, plant.id).status == "active"
+    refute render(lv) =~ "Past seasons"
+  end
+
+  test "a household plant's change from elsewhere refreshes the panel via garden:household", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, lv, _html} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+
+    plant = garden_plant!(user, %{name: "peppers", household: true})
+    App.Garden.broadcast_changed(plant.user_id, true)
+
+    assert render(lv) =~ "peppers"
   end
 
   defp google_account(attrs) do

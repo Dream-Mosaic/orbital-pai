@@ -61,6 +61,7 @@ defmodule AppWeb.VoiceModals do
   defp modal_title(:memory), do: "Memory"
   defp modal_title(:reminders), do: "Reminders"
   defp modal_title(:lists), do: "Lists"
+  defp modal_title(:garden), do: "Garden"
   defp modal_title(:connectors), do: "Connectors"
   defp modal_title(:settings), do: "Settings"
   defp modal_title(_), do: ""
@@ -199,6 +200,112 @@ defmodule AppWeb.VoiceModals do
 
   defp sorted_items(list), do: Enum.sort_by(list.items, &(&1.checked_at != nil))
   defp done_count(list), do: Enum.count(list.items, &(&1.checked_at != nil))
+
+  @doc """
+  Garden modal contents: Active plant cards (name, meta line, latest note expandable to the
+  full check-in log, an add-note field, an Archive button) + a collapsible Past Seasons
+  section grouped by season, read-only with a Revive action. Household plants get the shared
+  badge (same accent-badge as lists/reminders). Season close-out is voice-only in v1.
+  """
+  attr :garden, :map, required: true
+
+  def garden_panel(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <div
+        :for={plant <- @garden.active}
+        class="space-y-2 rounded-box border border-base-300 p-3"
+      >
+        <div class="flex items-center gap-2">
+          <span class="flex-1 font-semibold">{plant.name}</span>
+          <span :if={plant.household} class="badge badge-sm badge-accent">shared</span>
+          <button
+            class="btn btn-ghost btn-xs"
+            phx-click="archive_plant"
+            phx-value-id={plant.id}
+            data-confirm={"Move #{plant.name} to past seasons?"}
+          >
+            Archive
+          </button>
+        </div>
+
+        <p :if={plant_meta(plant) != ""} class="text-xs opacity-60">{plant_meta(plant)}</p>
+
+        <details :if={plant.notes != []} class="text-sm">
+          <summary class="cursor-pointer opacity-70">{latest_note_line(plant)}</summary>
+          <ul class="mt-1 space-y-1">
+            <li :for={note <- plant.notes} class="flex items-center gap-2">
+              <span class="flex-1">{note.body}</span>
+              <span class="text-xs opacity-60 font-mono">{fmt_noted(note)}</span>
+            </li>
+          </ul>
+        </details>
+
+        <form phx-submit="add_plant_note" class="flex gap-2">
+          <input type="hidden" name="plant_id" value={plant.id} />
+          <input
+            type="text"
+            name="body"
+            value=""
+            placeholder={"Check in on #{plant.name}…"}
+            class="input input-bordered input-sm flex-1"
+          />
+          <button class="btn btn-sm" type="submit">Note</button>
+        </form>
+      </div>
+
+      <p :if={@garden.active == []} class="text-sm opacity-50">
+        Nothing growing yet — just say what you planted.
+      </p>
+
+      <details :if={@garden.archived_by_season != %{}}>
+        <summary class="cursor-pointer text-sm font-semibold opacity-70">Past seasons</summary>
+        <div
+          :for={{season, plants} <- seasons_desc(@garden.archived_by_season)}
+          class="mt-2 space-y-1"
+        >
+          <label class="text-xs opacity-60">{season}</label>
+          <ul class="space-y-1">
+            <li :for={plant <- plants} class="flex items-center gap-2">
+              <span class="flex-1 opacity-70">{plant.name}</span>
+              <span :if={plant.household} class="badge badge-sm badge-accent">shared</span>
+              <button class="btn btn-ghost btn-xs" phx-click="revive_plant" phx-value-id={plant.id}>
+                Revive
+              </button>
+            </li>
+          </ul>
+        </div>
+      </details>
+    </div>
+    """
+  end
+
+  # most recent season first ("Summer 2026" and "2026" sort fine as strings within a year;
+  # exact cross-format ordering is cosmetic)
+  defp seasons_desc(by_season), do: Enum.sort_by(by_season, fn {season, _} -> season end, :desc)
+
+  # "Roma · back bed · 5 plants · planted Jul 11" — only the fields that exist.
+  defp plant_meta(plant) do
+    [
+      plant.species,
+      plant.location,
+      plant.count && "#{plant.count} plants",
+      plant.planted_on && "planted #{Calendar.strftime(plant.planted_on, "%b %-d")}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+  end
+
+  # notes come preloaded oldest-first (Garden.garden/1), so the latest is the last.
+  defp latest_note_line(plant) do
+    case List.last(plant.notes) do
+      nil -> "Notes"
+      note -> note.body
+    end
+  end
+
+  defp fmt_noted(%{noted_on: %Date{} = d}), do: Calendar.strftime(d, "%b %-d")
+  defp fmt_noted(%{inserted_at: dt}), do: Calendar.strftime(dt, "%b %-d")
 
   @doc "Connectors modal contents: Google connection rows + inline grant step when @grant is set."
   attr :google_accounts, :list, required: true

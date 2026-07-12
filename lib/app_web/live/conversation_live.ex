@@ -11,6 +11,7 @@ defmodule AppWeb.ConversationLive do
   alias App.Memory
   alias App.Reminders
   alias App.Lists
+  alias App.Garden
   alias App.Google.Accounts, as: GoogleAccounts
   alias App.Google.Connectors
 
@@ -39,6 +40,8 @@ defmodule AppWeb.ConversationLive do
       Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
       Phoenix.PubSub.subscribe(App.PubSub, "lists:#{sid}")
       Phoenix.PubSub.subscribe(App.PubSub, "lists:household")
+      Phoenix.PubSub.subscribe(App.PubSub, "garden:#{sid}")
+      Phoenix.PubSub.subscribe(App.PubSub, "garden:household")
       Phoenix.PubSub.subscribe(App.PubSub, "presence:voice")
       if kiosk, do: send(self(), :refresh_ambient)
     end
@@ -70,6 +73,7 @@ defmodule AppWeb.ConversationLive do
      |> load_memory()
      |> load_reminders()
      |> load_lists()
+     |> load_garden()
      |> load_google_accounts()}
   end
 
@@ -135,7 +139,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders lists connectors settings)a
+  @valid_modals ~w(memory reminders lists garden connectors settings)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -218,6 +222,46 @@ defmodule AppWeb.ConversationLive do
     end
 
     {:noreply, load_lists(socket)}
+  end
+
+  def handle_event("add_plant_note", %{"plant_id" => plant_id, "body" => body}, socket) do
+    body = String.trim(body)
+    plant_id = String.to_integer(plant_id)
+
+    if body != "" do
+      case Enum.find(socket.assigns.garden.active, &(&1.id == plant_id)) do
+        nil -> :ok
+        plant -> Garden.add_note(plant, body)
+      end
+    end
+
+    {:noreply, load_garden(socket)}
+  end
+
+  def handle_event("archive_plant", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    case Enum.find(socket.assigns.garden.active, &(&1.id == id)) do
+      nil -> :ok
+      plant -> Garden.archive_plant(plant)
+    end
+
+    {:noreply, load_garden(socket)}
+  end
+
+  def handle_event("revive_plant", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    archived =
+      socket.assigns.garden.archived_by_season
+      |> Enum.flat_map(fn {_season, plants} -> plants end)
+
+    case Enum.find(archived, &(&1.id == id)) do
+      nil -> :ok
+      plant -> Garden.revive_plant(plant)
+    end
+
+    {:noreply, load_garden(socket)}
   end
 
   def handle_event("disconnect_connection", %{"account" => id, "connector" => connector}, socket) do
@@ -353,6 +397,10 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_lists(socket)}
   end
 
+  def handle_info({:garden_changed}, socket) do
+    {:noreply, load_garden(socket)}
+  end
+
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
     do: {:noreply, assign(socket, present: present_list())}
 
@@ -430,6 +478,10 @@ defmodule AppWeb.ConversationLive do
 
   defp load_lists(socket) do
     assign(socket, lists: Lists.list_visible(socket.assigns.current_user.id))
+  end
+
+  defp load_garden(socket) do
+    assign(socket, garden: Garden.garden(socket.assigns.current_user.id))
   end
 
   defp find_list_item(socket, id) do
@@ -595,6 +647,15 @@ defmodule AppWeb.ConversationLive do
               <button
                 type="button"
                 phx-click="open_modal"
+                phx-value-modal="garden"
+                aria-label="Garden"
+                class="sbtn"
+              >
+                <.icon name="hero-sun" class="size-4" />
+              </button>
+              <button
+                type="button"
+                phx-click="open_modal"
                 phx-value-modal="connectors"
                 aria-label="Connectors"
                 class="sbtn"
@@ -748,6 +809,15 @@ defmodule AppWeb.ConversationLive do
           <button
             type="button"
             phx-click="open_modal"
+            phx-value-modal="garden"
+            class="nbtn"
+            title="Garden"
+          >
+            <.icon name="hero-sun" class="size-5" /><span class="nlabel">Garden</span>
+          </button>
+          <button
+            type="button"
+            phx-click="open_modal"
             phx-value-modal="connectors"
             class="nbtn"
             title="Connectors"
@@ -765,6 +835,8 @@ defmodule AppWeb.ConversationLive do
             <.reminders_panel due={@due} upcoming={@upcoming} />
           <% :lists -> %>
             <.lists_panel lists={@lists} />
+          <% :garden -> %>
+            <.garden_panel garden={@garden} />
           <% :connectors -> %>
             <.connectors_panel google_accounts={@google_accounts} grant={@grant} />
           <% :settings -> %>
