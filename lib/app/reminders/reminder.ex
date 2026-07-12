@@ -1,5 +1,12 @@
 defmodule App.Reminders.Reminder do
-  @moduledoc "A one-shot reminder: fire `body` at `due_at`; `fired_at` stamps delivery (the dedupe guard)."
+  @moduledoc """
+  A reminder: fire `body` at `due_at`; `fired_at` stamps delivery (the dedupe guard).
+  `recurrence` nil = one-shot (unchanged legacy behavior). Present = the repeat rule
+  (string-keyed, JSON in SQLite): %{"freq" => "daily"|"weekly"|"monthly"|"yearly",
+  "interval" => n, "byday" => ["tue"], "until" => iso8601 | nil, "count" => n | nil,
+  "remaining" => n | nil}. The rule is read only when advancing (never in a WHERE clause);
+  it is validated at the tool seam, so the changeset casts it permissively.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -15,6 +22,7 @@ defmodule App.Reminders.Reminder do
     field :context, :string
     field :household, :boolean, default: false
     field :delivered_at, :utc_datetime
+    field :recurrence, :map
     timestamps(type: :utc_datetime)
   end
 
@@ -27,7 +35,8 @@ defmodule App.Reminders.Reminder do
     :kind,
     :context,
     :household,
-    :delivered_at
+    :delivered_at,
+    :recurrence
   ]
 
   def changeset(reminder, attrs) do

@@ -112,6 +112,21 @@ defmodule App.RemindersTest do
     assert Enum.any?(Reminders.list_unacknowledged(delivered.user_id), &(&1.id == delivered.id))
   end
 
+  test "recurrence persists as a string-keyed map; a plain create stays nil (one-shot unchanged)",
+       %{d: d} do
+    {:ok, plain} = Reminders.create(%{body: "one-shot", due_at: at(3600), user_id: d})
+    assert plain.recurrence == nil
+    assert App.Repo.reload!(plain).recurrence == nil
+
+    rule = %{"freq" => "daily", "interval" => 3, "count" => 5, "remaining" => 5}
+    {:ok, r} = Reminders.create(%{body: "water", due_at: at(3600), user_id: d, recurrence: rule})
+
+    reloaded = App.Repo.reload!(r)
+    assert reloaded.recurrence == rule
+    # JSON round-trip: keys stay strings, ints stay ints
+    assert reloaded.recurrence["interval"] === 3
+  end
+
   test "create requires a user_id" do
     assert {:error, %Ecto.Changeset{} = cs} = Reminders.create(%{body: "b", due_at: at(60)})
     assert %{user_id: ["can't be blank"]} = errors_on(cs)
