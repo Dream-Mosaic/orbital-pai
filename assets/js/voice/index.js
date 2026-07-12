@@ -13,6 +13,15 @@ import DOMPurify from "dompurify"
 // Single newlines → <br> (the brain often uses them); CommonMark defaults otherwise.
 marked.setOptions({ breaks: true })
 
+// Mic-frame watchdog. The capture AudioContext/worklet can be suspended when the WebView is
+// backgrounded (Fully Kiosk screensaver, WebView power throttling) — the worklet stops firing, so
+// the mic goes silent while the Phoenix channel stays connected (green dot). Voice activation then
+// dies with NO server-side trace until a full page reload. We stamp the last worklet frame; if
+// we're meant to be streaming but nothing has landed in MIC_STALL_MS, the pipeline is dead →
+// resume-or-rebuild it. Healthy frames arrive every ~8ms, so this only ever trips on a real stall.
+const MIC_WATCHDOG_INTERVAL_MS = 2000
+const MIC_STALL_MS = 4000
+
 // getUserMedia fails silently otherwise (power just bounces off). Map the common DOMException
 // names to a plain-language caption so a stuck/blocked mic is obvious instead of a mystery —
 // NotReadable/Abort = another app is holding the mic (a phone reboot frees it).
@@ -65,6 +74,16 @@ export const Voice = {
     this.playback = new Playback(this.ttsSampleRate)
     this.capture = null
     this.talking = false
+    // Mic-frame watchdog state (see MIC_STALL_MS). `onMicFrame` is the single worklet-frame
+    // callback, reused by startTalking() and the watchdog rebuild; it stamps liveness on EVERY
+    // frame (not just pushed ones) so the watchdog measures the mic itself, not PTT gating.
+    this.lastFrameAt = 0
+    this.micWatchdog = null
+    this.rebuildingCapture = false
+    this.onMicFrame = (pcm16) => {
+      this.lastFrameAt = performance.now()
+      if (!this.pttEnabled || this.pttHeld) this.channel.push("audio", pcm16)
+    }
     // Orb-state inputs — see resolveOrbState(): wakeLocked (screen asleep on the wall) and
     // turnState (what the current conversation turn is doing) are the two things that decide
     // what the orb shows; every writer below sets one of these then calls applyOrbState().
@@ -289,10 +308,24 @@ export const Voice = {
     }
     document.addEventListener("keydown", this.onKeyDown)
     document.addEventListener("keyup", this.onKeyUp)
+
+    // When the WebView returns to the foreground (Fully Kiosk waking the screen), nudge a merely
+    // suspended capture context to resume; if that isn't enough (mic track ended), checkMicHealth
+    // hands off to the watchdog rebuild. Belt-and-suspenders: some kiosk screensavers suspend the
+    // context without ever firing visibilitychange — the periodic watchdog covers that case.
+    this.onVisibility = () => {
+      if (document.visibilityState === "visible" && this.talking && this.capture) {
+        Promise.resolve(this.capture.resume?.()).catch(() => {})
+        this.checkMicHealth()
+      }
+    }
+    document.addEventListener("visibilitychange", this.onVisibility)
   },
 
   destroyed() {
     if (this.kioskClockTimer) clearInterval(this.kioskClockTimer)
+    this.stopMicWatchdog()
+    if (this.onVisibility) document.removeEventListener("visibilitychange", this.onVisibility)
     this.stopTalking()
     if (this.orb) this.orb.stop()
     if (this.playback) this.playback.close()
@@ -324,10 +357,10 @@ export const Voice = {
     this.setCaption("") // clear any prior mic-error message on retry
     this.playback.resume()
     try {
-      this.capture = await startCapture(this.sttSampleRate, (pcm16) => {
-        if (!this.pttEnabled || this.pttHeld) this.channel.push("audio", pcm16)
-      })
+      this.capture = await startCapture(this.sttSampleRate, this.onMicFrame)
       this.orb.setSources({ mic: this.capture.analyser, playback: this.playback.analyser })
+      this.lastFrameAt = performance.now()
+      this.startMicWatchdog()
     } catch (err) {
       this.talking = false
       this.setPower(false)
@@ -382,6 +415,7 @@ export const Voice = {
 
   stopTalking() {
     this.talking = false
+    this.stopMicWatchdog()
     this.setPower(false)
     this.setCaption("")
     this.clearThinking()
@@ -392,6 +426,53 @@ export const Voice = {
     }
     this.orb.setSources({ mic: null, playback: this.playback.analyser })
     this.playback.stop()
+  },
+
+  startMicWatchdog() {
+    this.stopMicWatchdog()
+    this.micWatchdog = setInterval(() => this.checkMicHealth(), MIC_WATCHDOG_INTERVAL_MS)
+  },
+
+  stopMicWatchdog() {
+    if (this.micWatchdog) {
+      clearInterval(this.micWatchdog)
+      this.micWatchdog = null
+    }
+  },
+
+  // Runs on each watchdog tick (and on foreground). If we should be streaming but the worklet has
+  // gone silent past MIC_STALL_MS — or capture is missing after a failed rebuild — the context was
+  // suspended/killed while backgrounded; rebuild so voice activation survives an idle screensaver
+  // without a page reload. Guards on `talking` (idle/off never trips) and re-entry.
+  checkMicHealth() {
+    if (!this.talking || this.rebuildingCapture) return
+    const stale = !this.capture || performance.now() - this.lastFrameAt > MIC_STALL_MS
+    if (!stale) return
+    const age = this.capture ? `${Math.round(performance.now() - this.lastFrameAt)}ms` : "no capture"
+    console.warn(`[mic] watchdog: mic stalled (${age}) — rebuilding capture`)
+    this.rebuildCapture()
+  },
+
+  // Tear down the dead capture graph and stand up a fresh one (new getUserMedia + AudioContext).
+  // Fully Kiosk pre-grants the mic, so this needs no tap. Re-entry-guarded; on failure `capture`
+  // stays null and the watchdog retries on its next tick.
+  async rebuildCapture() {
+    if (this.rebuildingCapture) return
+    this.rebuildingCapture = true
+    try {
+      if (this.capture) {
+        this.capture.stop()
+        this.capture = null
+      }
+      this.capture = await startCapture(this.sttSampleRate, this.onMicFrame)
+      this.orb.setSources({ mic: this.capture.analyser, playback: this.playback.analyser })
+      this.lastFrameAt = performance.now()
+      console.info("[mic] watchdog: capture rebuilt")
+    } catch (err) {
+      console.error("[mic] watchdog: rebuild failed:", err)
+    } finally {
+      this.rebuildingCapture = false
+    }
   },
 
   // The orange "you" caption inside the Orb. Scales DOWN as it grows (mockup: "scales as it gets

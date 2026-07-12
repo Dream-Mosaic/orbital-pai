@@ -64,6 +64,13 @@ export async function startCapture(targetRate, onFrame) {
 
     return {
       analyser,
+      // Resume a context the browser suspended while backgrounded (Fully Kiosk screensaver /
+      // WebView power throttling) — the worklet stops firing while suspended, so no frames flow.
+      // No-op when already running. If the mic track was fully ENDED (not just suspended) this
+      // won't restore frames; the hook's frame-watchdog rebuilds capture in that case.
+      resume() {
+        return ctx.state === "suspended" ? ctx.resume() : Promise.resolve()
+      },
       stop() {
         node.disconnect()
         source.disconnect()
