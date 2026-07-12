@@ -54,6 +54,8 @@ defmodule App.Reminders.Scheduler do
             App.Agenda.deliver(fired.user_id, App.Agenda.reminder_item(fired))
           end
 
+          maybe_advance(fired)
+
         {:error, reason} ->
           Logger.warning("[reminders] mark_fired failed: #{inspect(reason)}")
       end
@@ -64,6 +66,28 @@ defmodule App.Reminders.Scheduler do
     e ->
       Logger.error("[reminders] tick crashed: #{inspect(e)}")
       :ok
+  end
+
+  # Recurrence: after the current occurrence is fired + handed to delivery, the SAME row
+  # advances to its next due_at (fired/delivered/acknowledged reset) — it re-enters the
+  # schedule and never lingers as "pending", so it never joins the nudge loop. A one-shot
+  # (nil recurrence) is untouched: the guard keeps today's path byte-for-byte identical.
+  # Series complete (next == nil) leaves the row fired — the FINAL occurrence keeps the
+  # one-shot ack lifecycle from here on. Advancing runs for personal AND household rows,
+  # even when a household row found no present listener (the series advances on cadence).
+  defp maybe_advance(%App.Reminders.Reminder{recurrence: nil}), do: :ok
+
+  defp maybe_advance(fired) do
+    case Reminders.advance(fired) do
+      {:ok, :complete} ->
+        Logger.info("[reminders] recurring ##{fired.id} series complete")
+
+      {:ok, %App.Reminders.Reminder{} = next} ->
+        Logger.info("[reminders] recurring ##{fired.id} advanced → next due #{next.due_at}")
+
+      other ->
+        Logger.warning("[reminders] advance failed for ##{fired.id}: #{inspect(other)}")
+    end
   end
 
   defp schedule, do: Process.send_after(self(), :tick, @interval_ms)

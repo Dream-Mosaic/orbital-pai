@@ -39,4 +39,18 @@ defmodule App.Reminders.NudgeTest do
     {:ok, _} = Reminders.acknowledge(r)
     assert Nudge.pull(to_string(uid)) == nil
   end
+
+  test "a delivered recurring reminder never nudges (it advanced)", %{uid: uid} do
+    {:ok, _r} =
+      Reminders.create(%{
+        user_id: uid,
+        body: "water the tomatoes",
+        due_at: ~U[2020-01-01 00:00:00Z],
+        recurrence: %{"freq" => "daily", "interval" => 1}
+      })
+
+    App.Reminders.Scheduler.tick()
+
+    assert Nudge.pull(to_string(uid)) == nil
+  end
 end
