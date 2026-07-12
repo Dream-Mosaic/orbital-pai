@@ -326,4 +326,49 @@ defmodule App.GardenTest do
       assert Repo.get(Note, note.id) == nil
     end
   end
+
+  describe "update_plant/2" do
+    test "edits only the given descriptive fields in place, preserving notes", %{d: d} do
+      {:ok, plant} =
+        Garden.add_plant(%{user_id: d, household: true}, %{
+          name: "tomatoes",
+          location: "back bed",
+          count: 5,
+          planted_on: ~D[2026-05-01]
+        })
+
+      {:ok, _note} = Garden.add_note(plant, "first flowers")
+
+      assert {:ok, updated} =
+               Garden.update_plant(plant, %{planted_on: ~D[2026-05-10], name: "roma tomatoes"})
+
+      assert updated.name == "roma tomatoes"
+      assert updated.planted_on == ~D[2026-05-10]
+      # untouched fields survive
+      assert updated.location == "back bed"
+      assert updated.count == 5
+      # notes preserved — the whole point: editing must NOT be a destructive re-add
+      assert [%{body: "first flowers"}] = Repo.preload(updated, :notes).notes
+    end
+
+    test "ignores non-editable keys (can't change status/ownership here) and broadcasts",
+         %{d: d, t: t} do
+      {:ok, plant} = Garden.add_plant(%{user_id: d, household: true}, %{name: "basil"})
+      Phoenix.PubSub.subscribe(App.PubSub, "garden:#{d}")
+
+      assert {:ok, updated} =
+               Garden.update_plant(plant, %{
+                 species: "genovese",
+                 status: "archived",
+                 household: false,
+                 user_id: t
+               })
+
+      assert updated.species == "genovese"
+      assert updated.status == "active"
+      assert updated.household == true
+      assert updated.user_id == d
+      assert_receive {:garden_changed}
+    end
+  end
 end

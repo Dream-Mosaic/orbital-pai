@@ -176,6 +176,29 @@ defmodule App.Garden do
     end
   end
 
+  # The descriptive fields a plant's owner may edit in place. Lifecycle (status/season/archived_at)
+  # is owned by archive/revive, and ownership (user_id/household) can't be changed here.
+  @editable_fields ~w(name species location count planted_on)a
+
+  @doc """
+  Non-destructively edit a plant's descriptive fields (name/species/location/count/planted_on)
+  IN PLACE — its notes and lifecycle are untouched. `attrs` is ATOM-keyed; only editable keys are
+  applied (defence in depth: a stray status/ownership key is ignored). Broadcasts. This is how to
+  CORRECT a plant instead of remove + re-add, which would destroy its check-in history.
+  """
+  def update_plant(%Plant{} = plant, attrs) do
+    safe = Map.take(attrs, @editable_fields)
+
+    case plant |> Plant.changeset(safe) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_changed(updated.user_id, updated.household)
+        {:ok, updated}
+
+      other ->
+        other
+    end
+  end
+
   @doc "Hard delete (notes cascade). For mistakes — archiving is the normal retirement. Broadcasts."
   def remove_plant(%Plant{} = plant) do
     case Repo.delete(plant) do

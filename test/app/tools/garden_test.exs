@@ -272,7 +272,62 @@ defmodule App.Tools.GardenTest do
     end
   end
 
-  test "declarations expose all six functions with only name required on add_plant" do
+  describe "update_plant" do
+    test "changes only the mentioned fields, keeping notes and the other fields", %{user: user} do
+      {:ok, _} =
+        Tool.execute(
+          "add_plant",
+          %{
+            "name" => "tomatoes",
+            "location" => "back bed",
+            "count" => 5,
+            "planted_on" => "2026-05-01"
+          },
+          ctx(user)
+        )
+
+      plant = App.Garden.find_plant(user.id, "tomatoes")
+      {:ok, _} = App.Garden.add_note(plant, "leggy")
+
+      assert {:ok, result} =
+               Tool.execute(
+                 "update_plant",
+                 %{"plant" => "tomatoes", "planted_on" => "2026-05-10"},
+                 ctx(user)
+               )
+
+      assert result.plant == "tomatoes"
+      assert result.planted_on == "2026-05-10"
+      # fields the user didn't mention survive (no destructive wipe)
+      assert result.location == "back bed"
+      assert result.count == 5
+
+      # and the note is preserved — the reason we edit instead of remove + re-add
+      reloaded = App.Garden.find_plant(user.id, "tomatoes")
+      assert [%{body: "leggy"}] = App.Repo.preload(reloaded, :notes).notes
+    end
+
+    test "an unmatched plant -> benign note", %{user: user} do
+      assert {:ok, %{note: note}} =
+               Tool.execute("update_plant", %{"plant" => "ghost", "count" => 2}, ctx(user))
+
+      assert note =~ "don't see"
+    end
+
+    test "no fields to change -> benign note", %{user: user} do
+      {:ok, _} = Tool.execute("add_plant", %{"name" => "mint"}, ctx(user))
+
+      assert {:ok, %{note: note}} = Tool.execute("update_plant", %{"plant" => "mint"}, ctx(user))
+      assert note =~ "nothing to change"
+    end
+
+    test "no user session -> narrated note", _ctx do
+      assert {:ok, %{note: _}} =
+               Tool.execute("update_plant", %{"plant" => "x", "count" => 1}, no_session())
+    end
+  end
+
+  test "declarations expose all seven functions with only name required on add_plant" do
     decls = Tool.declarations()
     names = Enum.map(decls, & &1.name)
 
@@ -283,10 +338,14 @@ defmodule App.Tools.GardenTest do
                "list_garden",
                "archive_plant",
                "close_season",
-               "remove_plant"
+               "remove_plant",
+               "update_plant"
              ])
 
     add = Enum.find(decls, &(&1.name == "add_plant"))
     assert add.parameters.required == ["name"]
+
+    update = Enum.find(decls, &(&1.name == "update_plant"))
+    assert update.parameters.required == ["plant"]
   end
 end

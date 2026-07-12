@@ -138,6 +138,29 @@ defmodule App.Tools.Garden do
           },
           required: ["plant"]
         }
+      },
+      %{
+        name: "update_plant",
+        description:
+          "Change a plant's existing details IN PLACE (its name, species, location, count, or " <>
+            "planted date) WITHOUT losing its notes/history. Use this to CORRECT or CHANGE a " <>
+            "plant — never remove and re-add it. Matches by name or species; include ONLY the " <>
+            "fields being changed.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            plant: %{type: "string", description: "Which plant to edit, e.g. \"the tomatoes\"."},
+            name: %{type: "string", description: "New name, only if changing it."},
+            species: %{type: "string", description: "New species/variety, only if changing it."},
+            location: %{type: "string", description: "New location, only if changing it."},
+            count: %{type: "integer", description: "New count, only if changing it."},
+            planted_on: %{
+              type: "string",
+              description: "New planting date as ISO (e.g. 2026-05-10), only if changing it."
+            }
+          },
+          required: ["plant"]
+        }
       }
     ]
   end
@@ -264,6 +287,59 @@ defmodule App.Tools.Garden do
   end
 
   def execute("remove_plant", _args, _ctx), do: {:error, :missing_args}
+
+  def execute("update_plant", _args, %{user_id: nil}),
+    do: {:ok, %{note: "no user session — nothing to update"}}
+
+  def execute("update_plant", %{"plant" => phrase} = args, ctx) do
+    case Garden.find_plant(uid(ctx), phrase) do
+      nil ->
+        {:ok, %{note: "I don't see #{phrase} in the garden — nothing to update"}}
+
+      plant ->
+        case update_attrs(args) do
+          empty when empty == %{} ->
+            {:ok, %{note: "nothing to change on #{plant.name}"}}
+
+          attrs ->
+            case Garden.update_plant(plant, attrs) do
+              {:ok, updated} ->
+                {:ok,
+                 %{
+                   plant: updated.name,
+                   species: updated.species,
+                   location: updated.location,
+                   count: updated.count,
+                   planted_on: iso(updated.planted_on),
+                   household: updated.household
+                 }}
+
+              {:error, _} ->
+                {:error, :invalid_plant}
+            end
+        end
+    end
+  end
+
+  def execute("update_plant", _args, _ctx), do: {:error, :missing_args}
+
+  # Build the edit from ONLY the fields the user actually mentioned, so changing (say) the planted
+  # date never nulls out an unmentioned location/count.
+  defp update_attrs(args) do
+    %{}
+    |> put_present(args, "name", :name, & &1)
+    |> put_present(args, "species", :species, & &1)
+    |> put_present(args, "location", :location, & &1)
+    |> put_present(args, "count", :count, & &1)
+    |> put_present(args, "planted_on", :planted_on, &parse_date/1)
+  end
+
+  defp put_present(acc, args, key, field, fun) do
+    case Map.fetch(args, key) do
+      {:ok, val} -> Map.put(acc, field, fun.(val))
+      :error -> acc
+    end
+  end
 
   # notes are preloaded oldest-first, so the latest is the last.
   defp plant_map(plant) do

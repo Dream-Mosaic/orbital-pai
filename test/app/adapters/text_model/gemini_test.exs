@@ -365,6 +365,9 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "list_garden"
     assert prompt =~ "close_season"
     assert prompt =~ "create_reminder"
+    # editing is non-destructive: change details in place, don't remove + re-add (loses notes)
+    assert prompt =~ "update_plant"
+    assert prompt =~ ~r/never remove and re-add/
   end
 
   test "brain prompt teaches garden care coaching: offer care + a reminder, confirm, cleanup on retire" do
