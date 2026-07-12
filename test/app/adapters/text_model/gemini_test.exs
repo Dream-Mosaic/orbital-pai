@@ -392,6 +392,14 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "genuinely can't do yet"
   end
 
+  test "brain prompt teaches repeating reminders (due_at = first occurrence + recurrence) and cancel_reminder" do
+    prompt = Gemini.brain_prompt("Henry")
+    assert prompt =~ "recurrence"
+    assert prompt =~ "FIRST occurrence"
+    assert prompt =~ "cancel_reminder"
+    assert prompt =~ ~r/daily\/weekly\/monthly\/yearly/
+  end
+
   test "home_block teaches find-then-act ONLY when the tool is registered" do
     with_ha = %App.Config{tools: [App.Tools.Weather, App.Tools.HomeAssistant]}
     block = Gemini.home_block(with_ha)
