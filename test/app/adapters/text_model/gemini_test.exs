@@ -364,8 +364,20 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ "note_plant"
     assert prompt =~ "list_garden"
     assert prompt =~ "close_season"
-    # reminders stay the normal reminder flow — no plant-reminder machinery in slice 1
     assert prompt =~ "create_reminder"
+  end
+
+  test "brain prompt teaches garden care coaching: offer care + a reminder, confirm, cleanup on retire" do
+    prompt = Gemini.brain_prompt("Henry")
+    # Henry proactively COACHES on plant care (reverses the old slice-1 "don't invent schedules").
+    assert prompt =~ "coach"
+    # ...but still offer→confirm→create, never unprompted.
+    assert prompt =~ ~r/only create it with create_reminder .* after they say yes/
+    assert prompt =~ "never set a plant reminder unprompted"
+    # conversational cleanup: offer to cancel a retired plant's care reminders.
+    assert prompt =~ ~r/retires a plant.*cancel_reminder/
+    # care basics may be jotted onto the plant card.
+    assert prompt =~ ~r/note the care basics onto the plant with note_plant/
   end
 
   test "brain prompt forbids Henry from acknowledging a reminder on his own (delivery != ack)" do
