@@ -43,6 +43,7 @@ defmodule AppWeb.ConversationLive do
       Phoenix.PubSub.subscribe(App.PubSub, "garden:#{sid}")
       Phoenix.PubSub.subscribe(App.PubSub, "garden:household")
       Phoenix.PubSub.subscribe(App.PubSub, "presence:voice")
+      Phoenix.PubSub.subscribe(App.PubSub, "voice_lock:#{sid}")
       if kiosk, do: send(self(), :refresh_ambient)
     end
 
@@ -74,7 +75,8 @@ defmodule AppWeb.ConversationLive do
      |> load_reminders()
      |> load_lists()
      |> load_garden()
-     |> load_google_accounts()}
+     |> load_google_accounts()
+     |> load_voice_lock()}
   end
 
   @impl true
@@ -139,7 +141,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders lists garden connectors settings)a
+  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -380,6 +382,26 @@ defmodule AppWeb.ConversationLive do
     {:noreply, load_google_accounts(socket)}
   end
 
+  def handle_event("voice_lock_mode", %{"mode" => mode}, socket) do
+    {:ok, user} = App.Speaker.set_mode(socket.assigns.current_user, mode)
+    {:noreply, socket |> assign(current_user: user) |> load_voice_lock()}
+  end
+
+  def handle_event("enroll_record", %{"slot" => slot}, socket) do
+    slot = String.to_integer(to_string(slot))
+    vl = %{socket.assigns.voice_lock | recording_slot: slot, enroll_error: nil}
+    {:noreply, socket |> assign(voice_lock: vl) |> push_event("enroll:record", %{slot: slot})}
+  end
+
+  def handle_event("enroll_status", _params, socket), do: {:noreply, socket}
+
+  def handle_event("enroll_result", %{"slot" => slot, "ok" => ok} = params, socket) do
+    error = if ok, do: nil, else: {slot, "failed: #{params["reason"]}"}
+    socket = load_voice_lock(socket)
+    vl = %{socket.assigns.voice_lock | recording_slot: nil, enroll_error: error}
+    {:noreply, assign(socket, voice_lock: vl)}
+  end
+
   @impl true
   def handle_info(:memory_updated, socket) do
     {:noreply, load_memory(socket)}
@@ -400,6 +422,8 @@ defmodule AppWeb.ConversationLive do
   def handle_info({:garden_changed}, socket) do
     {:noreply, load_garden(socket)}
   end
+
+  def handle_info({:voice_lock_changed}, socket), do: {:noreply, load_voice_lock(socket)}
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket),
     do: {:noreply, assign(socket, present: present_list())}
@@ -497,6 +521,22 @@ defmodule AppWeb.ConversationLive do
 
   defp load_google_accounts(socket) do
     assign(socket, google_accounts: GoogleAccounts.list(socket.assigns.current_user.id))
+  end
+
+  defp load_voice_lock(socket) do
+    user = socket.assigns.current_user
+    prev = socket.assigns[:voice_lock] || %{recording_slot: nil, enroll_error: nil}
+
+    assign(socket,
+      voice_lock: %{
+        mode: user.voice_lock_mode,
+        enrolled_slots: App.Speaker.enrolled_slots(user.id),
+        drops: App.Speaker.recent_drops(user.id),
+        verifier_ready: App.Speaker.verifier().ready?(),
+        recording_slot: prev.recording_slot,
+        enroll_error: prev.enroll_error
+      }
+    )
   end
 
   defp account_by_id(socket, id) do
@@ -852,6 +892,13 @@ defmodule AppWeb.ConversationLive do
               present={@present}
               kiosk={@kiosk}
               switchable_users={@switchable_users}
+            />
+          <% :voice_lock -> %>
+            <.voice_lock_panel
+              vl={@voice_lock}
+              user_token={@user_token}
+              session_id={@session_id}
+              stt_sample_rate={@stt_sample_rate}
             />
           <% _ -> %>
         <% end %>

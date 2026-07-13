@@ -64,6 +64,7 @@ defmodule AppWeb.VoiceModals do
   defp modal_title(:garden), do: "Garden"
   defp modal_title(:connectors), do: "Connectors"
   defp modal_title(:settings), do: "Settings"
+  defp modal_title(:voice_lock), do: "Voice Lock"
   defp modal_title(_), do: ""
 
   @doc "Reminders modal contents: due (needs attention) + upcoming lists, dismiss buttons, and a cadence badge on recurring rows (the ✕ on a recurring row cancels the whole series — the row IS the series)."
@@ -608,6 +609,110 @@ defmodule AppWeb.VoiceModals do
         <h3 class="text-sm font-semibold opacity-70">About</h3>
         <p class="opacity-60">P.A.I v{@app_version}</p>
       </section>
+
+      <section class="space-y-1">
+        <button
+          type="button"
+          phx-click="open_modal"
+          phx-value-modal="voice_lock"
+          class="btn btn-ghost btn-sm w-full justify-between"
+        >
+          Voice Lock <span class="opacity-60">→</span>
+        </button>
+      </section>
+    </div>
+    """
+  end
+
+  @voice_lock_prompts [
+    {1,
+     "Hey Remi, this is my normal speaking voice. I'm going to ask about the weather, my calendar, reminders, and the grocery list, just like I do every day."},
+    {2,
+     "The quick brown fox jumps over the lazy dog, while the five boxing wizards jump quickly over the frozen river behind our house."},
+    {3,
+     "What's on my calendar tomorrow morning? Remind me to water the garden at six, and add milk, eggs, and coffee to the groceries, please."}
+  ]
+
+  @doc "Voice Lock panel: tri-state mode, guided enrollment (3 prompts), recent-drops audit list."
+  attr :vl, :map, required: true
+  attr :user_token, :string, required: true
+  attr :session_id, :string, required: true
+  attr :stt_sample_rate, :integer, required: true
+
+  def voice_lock_panel(assigns) do
+    assigns = assign(assigns, :prompts, @voice_lock_prompts)
+
+    ~H"""
+    <div
+      id="voice-enroll"
+      phx-hook="VoiceEnroll"
+      data-token={@user_token}
+      data-user={@session_id}
+      data-rate={@stt_sample_rate}
+      class="space-y-4"
+    >
+      <p :if={!@vl.verifier_ready} class="alert alert-warning text-sm">
+        Speaker model unavailable — Voice Lock is failing open (everything passes).
+      </p>
+
+      <div class="space-y-1">
+        <label class="text-xs opacity-60">Mode</label>
+        <div class="join w-full">
+          <button
+            :for={m <- ~w(off shadow enforce)}
+            type="button"
+            phx-click="voice_lock_mode"
+            phx-value-mode={m}
+            class={["btn btn-sm join-item flex-1", (@vl.mode == m && "btn-primary") || "btn-ghost"]}
+          >
+            {String.capitalize(m)}
+          </button>
+        </div>
+        <p class="text-xs opacity-60">
+          Shadow scores every turn but blocks nothing — live with it a few days, then enforce.
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <label class="text-xs opacity-60">Enrollment — read each prompt aloud (~10s each)</label>
+        <div :for={{slot, text} <- @prompts} class="rounded-lg border border-base-300 p-3 space-y-2">
+          <p class="text-sm">{text}</p>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              phx-click="enroll_record"
+              phx-value-slot={slot}
+              class="btn btn-xs btn-outline"
+              disabled={@vl.recording_slot != nil}
+            >
+              {(slot in @vl.enrolled_slots && "Re-record") || "Record"}
+            </button>
+            <span :if={@vl.recording_slot == slot} class="text-xs text-warning">recording…</span>
+            <span
+              :if={slot in @vl.enrolled_slots and @vl.recording_slot != slot}
+              class="text-xs text-success"
+            >✓ enrolled</span>
+            <span
+              :if={@vl.enroll_error && elem(@vl.enroll_error, 0) == slot}
+              class="text-xs text-error"
+            >
+              {elem(@vl.enroll_error, 1)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-1">
+        <label class="text-xs opacity-60">Recently filtered</label>
+        <ul class="space-y-1">
+          <li :for={e <- @vl.drops} class="text-xs flex items-center gap-2">
+            <span class="badge badge-xs badge-ghost">{e.decision}</span>
+            <span class="flex-1 truncate opacity-80">{e.transcript}</span>
+            <span class="font-mono opacity-60">{e.score && Float.round(e.score, 2)}</span>
+          </li>
+          <li :if={@vl.drops == []} class="text-xs opacity-50">Nothing filtered yet.</li>
+        </ul>
+      </div>
     </div>
     """
   end
