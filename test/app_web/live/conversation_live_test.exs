@@ -322,9 +322,16 @@ defmodule AppWeb.ConversationLiveTest do
       |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
       |> App.Repo.insert()
 
+    {:ok, _item} = App.Lists.add_item(list, "buy stamps")
+
     App.Lists.broadcast_changed(list.user_id, true)
 
-    assert render(lv) =~ "Groceries"
+    # "buy stamps" is item text — it only ever renders inside `lists_panel/1`'s body (the
+    # `<span class="flex-1">{item.text}</span>` per-item row), never in the Books header chrome
+    # (which only ever shows `@current_book.label`, e.g. "Groceries"). So this can only pass if
+    # the broadcast actually reloaded `@lists`/`@current_book` and re-rendered the list's real
+    # body content — not just the header chrome.
+    assert render(lv) =~ "buy stamps"
   end
 
   defp garden_plant!(user, attrs) do
@@ -384,7 +391,12 @@ defmodule AppWeb.ConversationLiveTest do
 
     html = lv |> element(~s|button[phx-click="archive_plant"]|) |> render_click()
 
-    assert html =~ "Past seasons"
+    # Not "Past seasons" — the Books frame's "Clear ↻" confirm text for a garden book always
+    # carries that phrase (see clear_confirm_text/1), archived plants or not, so it's satisfied
+    # by chrome alone. "Revive" only ever renders inside the archived `<details>` section
+    # (garden_panel/1), which only exists once `@garden.archived_by_season != %{}` — mirroring
+    # the "2025"-style signal the revive test below uses.
+    assert html =~ "Revive"
     assert App.Repo.get!(App.Garden.Plant, plant.id).status == "archived"
   end
 
@@ -552,6 +564,33 @@ defmodule AppWeb.ConversationLiveTest do
 
     assert html =~ "Past seasons"
     assert App.Garden.garden(user.id).active == []
+  end
+
+  test "clear_book tolerates the current list having been deleted mid-click", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Errands"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+    render_click(lv, "select_book", %{"key" => "list:#{list.id}"})
+
+    # Simulate the real race: the list is gone from the DB by the time clear_book fires, but the
+    # LiveView's `current_book` assign still points at it — go straight through Repo (not
+    # App.Lists.delete_list) so no {:lists_changed} broadcast refreshes current_book out from
+    # under us first. App.Books.clear/1 then returns {:error, :not_found} for this book.
+    App.Repo.delete!(list)
+
+    # Must not crash/reconnect the LiveView (a hard `:ok = ...` match on that error would).
+    html = render_click(lv, "clear_book", %{})
+
+    # load_books re-resolves the now-stale current_book key and lands on the garden fallback
+    # (no lists remain), rather than propagating the MatchError.
+    assert html =~ "Nothing growing yet"
   end
 
   test "a list deleted from elsewhere falls the Books modal back off the stale book", %{

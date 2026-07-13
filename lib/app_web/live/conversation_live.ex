@@ -255,7 +255,11 @@ defmodule AppWeb.ConversationLive do
   end
 
   def handle_event("clear_book", _params, socket) do
-    :ok = Books.clear(socket.assigns.current_book)
+    # Books.clear/1 returns {:error, :not_found} when the current list was deleted elsewhere
+    # between load and click (a real race) — ignore that outcome rather than hard-matching :ok;
+    # the reload below re-resolves the now-stale current_book to a fallback either way, so a
+    # deleted-list clear is just a harmless no-op instead of a MatchError crash.
+    Books.clear(socket.assigns.current_book)
     {:noreply, socket |> load_lists() |> load_garden() |> load_books()}
   end
 
