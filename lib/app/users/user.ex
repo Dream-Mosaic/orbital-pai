@@ -16,6 +16,9 @@ defmodule App.Users.User do
     # Voice Lock: "off" | "shadow" | "enforce"; nil threshold falls back to App.Config.
     field :voice_lock_mode, :string, default: "off"
     field :voice_lock_threshold, :float
+    # Books nav: the remembered picker selection — "list:<id>" or "garden"; nil = never chosen
+    # (falls back to the household groceries list, else the first book, else Garden).
+    field :books_last_book, :string
     timestamps(type: :utc_datetime)
   end
 
@@ -36,7 +39,8 @@ defmodule App.Users.User do
       :relock_seconds,
       :briefing_time,
       :voice_lock_mode,
-      :voice_lock_threshold
+      :voice_lock_threshold,
+      :books_last_book
     ])
     |> validate_format(:briefing_time, ~r/^\d{2}:\d{2}$/, message: "must be HH:MM (24h)")
     |> validate_inclusion(:voice_lock_mode, ~w(off shadow enforce))

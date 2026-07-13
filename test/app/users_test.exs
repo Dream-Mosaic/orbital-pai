@@ -115,6 +115,25 @@ defmodule App.UsersTest do
     end
   end
 
+  describe "books_last_book pref" do
+    test "update_prefs/2 persists books_last_book" do
+      {:ok, user} = Users.upsert_allowed("alice@x.com")
+      assert user.books_last_book == nil
+
+      assert {:ok, updated} = Users.update_prefs(user, %{books_last_book: "list:42"})
+      assert updated.books_last_book == "list:42"
+      assert Users.get(user.id).books_last_book == "list:42"
+    end
+
+    test "update_prefs/2 accepts nil (clears the remembered book)" do
+      {:ok, user} = Users.upsert_allowed("alice@x.com")
+      {:ok, user} = Users.update_prefs(user, %{books_last_book: "garden"})
+
+      assert {:ok, updated} = Users.update_prefs(user, %{books_last_book: nil})
+      assert updated.books_last_book == nil
+    end
+  end
+
   describe "stamp_briefing! busy-retry (with_busy_retry/2)" do
     # The briefing's once/day claim is stamped at delivery off the FSM in an ack task. SQLite is
     # single-writer, so that stamp can transiently hit "Database is busy"; it's the briefing's ONLY
