@@ -448,7 +448,9 @@ defmodule AppWeb.ConversationLiveTest do
     html = render_click(lv, "open_modal", %{"modal" => "books"})
 
     assert html =~ "Books"
-    assert html =~ "To-do"
+    # the current-book HEADER (not the picker, which lists every book by label) proves To-do
+    # resolved as current — i.e. List.first fell back to the only list, not the garden book.
+    assert html =~ ~s(<span class="flex-1 font-semibold">To-do</span>)
   end
 
   test "books modal: falls back to Garden when the user has no lists at all", %{conn: conn} do
@@ -562,7 +564,10 @@ defmodule AppWeb.ConversationLiveTest do
 
     html = render_click(lv, "clear_book", %{})
 
-    assert html =~ "Past seasons"
+    # "Revive" renders only inside the archived <details> once a plant is truly archived (body),
+    # unlike "Past seasons" which is always in the Clear-confirm chrome for any garden book — so
+    # this proves the panel reflects the closed-out season after clear_book, not just the button.
+    assert html =~ "Revive"
     assert App.Garden.garden(user.id).active == []
   end
 
