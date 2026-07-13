@@ -13,6 +13,9 @@ defmodule App.Users.User do
     # morning briefing: local "HH:MM" (nil = off) + the local date last DELIVERED (once/day)
     field :briefing_time, :string
     field :briefing_last_on, :date
+    # Voice Lock: "off" | "shadow" | "enforce"; nil threshold falls back to App.Config.
+    field :voice_lock_mode, :string, default: "off"
+    field :voice_lock_threshold, :float
     timestamps(type: :utc_datetime)
   end
 
@@ -31,9 +34,17 @@ defmodule App.Users.User do
       :default_ptt,
       :voice_activation,
       :relock_seconds,
-      :briefing_time
+      :briefing_time,
+      :voice_lock_mode,
+      :voice_lock_threshold
     ])
     |> validate_format(:briefing_time, ~r/^\d{2}:\d{2}$/, message: "must be HH:MM (24h)")
+    |> validate_inclusion(:voice_lock_mode, ~w(off shadow enforce))
+    |> validate_number(:voice_lock_threshold,
+      greater_than: -1.0,
+      less_than: 1.0,
+      message: "must be a cosine in (-1, 1)"
+    )
   end
 
   @doc "Set or clear the briefing time. nil turns the briefing off."
