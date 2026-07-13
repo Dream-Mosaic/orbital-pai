@@ -40,16 +40,34 @@ defmodule App.Speaker.Ortex do
   def handle_continue(:load, state) do
     path = Application.get_env(:app, :speaker_model_path, "priv/models/speaker_ecapa.onnx")
 
-    if File.exists?(path) do
-      model = Ortex.load(path)
-      Logger.info("[speaker] model loaded (#{path})")
-      {:noreply, %{state | model: model}}
-    else
-      Logger.warning(
-        "[speaker] model file missing (#{path}) — verifier not ready, gate fails open"
-      )
+    cond do
+      not File.exists?(path) ->
+        Logger.warning(
+          "[speaker] model file missing (#{path}) — verifier not ready, gate fails open"
+        )
 
-      {:noreply, state}
+        {:noreply, state}
+
+      true ->
+        try do
+          model = Ortex.load(path)
+          Logger.info("[speaker] model loaded (#{path})")
+          {:noreply, %{state | model: model}}
+        rescue
+          e ->
+            Logger.error(
+              "[speaker] model load failed (#{path}): #{Exception.message(e)} — verifier not ready, gate fails open"
+            )
+
+            {:noreply, state}
+        catch
+          kind, reason ->
+            Logger.error(
+              "[speaker] model load #{kind} (#{path}): #{inspect(reason)} — verifier not ready, gate fails open"
+            )
+
+            {:noreply, state}
+        end
     end
   end
 

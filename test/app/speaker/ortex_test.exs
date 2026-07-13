@@ -26,4 +26,20 @@ defmodule App.Speaker.OrtexTest do
     refute App.Speaker.Ortex.ready?()
     assert {:error, :model_not_loaded} = App.Speaker.Ortex.embed(<<0, 0>>)
   end
+
+  test "not ready + no crash when the model file is present but corrupt" do
+    path = Path.join(System.tmp_dir!(), "corrupt_#{System.unique_integer([:positive])}.onnx")
+    File.write!(path, "this is not a valid onnx model")
+    Application.put_env(:app, :speaker_model_path, path)
+
+    on_exit(fn ->
+      Application.delete_env(:app, :speaker_model_path)
+      File.rm(path)
+    end)
+
+    pid = start_supervised!(App.Speaker.Ortex)
+    refute App.Speaker.Ortex.ready?()
+    assert {:error, :model_not_loaded} = App.Speaker.Ortex.embed(<<0, 0>>)
+    assert Process.alive?(pid)
+  end
 end

@@ -1105,6 +1105,10 @@ defmodule App.Conversations.Conversation do
     end
   end
 
+  # Fail-open safety net: an unexpected voice_lock shape/mode must feed, never crash.
+  # (mode_atom/1 keeps mode ∈ off|shadow|enforce today, so this is defense-in-depth.)
+  defp gate_and_feed_endpoint(t, data), do: feed({:endpoint, t}, data)
+
   # score-or-decide: short turns skip embedding entirely (Gate handles trust); long turns
   # embed inside the verify budget. Returns {decision, score} | {:fail_open, why}.
   defp gate_decision(audio, speech_ms, %{voice_lock: vl, config: cfg} = data) do

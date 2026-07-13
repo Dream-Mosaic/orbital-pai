@@ -32,10 +32,13 @@ defmodule AppWeb.EnrollChannel do
 
     case App.Speaker.enroll_clip(socket.assigns.user_id, slot, pcm) do
       :ok -> {:reply, {:ok, %{slot: slot}}, socket}
-      {:error, reason} -> {:reply, {:error, %{reason: to_string(reason)}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: reason_string(reason)}}, socket}
     end
   end
 
   def handle_in("clip_reset", _payload, socket),
     do: {:noreply, assign(socket, clip: [], clip_bytes: 0)}
+
+  defp reason_string(reason) when is_atom(reason), do: to_string(reason)
+  defp reason_string(reason), do: inspect(reason)
 end

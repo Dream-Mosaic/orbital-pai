@@ -35,4 +35,16 @@ defmodule AppWeb.EnrollChannelTest do
   test "cannot join another user's enroll topic", %{socket: socket} do
     assert {:error, %{reason: "forbidden"}} = subscribe_and_join(socket, "enroll:999999", %{})
   end
+
+  test "a tuple-shaped verifier error replies error without crashing the channel", %{
+    user: u,
+    socket: socket
+  } do
+    Application.put_env(:app, :fake_verifier_error, {:call_failed, :timeout})
+    on_exit(fn -> Application.delete_env(:app, :fake_verifier_error) end)
+    {:ok, _, socket} = subscribe_and_join(socket, "enroll:#{u.id}", %{})
+    for f <- loud_frames(7), do: push(socket, "audio", {:binary, f})
+    ref = push(socket, "clip_done", %{"slot" => 1})
+    assert_reply ref, :error, %{reason: _}
+  end
 end
