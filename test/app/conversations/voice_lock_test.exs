@@ -117,6 +117,26 @@ defmodule App.Conversations.VoiceLockTest do
     assert_receive {:to_client, {:speak_start, _, _}}, 1_000
   end
 
+  test "enforce fails OPEN (no FSM crash) on a tuple-shaped verifier error — the Ortex adapter's real shape",
+       %{user: u} do
+    Application.put_env(:app, :fake_verifier_error, {:call_failed, :timeout})
+    pid = start_conv(u, :enforce)
+    speak_turn(pid, 3_000, "hello")
+
+    # pre-fix this raises Protocol.UndefinedError in log_gate and the linked FSM crash kills the test;
+    # post-fix the turn is fed (fail-open) and the fail_open event is logged with a stringified reason.
+    assert_receive {:to_client, {:speak_start, _, _}}, 1_000
+
+    import Ecto.Query
+
+    assert eventually(fn ->
+             match?(
+               [%{decision: "fail_open"}],
+               App.Repo.all(from e in App.Speaker.GateEvent, where: e.user_id == ^u.id)
+             )
+           end)
+  end
+
   test "shadow: mismatched voice STILL answers but logs would_drop", %{user: u} do
     Application.put_env(:app, :fake_verifier_embedding, @mismatch)
     pid = start_conv(u, :shadow)

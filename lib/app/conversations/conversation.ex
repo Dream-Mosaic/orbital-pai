@@ -1150,7 +1150,7 @@ defmodule App.Conversations.Conversation do
     case slice_turn(data) do
       :unavailable ->
         log_gate(data, "fail_open", :no_turn_audio, nil, 0, t)
-        data
+        clear_ring_mark(data)
 
       {_audio, _ms} when is_nil(vl.voiceprint) ->
         log_gate(data, "fail_open", :no_voiceprint, nil, 0, t)
@@ -1197,7 +1197,7 @@ defmodule App.Conversations.Conversation do
           App.Speaker.log_event(%{
             user_id: vl.user_id,
             decision: label,
-            reason: to_string(reason),
+            reason: reason_string(reason),
             score: score,
             speech_ms: speech_ms,
             transcript: String.slice(t, 0, 120),
@@ -1238,7 +1238,7 @@ defmodule App.Conversations.Conversation do
     attrs = %{
       user_id: vl.user_id,
       decision: decision,
-      reason: to_string(reason),
+      reason: reason_string(reason),
       score: score,
       speech_ms: speech_ms,
       transcript: String.slice(t, 0, 120),
@@ -1248,6 +1248,11 @@ defmodule App.Conversations.Conversation do
     Task.Supervisor.start_child(App.Conversations.TaskSup, fn -> App.Speaker.log_event(attrs) end)
     data
   end
+
+  # A gate reason is usually an atom (Gate.decide) but a fail-open reason can be a tuple
+  # (e.g. the Ortex adapter's {:call_failed, _}/{:embed_failed, _}); stringify safely either way.
+  defp reason_string(reason) when is_atom(reason), do: to_string(reason)
+  defp reason_string(reason), do: inspect(reason)
 
   defp unlock(data) do
     data = %{data | locked: false}
