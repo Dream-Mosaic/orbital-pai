@@ -66,6 +66,7 @@ defmodule AppWeb.VoiceModals do
   defp modal_title(:settings), do: "Settings"
   defp modal_title(:voice_lock), do: "Voice Lock"
   defp modal_title(:books), do: "Books"
+  defp modal_title(:search), do: "Search"
   defp modal_title(_), do: ""
 
   @doc "Reminders modal contents: due (needs attention) + upcoming lists, dismiss buttons, and a cadence badge on recurring rows (the ✕ on a recurring row cancels the whole series — the row IS the series)."
@@ -864,6 +865,17 @@ defmodule AppWeb.VoiceModals do
         </button>
       </div>
     </div>
+    """
+  end
+
+  @doc """
+  Search modal contents: a non-functional stub. The real Unified Search panel (recall over
+  conversations + Gmail + Calendar) is a separate follow-up feature — this just reserves the nav
+  slot and sets the expectation.
+  """
+  def search_panel(assigns) do
+    ~H"""
+    <p class="text-sm opacity-60">Search is coming soon.</p>
     """
   end
 end

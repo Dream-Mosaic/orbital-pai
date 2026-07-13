@@ -143,7 +143,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock books)a
+  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock books search)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -953,6 +953,8 @@ defmodule AppWeb.ConversationLive do
             <.garden_panel garden={@garden} />
           <% :connectors -> %>
             <.connectors_panel google_accounts={@google_accounts} grant={@grant} />
+          <% :search -> %>
+            <.search_panel />
           <% :settings -> %>
             <.settings_panel
               current_user={@current_user}

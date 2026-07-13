@@ -550,6 +550,15 @@ defmodule AppWeb.ConversationLiveTest do
     assert render(lv) =~ "Nothing growing yet"
   end
 
+  test "search modal: shows the coming-soon stub", %{conn: conn} do
+    {:ok, lv, _html} = live(conn, "/")
+    html = render_click(lv, "open_modal", %{"modal" => "search"})
+
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Search"
+    assert html =~ "coming soon"
+  end
+
   defp google_account(attrs) do
     base = %{refresh_token: "rt", user_id: Process.get(:test_user_id)}
 
