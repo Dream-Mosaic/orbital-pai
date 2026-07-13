@@ -225,7 +225,38 @@ defmodule AppWeb.ConversationLive do
       list -> Lists.delete_list(list)
     end
 
-    {:noreply, load_lists(socket)}
+    {:noreply, socket |> load_lists() |> load_books()}
+  end
+
+  def handle_event("select_book", %{"key" => key}, socket) do
+    user = socket.assigns.current_user
+    {:ok, updated_user} = App.Users.update_prefs(user, %{books_last_book: key})
+    {:noreply, socket |> assign(current_user: updated_user) |> load_books()}
+  end
+
+  def handle_event("new_list", %{"name" => name}, socket) do
+    name = String.trim(name)
+
+    socket =
+      if name == "" do
+        socket
+      else
+        user = socket.assigns.current_user
+        list = Lists.find_or_create_list(%{user_id: user.id, household: false}, name)
+        {:ok, updated_user} = App.Users.update_prefs(user, %{books_last_book: "list:#{list.id}"})
+
+        socket
+        |> assign(current_user: updated_user)
+        |> load_lists()
+        |> load_books()
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("clear_book", _params, socket) do
+    :ok = Books.clear(socket.assigns.current_book)
+    {:noreply, socket |> load_lists() |> load_garden() |> load_books()}
   end
 
   def handle_event("add_plant_note", %{"plant_id" => plant_id, "body" => body}, socket) do
@@ -418,7 +449,7 @@ defmodule AppWeb.ConversationLive do
   end
 
   def handle_info({:lists_changed}, socket) do
-    {:noreply, load_lists(socket)}
+    {:noreply, socket |> load_lists() |> load_books()}
   end
 
   def handle_info({:garden_changed}, socket) do

@@ -448,6 +448,108 @@ defmodule AppWeb.ConversationLiveTest do
     refute html =~ ~s(<span class="flex-1 font-semibold">Chores</span>)
   end
 
+  test "select_book swaps the body and persists books_last_book", %{conn: conn, user: user} do
+    {:ok, groceries} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
+      |> App.Repo.insert()
+
+    {:ok, _chores} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Chores"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+    assert render(lv) =~ "Groceries"
+
+    html = render_click(lv, "select_book", %{"key" => "garden"})
+    assert html =~ "Nothing growing yet"
+    assert App.Users.get(user.id).books_last_book == "garden"
+
+    html = render_click(lv, "select_book", %{"key" => "list:#{groceries.id}"})
+    assert html =~ "Groceries"
+    assert App.Users.get(user.id).books_last_book == "list:#{groceries.id}"
+  end
+
+  test "new_list creates and selects an empty list book", %{conn: conn, user: user} do
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+
+    html = render_click(lv, "new_list", %{"name" => "Hardware"})
+
+    assert html =~ "Hardware"
+    assert html =~ "Nothing on it yet"
+
+    [list] = App.Lists.list_visible(user.id)
+    assert list.name == "Hardware"
+    assert App.Users.get(user.id).books_last_book == "list:#{list.id}"
+  end
+
+  test "new_list with a blank name is a no-op", %{conn: conn, user: user} do
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+
+    render_click(lv, "new_list", %{"name" => "  "})
+
+    assert App.Lists.list_visible(user.id) == []
+    assert App.Users.get(user.id).books_last_book == nil
+  end
+
+  test "clear_book on a list book empties its items and keeps the list", %{conn: conn, user: user} do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries"})
+      |> App.Repo.insert()
+
+    {:ok, _} = App.Lists.add_item(list, "milk")
+
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+    assert render(lv) =~ "milk"
+
+    html = render_click(lv, "clear_book", %{})
+
+    refute html =~ "milk"
+    assert html =~ "Groceries"
+    assert [%{id: id}] = App.Lists.list_visible(user.id)
+    assert id == list.id
+  end
+
+  test "clear_book on the Garden book closes out the season (archives, keeps history)", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _} = App.Garden.add_plant(%{user_id: user.id, household: false}, %{name: "basil"})
+
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+    assert render(lv) =~ "basil"
+
+    html = render_click(lv, "clear_book", %{})
+
+    assert html =~ "Past seasons"
+    assert App.Garden.garden(user.id).active == []
+  end
+
+  test "a list deleted from elsewhere falls the Books modal back off the stale book", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, list} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Chores"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    render_click(lv, "open_modal", %{"modal" => "books"})
+    assert render(lv) =~ "Chores"
+
+    App.Lists.delete_list(list)
+
+    assert render(lv) =~ "Nothing growing yet"
+  end
+
   defp google_account(attrs) do
     base = %{refresh_token: "rt", user_id: Process.get(:test_user_id)}
 
