@@ -1238,3 +1238,22 @@ main:has(#voice) > header .duedot {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--you) 35%, transparent);
   outline: none;
 }
+
+/* Voice Lock: brief top-edge shimmer when a non-matching turn is filtered. */
+.gate-pulse::after {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, oklch(70% 0.15 50), transparent);
+  animation: gate-pulse-fade 1.2s ease-out forwards;
+  pointer-events: none;
+  z-index: 60;
+}
+
+@keyframes gate-pulse-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

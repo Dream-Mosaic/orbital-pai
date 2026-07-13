@@ -250,6 +250,11 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:to_client, {:voice_gate, decision}}, socket) do
+    push(socket, "voice_gate", %{decision: decision})
+    {:noreply, socket}
+  end
+
   # If the bound Conversation dies — a crash, or a linger-expiry we raced during join (set_client is a
   # cast, so a lookup→dead-pid gap is possible) — drop this channel so the browser's auto-rejoin starts a
   # fresh session instead of talking silently to a dead pid.

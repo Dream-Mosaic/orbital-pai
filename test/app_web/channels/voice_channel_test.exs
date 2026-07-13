@@ -196,6 +196,11 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "thinking", %{}
   end
 
+  test "relays a voice_gate drop to the browser", %{socket: socket} do
+    send(socket.channel_pid, {:to_client, {:voice_gate, :drop}})
+    assert_push "voice_gate", %{decision: :drop}
+  end
+
   test "inbound mic audio reaches the session STT", %{socket: socket} do
     Process.register(self(), :fake_stt_observer)
     pcm = <<1, 2, 3, 4>>

@@ -231,6 +231,7 @@ export const Voice = {
     })
     this.channel.on("duck", () => this.playback.duck())
     this.channel.on("unduck", () => this.playback.unduck())
+    this.channel.on("voice_gate", () => this.gatePulse())
     // Turn state → Orb state. Half-duplex is enforced server-side (the policy ignores
     // any speech-endpoint mid-turn), so the mic keeps streaming — which keeps the STT
     // connection fed and healthy. "Allow interruptions" still controls barge-in.
@@ -715,5 +716,13 @@ export const Voice = {
       chip.disabled = true
     })
     line.appendChild(chip)
+  },
+
+  // Voice Lock dropped a turn: a brief, quiet pulse so a false positive never
+  // reads as "she went deaf". No text, no sound.
+  gatePulse() {
+    this.el.classList.add("gate-pulse")
+    clearTimeout(this._gatePulseTimer)
+    this._gatePulseTimer = setTimeout(() => this.el.classList.remove("gate-pulse"), 1200)
   },
 }
