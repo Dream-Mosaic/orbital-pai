@@ -45,6 +45,8 @@ defmodule App.SpeakerTest do
     assert {:ok, _} = Speaker.set_mode(u, "shadow")
     assert_receive {:voice_lock_changed}
     assert %{mode: :shadow} = Speaker.voice_lock_state(App.Users.get(u.id).id)
+    assert {:ok, _} = Speaker.set_mode(u, "enforce")
+    assert %{mode: :enforce} = Speaker.voice_lock_state(u.id)
   end
 
   test "log_event prunes to newest 100; recent_drops filters", %{user: u} do

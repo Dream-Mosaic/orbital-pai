@@ -21,20 +21,20 @@ defmodule App.Speaker do
   @doc "Quality-check, embed, and upsert one enrollment clip (slot 1..3)."
   def enroll_clip(user_id, slot, pcm16) when slot in 1..3 and is_binary(pcm16) do
     with :ok <- clip_quality(pcm16),
-         {:ok, emb} <- verifier().embed(pcm16) do
-      %Enrollment{}
-      |> Ecto.Changeset.change(
-        user_id: user_id,
-        slot: slot,
-        audio: pcm16,
-        embedding: to_blob(emb),
-        model_id: model_id()
-      )
-      |> Repo.insert(
-        on_conflict: {:replace, [:audio, :embedding, :model_id, :updated_at]},
-        conflict_target: [:user_id, :slot]
-      )
-
+         {:ok, emb} <- verifier().embed(pcm16),
+         {:ok, _row} <-
+           %Enrollment{}
+           |> Ecto.Changeset.change(
+             user_id: user_id,
+             slot: slot,
+             audio: pcm16,
+             embedding: to_blob(emb),
+             model_id: model_id()
+           )
+           |> Repo.insert(
+             on_conflict: {:replace, [:audio, :embedding, :model_id, :updated_at]},
+             conflict_target: [:user_id, :slot]
+           ) do
       broadcast_changed(user_id)
       :ok
     end
@@ -104,7 +104,7 @@ defmodule App.Speaker do
       user ->
         %{
           user_id: user.id,
-          mode: String.to_existing_atom(user.voice_lock_mode),
+          mode: mode_atom(user.voice_lock_mode),
           threshold: user.voice_lock_threshold || App.Config.default().voice_lock_threshold,
           voiceprint:
             with({:ok, v} <- voiceprint(user.id), do: v)
@@ -173,6 +173,9 @@ defmodule App.Speaker do
   end
 
   # ---- plumbing ----
+
+  @mode_atoms %{"off" => :off, "shadow" => :shadow, "enforce" => :enforce}
+  defp mode_atom(mode), do: Map.get(@mode_atoms, mode, :off)
 
   def broadcast_changed(user_id),
     do: Phoenix.PubSub.broadcast(App.PubSub, "voice_lock:#{user_id}", {:voice_lock_changed})
