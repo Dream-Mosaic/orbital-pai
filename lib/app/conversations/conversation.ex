@@ -191,8 +191,16 @@ defmodule App.Conversations.Conversation do
       last_ack: nil,
       # per-session Lockdown-timeout override (ms) from the user's relock_seconds pref;
       # nil -> fall back to the app-env default (also the test override hook).
-      relock_ms: nil
+      relock_ms: nil,
+      # Voice Lock (spec 2026-07-12): per-user gate cache (nil = feature off / no user),
+      # the rolling mic ring (created lazily while mode != :off), and the trust anchor.
+      voice_lock: nil,
+      audio_ring: nil,
+      last_verified_at: nil
     }
+
+    data = %{data | voice_lock: Keyword.get(opts, :voice_lock, load_voice_lock(session_id))}
+    if vl = data.voice_lock, do: Phoenix.PubSub.subscribe(App.PubSub, "voice_lock:#{vl.user_id}")
 
     send_state_snapshot(data)
 
@@ -263,13 +271,25 @@ defmodule App.Conversations.Conversation do
     data
   end
 
+  # Tee mic PCM into the Voice-Lock ring — only in hands-free auto mode with the gate on.
+  # PTT never buffers (never gated); flipping mode off frees the ring.
+  defp buffer_audio(pcm, %{voice_lock: %{mode: mode}, ptt_mode: false} = data)
+       when mode != :off do
+    cap = data.config.voice_lock_ring_seconds * 32_000
+    ring = data.audio_ring || App.Speaker.Ring.new(cap)
+    %{data | audio_ring: App.Speaker.Ring.push(ring, pcm)}
+  end
+
+  defp buffer_audio(_pcm, %{audio_ring: nil} = data), do: data
+  defp buffer_audio(_pcm, data), do: %{data | audio_ring: nil}
+
   # ---- casts (public API + STT process) ----
   @impl true
   def handle_event(:cast, {:stt_partial, t}, _s, data), do: handle_partial(t, data)
   def handle_event(:cast, {:stt_endpoint, t}, _s, data), do: handle_endpoint(t, data)
   def handle_event(:cast, {:stt_eager_end, t}, _s, data), do: handle_eager_end(t, data)
   def handle_event(:cast, {:stt_resume}, _s, data), do: handle_resume(data)
-  def handle_event(:cast, {:stt_turn_start}, _s, data), do: handle_turn_start(data)
+  def handle_event(:cast, {:stt_turn_start}, _s, data), do: handle_turn_start(mark_ring(data))
 
   def handle_event(:cast, :barge_in, _s, data) do
     Logger.info("[turn] ⏹ barge_in (during #{data.policy.phase})")
@@ -387,7 +407,7 @@ defmodule App.Conversations.Conversation do
   def handle_event(:cast, {:vision_frame, _ref, _image}, _s, data), do: {:keep_state, data}
 
   def handle_event(:cast, {:push_audio, pcm, from}, _s, %{client: from} = data),
-    do: {:keep_state, push_to_stt(pcm, data)}
+    do: {:keep_state, push_to_stt(pcm, buffer_audio(pcm, data))}
 
   # a frame from a channel that is no longer the bound client (stale tab/device) — drop it
   def handle_event(:cast, {:push_audio, _pcm, _from}, _s, data), do: {:keep_state, data}
@@ -397,9 +417,14 @@ defmodule App.Conversations.Conversation do
   def handle_event(:info, {:stt_endpoint, t}, _s, data), do: handle_endpoint(t, data)
   def handle_event(:info, {:stt_eager_end, t}, _s, data), do: handle_eager_end(t, data)
   def handle_event(:info, {:stt_resume}, _s, data), do: handle_resume(data)
-  def handle_event(:info, {:stt_turn_start}, _s, data), do: handle_turn_start(data)
+  def handle_event(:info, {:stt_turn_start}, _s, data), do: handle_turn_start(mark_ring(data))
   def handle_event(:info, :stt_ready, _s, data), do: {:keep_state, data}
   def handle_event(:info, {:stt_error, _reason}, _s, data), do: {:keep_state, data}
+
+  def handle_event(:info, {:voice_lock_changed}, _s, %{voice_lock: %{user_id: uid}} = data),
+    do: {:keep_state, %{data | voice_lock: App.Speaker.voice_lock_state(uid)}}
+
+  def handle_event(:info, {:voice_lock_changed}, _s, data), do: {:keep_state, data}
 
   # The linked STT exited — a clean Ink close (idle) or a transient error. Drop the
   # pid; the next mic frame reconnects (push_to_stt). Never go permanently deaf, never die.
@@ -1150,6 +1175,9 @@ defmodule App.Conversations.Conversation do
     {:keep_state, data}
   end
 
+  defp mark_ring(%{audio_ring: nil} = data), do: data
+  defp mark_ring(data), do: %{data | audio_ring: App.Speaker.Ring.mark(data.audio_ring)}
+
   # ---- policy <-> effects ----
   defp feed(event, data) do
     old_phase = data.policy.phase
@@ -1770,4 +1798,13 @@ defmodule App.Conversations.Conversation do
   defp text_model, do: Application.fetch_env!(:app, :text_model)
   defp tts, do: Application.fetch_env!(:app, :tts)
   defp brain_stream_mod, do: Application.fetch_env!(:app, :brain_stream)
+
+  defp load_voice_lock(nil), do: nil
+
+  defp load_voice_lock(session_id) do
+    case App.Users.id_from_session(session_id) do
+      nil -> nil
+      user_id -> App.Speaker.voice_lock_state(user_id)
+    end
+  end
 end
