@@ -11,6 +11,13 @@ config :app,
   ecto_repos: [App.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# App.Speaker.Fbank (pure Nx: FFT + matmul for the fbank pipeline) is the sole non-trivial Nx
+# user (App.Speaker.Ortex just runs the ONNX model via Ortex) — on the default Nx.BinaryBackend
+# it measured ~5.2s/clip (pure-Elixir FFT), which blows the 250ms Voice Lock verify budget.
+# EXLA (XLA-compiled) cuts that to low tens of ms. Global (not per-env) so parity tests exercise
+# the same backend used at runtime.
+config :nx, default_backend: EXLA.Backend
+
 # Reminder times (and any other local-tz display) shift from stored UTC via this database.
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
