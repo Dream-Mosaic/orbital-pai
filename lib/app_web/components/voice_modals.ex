@@ -65,6 +65,7 @@ defmodule AppWeb.VoiceModals do
   defp modal_title(:connectors), do: "Connectors"
   defp modal_title(:settings), do: "Settings"
   defp modal_title(:voice_lock), do: "Voice Lock"
+  defp modal_title(:books), do: "Books"
   defp modal_title(_), do: ""
 
   @doc "Reminders modal contents: due (needs attention) + upcoming lists, dismiss buttons, and a cadence badge on recurring rows (the ✕ on a recurring row cancels the whole series — the row IS the series)."
@@ -355,6 +356,90 @@ defmodule AppWeb.VoiceModals do
 
   defp fmt_noted(%{noted_on: %Date{} = d}), do: Calendar.strftime(d, "%b %-d")
   defp fmt_noted(%{inserted_at: dt}), do: Calendar.strftime(dt, "%b %-d")
+
+  @doc """
+  Books modal contents: a remembered picker — a header row showing the current book's icon,
+  label, and a type-aware "Clear ↻" (list → empties items but keeps the list; garden → closes
+  out the season) — plus a "Switch book" disclosure listing every book flat, with "➕ New
+  list…" at the bottom. The body renders the CURRENT book's existing panel UNCHANGED:
+  `lists_panel/1` given a one-element list (`current_list`) for a `:list` book, or
+  `garden_panel/1` for the `:garden` book. `current_list` is nil when the remembered list was
+  deleted elsewhere between loads (rare — the caller's `load_books/1` already falls back on a
+  stale key, but a delete from another session can still race a render) — the body then shows a
+  short nudge instead of crashing.
+  """
+  attr :books, :list, required: true
+  attr :current_book, :map, required: true
+  attr :current_list, :map, default: nil
+  attr :garden, :map, required: true
+
+  def books_panel(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <div class="flex items-center gap-2 rounded-box border border-base-300 p-3">
+        <.icon name={@current_book.icon} class="size-4" />
+        <span class="flex-1 font-semibold">{@current_book.label}</span>
+        <button
+          type="button"
+          phx-click="clear_book"
+          data-confirm={clear_confirm_text(@current_book)}
+          class="btn btn-ghost btn-xs"
+          aria-label="clear book"
+        >
+          Clear ↻
+        </button>
+      </div>
+
+      <details class="rounded-box border border-base-300">
+        <summary class="cursor-pointer p-3 text-sm opacity-70">Switch book</summary>
+        <ul class="space-y-1 border-t border-base-300 p-2">
+          <li :for={book <- @books}>
+            <button
+              type="button"
+              phx-click="select_book"
+              phx-value-key={book.key}
+              class={[
+                "btn btn-ghost btn-sm w-full justify-start gap-2",
+                book.key == @current_book.key && "btn-active"
+              ]}
+            >
+              <.icon name={book.icon} class="size-4" /> {book.label}
+            </button>
+          </li>
+          <li>
+            <details>
+              <summary class="btn btn-ghost btn-sm w-full justify-start cursor-pointer">
+                ➕ New list…
+              </summary>
+              <form phx-submit="new_list" class="flex gap-2 p-2">
+                <input
+                  type="text"
+                  name="name"
+                  value=""
+                  placeholder="Name your list…"
+                  class="input input-bordered input-sm flex-1"
+                />
+                <button class="btn btn-sm" type="submit">Create</button>
+              </form>
+            </details>
+          </li>
+        </ul>
+      </details>
+
+      <.lists_panel :if={@current_book.kind == :list and @current_list} lists={[@current_list]} />
+      <.garden_panel :if={@current_book.kind == :garden} garden={@garden} />
+      <p :if={@current_book.kind == :list and !@current_list} class="text-sm opacity-50">
+        That list is gone — pick another book above.
+      </p>
+    </div>
+    """
+  end
+
+  defp clear_confirm_text(%{kind: :garden}),
+    do: "Close out this season? Active plants move to Past seasons — nothing is deleted."
+
+  defp clear_confirm_text(%{label: label}),
+    do: "Clear everything off #{label}? The list stays, just empty."
 
   @doc "Connectors modal contents: Google connection rows + inline grant step when @grant is set."
   attr :google_accounts, :list, required: true

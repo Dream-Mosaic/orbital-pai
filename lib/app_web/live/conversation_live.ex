@@ -12,6 +12,7 @@ defmodule AppWeb.ConversationLive do
   alias App.Reminders
   alias App.Lists
   alias App.Garden
+  alias App.Books
   alias App.Google.Accounts, as: GoogleAccounts
   alias App.Google.Connectors
 
@@ -75,6 +76,7 @@ defmodule AppWeb.ConversationLive do
      |> load_reminders()
      |> load_lists()
      |> load_garden()
+     |> load_books()
      |> load_google_accounts()
      |> load_voice_lock()}
   end
@@ -141,7 +143,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock)a
+  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock books)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -508,6 +510,40 @@ defmodule AppWeb.ConversationLive do
     assign(socket, garden: Garden.garden(socket.assigns.current_user.id))
   end
 
+  # The Books modal's picker + remembered current book. `user.books_last_book` (a "list:<id>" or
+  # "garden" key) is resolved against the FRESH book set on every load — a stale key (the list was
+  # deleted elsewhere) or a nil key (never chosen) both fall through to `fallback_book/1`.
+  defp load_books(socket) do
+    user = socket.assigns.current_user
+    books = Books.for_user(user)
+    current = resolve_current_book(books, user.books_last_book, user)
+    assign(socket, books: books, current_book: current)
+  end
+
+  defp resolve_current_book(books, key, user) do
+    case key && Books.resolve(key, user) do
+      {:ok, book} -> book
+      _ -> fallback_book(books)
+    end
+  end
+
+  # Fallback priority: the household groceries list, else the first book. `Books.for_user/1`
+  # always appends the garden book last, so when there are no list books at all, "the first book"
+  # IS the garden book — that's how "else Garden" (the spec's third tier) is satisfied without a
+  # separate branch here.
+  defp fallback_book(books), do: Enum.find(books, &household_groceries?/1) || List.first(books)
+
+  defp household_groceries?(%{kind: :list, label: label, scope: %{household: true}}),
+    do: String.downcase(label) == "groceries"
+
+  defp household_groceries?(_book), do: false
+
+  # The Books body needs the ACTUAL list struct (with items preloaded) for a :list book — @lists
+  # is already kept fresh by the existing list handlers/broadcasts, so this just looks it up by id
+  # rather than re-fetching. nil when the remembered list was deleted elsewhere between loads.
+  defp current_book_list(lists, %{kind: :list, id: id}), do: Enum.find(lists, &(&1.id == id))
+  defp current_book_list(_lists, _book), do: nil
+
   defp find_list_item(socket, id) do
     socket.assigns.lists |> Enum.flat_map(& &1.items) |> Enum.find(&(&1.id == id))
   end
@@ -873,6 +909,13 @@ defmodule AppWeb.ConversationLive do
             <.memory_panel facts={@facts} summary={@summary} assistant_name={@assistant_name} />
           <% :reminders -> %>
             <.reminders_panel due={@due} upcoming={@upcoming} />
+          <% :books -> %>
+            <.books_panel
+              books={@books}
+              current_book={@current_book}
+              current_list={current_book_list(@lists, @current_book)}
+              garden={@garden}
+            />
           <% :lists -> %>
             <.lists_panel lists={@lists} />
           <% :garden -> %>

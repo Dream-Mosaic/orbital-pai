@@ -401,6 +401,53 @@ defmodule AppWeb.ConversationLiveTest do
     assert render(lv) =~ "peppers"
   end
 
+  test "books modal: falls back to the first book when there's no household groceries list", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _todo} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "To-do"})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = render_click(lv, "open_modal", %{"modal" => "books"})
+
+    assert html =~ "Books"
+    assert html =~ "To-do"
+  end
+
+  test "books modal: falls back to Garden when the user has no lists at all", %{conn: conn} do
+    {:ok, lv, _html} = live(conn, "/")
+    html = render_click(lv, "open_modal", %{"modal" => "books"})
+
+    assert html =~ "Garden"
+    assert html =~ "Nothing growing yet"
+  end
+
+  test "books modal: the household groceries list wins the fallback over any other list", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, _chores} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Chores"})
+      |> App.Repo.insert()
+
+    {:ok, _groceries} =
+      %App.Lists.List{}
+      |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
+      |> App.Repo.insert()
+
+    {:ok, lv, _html} = live(conn, "/")
+    html = render_click(lv, "open_modal", %{"modal" => "books"})
+
+    # Both books legitimately appear in the "Switch book" picker (it lists every book by name),
+    # so assert on the CURRENT-book header specifically rather than mere text presence.
+    assert html =~ ~s(<span class="flex-1 font-semibold">Groceries</span>)
+    refute html =~ ~s(<span class="flex-1 font-semibold">Chores</span>)
+  end
+
   defp google_account(attrs) do
     base = %{refresh_token: "rt", user_id: Process.get(:test_user_id)}
 
