@@ -56,3 +56,6 @@ docs/superpowers/
 # Personal roadmap/wishlist — kept local
 IDEAS.md
 FEEDBACK.md
+
+# Speaker verification model (fetched, not committed)
+priv/models/

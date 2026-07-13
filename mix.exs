@@ -68,6 +68,8 @@ defmodule App.MixProject do
       {:finch, "~> 0.19"},
       {:mint_web_socket, "~> 1.0"},
       {:tzdata, "~> 1.1"},
+      {:nx, "~> 0.9"},
+      {:ortex, "~> 0.1"},
       {:mox, "~> 1.1", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
