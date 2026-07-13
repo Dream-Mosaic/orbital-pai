@@ -700,6 +700,14 @@ defmodule AppWeb.VoiceModals do
         <button
           type="button"
           phx-click="open_modal"
+          phx-value-modal="memory"
+          class="btn btn-ghost btn-sm w-full justify-between"
+        >
+          Memory <span class="opacity-60">→</span>
+        </button>
+        <button
+          type="button"
+          phx-click="open_modal"
           phx-value-modal="voice_lock"
           class="btn btn-ghost btn-sm w-full justify-between"
         >

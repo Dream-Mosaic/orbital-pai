@@ -559,6 +559,15 @@ defmodule AppWeb.ConversationLiveTest do
     assert html =~ "coming soon"
   end
 
+  test "settings modal: Memory opener row navigates to the Memory panel", %{conn: conn} do
+    {:ok, lv, _} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
+
+    html = lv |> element(~s(#voice-modal button[phx-value-modal="memory"])) |> render_click()
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Profile facts"
+  end
+
   defp google_account(attrs) do
     base = %{refresh_token: "rt", user_id: Process.get(:test_user_id)}
 
