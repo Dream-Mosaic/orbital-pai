@@ -143,7 +143,7 @@ defmodule AppWeb.ConversationLive do
      |> push_event("clear_log", %{})}
   end
 
-  @valid_modals ~w(memory reminders lists garden connectors settings voice_lock books search)a
+  @valid_modals ~w(memory reminders connectors settings voice_lock books search)a
 
   def handle_event("open_modal", %{"modal" => modal}, socket) do
     case Enum.find(@valid_modals, &(to_string(&1) == modal)) do
@@ -726,15 +726,6 @@ defmodule AppWeb.ConversationLive do
               <button
                 type="button"
                 phx-click="open_modal"
-                phx-value-modal="memory"
-                aria-label="Memory"
-                class="sbtn"
-              >
-                <.icon name="hero-sparkles" class="size-4" />
-              </button>
-              <button
-                type="button"
-                phx-click="open_modal"
                 phx-value-modal="reminders"
                 aria-label="Reminders"
                 class="sbtn"
@@ -745,20 +736,11 @@ defmodule AppWeb.ConversationLive do
               <button
                 type="button"
                 phx-click="open_modal"
-                phx-value-modal="lists"
-                aria-label="Lists"
+                phx-value-modal="books"
+                aria-label="Books"
                 class="sbtn"
               >
-                <.icon name="hero-clipboard-document-list" class="size-4" />
-              </button>
-              <button
-                type="button"
-                phx-click="open_modal"
-                phx-value-modal="garden"
-                aria-label="Garden"
-                class="sbtn"
-              >
-                <.icon name="hero-sun" class="size-4" />
+                <.icon name="hero-book-open" class="size-4" />
               </button>
               <button
                 type="button"
@@ -768,6 +750,15 @@ defmodule AppWeb.ConversationLive do
                 class="sbtn"
               >
                 <.icon name="hero-link" class="size-4" />
+              </button>
+              <button
+                type="button"
+                phx-click="open_modal"
+                phx-value-modal="search"
+                aria-label="Search"
+                class="sbtn"
+              >
+                <.icon name="hero-magnifying-glass" class="size-4" />
               </button>
             </nav>
             <div class="meta">
@@ -888,15 +879,6 @@ defmodule AppWeb.ConversationLive do
           <button
             type="button"
             phx-click="open_modal"
-            phx-value-modal="memory"
-            class="nbtn"
-            title="Memory"
-          >
-            <.icon name="hero-sparkles" class="size-5" /><span class="nlabel">Memory</span>
-          </button>
-          <button
-            type="button"
-            phx-click="open_modal"
             phx-value-modal="reminders"
             class="nbtn"
             title="Reminders"
@@ -907,20 +889,11 @@ defmodule AppWeb.ConversationLive do
           <button
             type="button"
             phx-click="open_modal"
-            phx-value-modal="lists"
+            phx-value-modal="books"
             class="nbtn"
-            title="Lists"
+            title="Books"
           >
-            <.icon name="hero-clipboard-document-list" class="size-5" /><span class="nlabel">Lists</span>
-          </button>
-          <button
-            type="button"
-            phx-click="open_modal"
-            phx-value-modal="garden"
-            class="nbtn"
-            title="Garden"
-          >
-            <.icon name="hero-sun" class="size-5" /><span class="nlabel">Garden</span>
+            <.icon name="hero-book-open" class="size-5" /><span class="nlabel">Books</span>
           </button>
           <button
             type="button"
@@ -930,6 +903,15 @@ defmodule AppWeb.ConversationLive do
             title="Connectors"
           >
             <.icon name="hero-link" class="size-5" /><span class="nlabel">Connectors</span>
+          </button>
+          <button
+            type="button"
+            phx-click="open_modal"
+            phx-value-modal="search"
+            class="nbtn"
+            title="Search"
+          >
+            <.icon name="hero-magnifying-glass" class="size-5" /><span class="nlabel">Search</span>
           </button>
         </nav>
       </main>
@@ -947,10 +929,6 @@ defmodule AppWeb.ConversationLive do
               current_list={current_book_list(@lists, @current_book)}
               garden={@garden}
             />
-          <% :lists -> %>
-            <.lists_panel lists={@lists} />
-          <% :garden -> %>
-            <.garden_panel garden={@garden} />
           <% :connectors -> %>
             <.connectors_panel google_accounts={@google_accounts} grant={@grant} />
           <% :search -> %>

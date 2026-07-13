@@ -72,7 +72,7 @@ defmodule AppWeb.ConversationLiveTest do
     assert html =~ ~s(id="voice-log")
     # bottom nav uses phx-click open_modal buttons (Phase 2 — no /classic links)
     assert html =~ ~s(phx-value-modal="settings")
-    assert html =~ ~s(phx-value-modal="memory")
+    assert html =~ ~s(phx-value-modal="books")
   end
 
   test "the bottom nav opens and closes each modal", %{conn: conn} do
@@ -80,12 +80,11 @@ defmodule AppWeb.ConversationLiveTest do
     refute html =~ ~s(data-modal-open="true")
 
     for {key, title} <- [
-          {"memory", "Memory"},
+          {"settings", "Settings"},
           {"reminders", "Reminders"},
-          {"lists", "Lists"},
-          {"garden", "Garden"},
+          {"books", "Books"},
           {"connectors", "Connectors"},
-          {"settings", "Settings"}
+          {"search", "Search"}
         ] do
       html = lv |> element(~s(button[phx-value-modal="#{key}"])) |> render_click()
       assert html =~ ~s(data-modal-open="true")
@@ -96,24 +95,41 @@ defmodule AppWeb.ConversationLiveTest do
     end
   end
 
+  test "bottom nav shows exactly 5 stations; Memory/Lists/Garden are no longer top-level", %{
+    conn: conn
+  } do
+    {:ok, _lv, html} = live(conn, "/")
+
+    assert html =~ ~s(phx-value-modal="settings")
+    assert html =~ ~s(phx-value-modal="reminders")
+    assert html =~ ~s(phx-value-modal="books")
+    assert html =~ ~s(phx-value-modal="connectors")
+    assert html =~ ~s(phx-value-modal="search")
+
+    refute html =~ ~s(phx-value-modal="memory")
+    refute html =~ ~s(phx-value-modal="lists")
+    refute html =~ ~s(phx-value-modal="garden")
+  end
+
   test "closing the modal keeps its content while the drawer slides out", %{conn: conn} do
     {:ok, lv, _html} = live(conn, "/")
 
-    lv |> element(~s(button[phx-value-modal="memory"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
 
     html = lv |> element(~s(button[aria-label="Close"])) |> render_click()
 
     assert html =~ ~s(data-modal-open="false")
-    assert html =~ "Profile facts"
-
-    # opening a different modal afterwards swaps the content (not stuck on memory forever)
-    html = lv |> element(~s(button[phx-value-modal="reminders"])) |> render_click()
-    assert html =~ ~s(data-modal-open="true")
     assert html =~ "Upcoming"
+
+    # opening a different modal afterwards swaps the content (not stuck on reminders forever)
+    html = lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Nothing growing yet"
   end
 
   test "memory modal: add/delete a fact, save summary, forget me", %{conn: conn, user: user} do
     {:ok, lv, _} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
     lv |> element(~s(button[phx-value-modal="memory"])) |> render_click()
 
     html = lv |> form("#add-fact-form", %{"content" => "likes oolong tea"}) |> render_submit()
@@ -198,7 +214,10 @@ defmodule AppWeb.ConversationLiveTest do
     refute html =~ "badge-info"
   end
 
-  test "lists modal: shows the user's visible lists with items", %{conn: conn, user: user} do
+  test "books modal: a list book shows its items (Lists content reused verbatim)", %{
+    conn: conn,
+    user: user
+  } do
     {:ok, list} =
       %App.Lists.List{}
       |> App.Lists.List.changeset(%{user_id: user.id, name: "To-do"})
@@ -207,20 +226,20 @@ defmodule AppWeb.ConversationLiveTest do
     {:ok, _item} = App.Lists.add_item(list, "call the plumber")
 
     {:ok, lv, _html} = live(conn, "/")
-    html = lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    html = lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     assert html =~ "To-do"
     assert html =~ "call the plumber"
   end
 
-  test "lists modal: a household list shows the shared badge", %{conn: conn, user: user} do
+  test "books modal: a household list shows the shared badge", %{conn: conn, user: user} do
     {:ok, _list} =
       %App.Lists.List{}
       |> App.Lists.List.changeset(%{user_id: user.id, name: "Groceries", household: true})
       |> App.Repo.insert()
 
     {:ok, lv, _html} = live(conn, "/")
-    html = lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    html = lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     assert html =~ "shared"
   end
@@ -234,7 +253,7 @@ defmodule AppWeb.ConversationLiveTest do
     {:ok, item} = App.Lists.add_item(list, "milk")
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     lv |> element(~s|input[phx-click="toggle_list_item"]|) |> render_click()
     assert App.Repo.get!(App.Lists.Item, item.id).checked_at != nil
@@ -250,7 +269,7 @@ defmodule AppWeb.ConversationLiveTest do
       |> App.Repo.insert()
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     html =
       lv
@@ -270,7 +289,7 @@ defmodule AppWeb.ConversationLiveTest do
     {:ok, _} = App.Lists.check_item(item)
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
     assert render(lv) =~ "milk"
 
     lv |> element(~s|button[phx-click="clear_list_checked"]|) |> render_click()
@@ -284,7 +303,7 @@ defmodule AppWeb.ConversationLiveTest do
       |> App.Repo.insert()
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
     assert render(lv) =~ "Plants"
 
     lv |> element(~s|button[phx-click="delete_list"]|) |> render_click()
@@ -296,7 +315,7 @@ defmodule AppWeb.ConversationLiveTest do
     user: user
   } do
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="lists"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     {:ok, list} =
       %App.Lists.List{}
@@ -330,7 +349,7 @@ defmodule AppWeb.ConversationLiveTest do
     })
 
     {:ok, lv, _html} = live(conn, "/")
-    html = lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    html = lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     assert html =~ "tomatoes"
     assert html =~ "back bed"
@@ -341,7 +360,7 @@ defmodule AppWeb.ConversationLiveTest do
     plant = garden_plant!(user, %{name: "basil"})
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     html =
       lv
@@ -361,7 +380,7 @@ defmodule AppWeb.ConversationLiveTest do
     plant = garden_plant!(user, %{name: "basil"})
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     html = lv |> element(~s|button[phx-click="archive_plant"]|) |> render_click()
 
@@ -379,13 +398,16 @@ defmodule AppWeb.ConversationLiveTest do
       })
 
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
     assert render(lv) =~ "2025"
 
     lv |> element(~s|button[phx-click="revive_plant"]|) |> render_click()
 
     assert App.Repo.get!(App.Garden.Plant, plant.id).status == "active"
-    refute render(lv) =~ "Past seasons"
+    # Not "Past seasons" — the Books frame's "Clear" button always carries that phrase in its
+    # confirm text for a garden book, archived plants or not. The real signal that revive worked
+    # is the season label disappearing from the (now-empty, collapsed) archived section.
+    refute render(lv) =~ "2025"
   end
 
   test "a household plant's change from elsewhere refreshes the panel via garden:household", %{
@@ -393,7 +415,7 @@ defmodule AppWeb.ConversationLiveTest do
     user: user
   } do
     {:ok, lv, _html} = live(conn, "/")
-    lv |> element(~s(button[phx-value-modal="garden"])) |> render_click()
+    lv |> element(~s(button[phx-value-modal="books"])) |> render_click()
 
     plant = garden_plant!(user, %{name: "peppers", household: true})
     App.Garden.broadcast_changed(plant.user_id, true)
@@ -652,6 +674,7 @@ defmodule AppWeb.ConversationLiveTest do
       App.Memory.create_fact(%{content: "temporary fact", source: "user", user_id: user.id})
 
     {:ok, lv, _} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
     lv |> element(~s(button[phx-value-modal="memory"])) |> render_click()
 
     assert render(lv) =~ "temporary fact"
@@ -670,6 +693,7 @@ defmodule AppWeb.ConversationLiveTest do
     user: user
   } do
     {:ok, lv, _} = live(conn, "/")
+    lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
     lv |> element(~s(button[phx-value-modal="memory"])) |> render_click()
 
     App.Memory.put_summary(user.id, "model-written summary")
