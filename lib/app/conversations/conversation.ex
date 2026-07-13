@@ -426,6 +426,9 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:info, {:voice_lock_changed}, _s, data), do: {:keep_state, data}
 
+  def handle_event(:info, {:voice_gate_result, :verified}, _s, data),
+    do: {:keep_state, %{data | last_verified_at: System.monotonic_time(:millisecond)}}
+
   # The linked STT exited — a clean Ink close (idle) or a transient error. Drop the
   # pid; the next mic frame reconnects (push_to_stt). Never go permanently deaf, never die.
   def handle_event(:info, {:EXIT, pid, reason}, _s, %{stt_pid: pid} = data) when is_pid(pid) do
@@ -1002,7 +1005,7 @@ defmodule App.Conversations.Conversation do
         handle_gated_endpoint(t, %{data | expecting_finalize: false, holding: false})
 
       true ->
-        feed({:endpoint, t}, %{data | expecting_finalize: false, holding: false})
+        gate_and_feed_endpoint(t, %{data | expecting_finalize: false, holding: false})
     end
   end
 
@@ -1028,7 +1031,7 @@ defmodule App.Conversations.Conversation do
             {:keep_state, data}
 
           true ->
-            feed({:endpoint, t}, %{data | wake_hit: false})
+            gate_and_feed_endpoint(t, %{data | wake_hit: false})
         end
 
       {{:wake, rest}, _} ->
@@ -1050,9 +1053,200 @@ defmodule App.Conversations.Conversation do
     case {blank?(rest), WakeWord.command_rest(rest)} do
       {true, _} -> {:keep_state, speak_ack(data), [relock_action(data)]}
       {false, {:command, ""}} -> {:keep_state, data, [relock_action(data)]}
-      {false, {:command, tail}} -> feed({:endpoint, tail}, data)
-      {false, :none} -> feed({:endpoint, rest}, data)
+      {false, {:command, tail}} -> gate_and_feed_endpoint(tail, data)
+      {false, :none} -> gate_and_feed_endpoint(rest, data)
     end
+  end
+
+  # ---- Voice Lock gate (spec 2026-07-12-voice-lock-design) ----
+  # Every MIC-driven endpoint funnels through here. PTT and internal feeds bypass by
+  # construction. Any malfunction fails OPEN (feed) — never "Remi went deaf".
+
+  defp gate_and_feed_endpoint(t, %{voice_lock: vl} = data)
+       when is_nil(vl) or vl.mode == :off,
+       do: feed({:endpoint, t}, data)
+
+  defp gate_and_feed_endpoint(t, %{ptt_mode: true} = data), do: feed({:endpoint, t}, data)
+
+  defp gate_and_feed_endpoint(t, %{voice_lock: %{mode: :shadow}} = data) do
+    data = shadow_verify(t, data)
+    feed({:endpoint, t}, data)
+  end
+
+  defp gate_and_feed_endpoint(t, %{voice_lock: %{mode: :enforce} = vl} = data) do
+    case slice_turn(data) do
+      :unavailable ->
+        gate_fail_open(t, data, :no_turn_audio)
+
+      _ when is_nil(vl.voiceprint) ->
+        gate_fail_open(t, data, :no_voiceprint)
+
+      {audio, speech_ms} ->
+        data = clear_ring_mark(data)
+
+        case gate_decision(audio, speech_ms, data) do
+          {:fail_open, why} ->
+            gate_fail_open(t, data, why)
+
+          {{:pass, :verified}, score} ->
+            log_gate(data, "pass", :verified, score, speech_ms, t)
+            feed({:endpoint, t}, %{data | last_verified_at: System.monotonic_time(:millisecond)})
+
+          {{:pass, :trusted}, score} ->
+            log_gate(data, "trusted_pass", :trusted, score, speech_ms, t)
+            feed({:endpoint, t}, data)
+
+          {{:drop, reason}, score} ->
+            Logger.info(~s|[gate] ✗ dropped (#{reason}, score #{inspect(score)}): "#{t}"|)
+            log_gate(data, "drop", reason, score, speech_ms, t)
+            send(data.client, {:to_client, {:voice_gate, :drop}})
+            {:keep_state, cancel_speculative_reflex(data)}
+        end
+    end
+  end
+
+  # score-or-decide: short turns skip embedding entirely (Gate handles trust); long turns
+  # embed inside the verify budget. Returns {decision, score} | {:fail_open, why}.
+  defp gate_decision(audio, speech_ms, %{voice_lock: vl, config: cfg} = data) do
+    params = %{
+      score: nil,
+      speech_ms: speech_ms,
+      last_verified_ms_ago: verified_ago(data),
+      threshold: vl.threshold,
+      min_verify_ms: cfg.voice_lock_min_verify_ms,
+      trust_window_ms: cfg.voice_lock_trust_window_ms
+    }
+
+    if speech_ms < cfg.voice_lock_min_verify_ms do
+      {App.Speaker.Gate.decide(params), nil}
+    else
+      task =
+        Task.Supervisor.async_nolink(App.Conversations.TaskSup, fn ->
+          App.Speaker.verifier().embed(audio)
+        end)
+
+      case Task.yield(task, cfg.voice_lock_verify_budget_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {:ok, emb}} ->
+          Process.demonitor(task.ref, [:flush])
+          score = App.Speaker.score(emb, vl.voiceprint)
+          {App.Speaker.Gate.decide(%{params | score: score}), score}
+
+        {:ok, {:error, why}} ->
+          Process.demonitor(task.ref, [:flush])
+          {:fail_open, why}
+
+        nil ->
+          {:fail_open, :verify_timeout}
+
+        {:exit, why} ->
+          {:fail_open, {:verify_crashed, why}}
+      end
+    end
+  end
+
+  defp shadow_verify(t, %{voice_lock: vl, config: cfg} = data) do
+    owner = self()
+
+    case slice_turn(data) do
+      :unavailable ->
+        log_gate(data, "fail_open", :no_turn_audio, nil, 0, t)
+        data
+
+      {_audio, _ms} when is_nil(vl.voiceprint) ->
+        log_gate(data, "fail_open", :no_voiceprint, nil, 0, t)
+        clear_ring_mark(data)
+
+      {audio, speech_ms} ->
+        ago = verified_ago(data)
+
+        Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+          params = %{
+            score: nil,
+            speech_ms: speech_ms,
+            last_verified_ms_ago: ago,
+            threshold: vl.threshold,
+            min_verify_ms: cfg.voice_lock_min_verify_ms,
+            trust_window_ms: cfg.voice_lock_trust_window_ms
+          }
+
+          {decision, score} =
+            if speech_ms < cfg.voice_lock_min_verify_ms do
+              {App.Speaker.Gate.decide(params), nil}
+            else
+              case App.Speaker.verifier().embed(audio) do
+                {:ok, emb} ->
+                  s = App.Speaker.score(emb, vl.voiceprint)
+                  {App.Speaker.Gate.decide(%{params | score: s}), s}
+
+                {:error, why} ->
+                  {{:pass, :fail_open}, nil}
+                  |> tap(fn _ -> Logger.info("[gate] shadow verify error: #{inspect(why)}") end)
+              end
+            end
+
+          label =
+            case decision do
+              {:pass, :verified} -> "pass"
+              {:pass, :trusted} -> "trusted_pass"
+              {:pass, :fail_open} -> "fail_open"
+              {:drop, _} -> "would_drop"
+            end
+
+          reason = elem(decision, 1)
+
+          App.Speaker.log_event(%{
+            user_id: vl.user_id,
+            decision: label,
+            reason: to_string(reason),
+            score: score,
+            speech_ms: speech_ms,
+            transcript: String.slice(t, 0, 120),
+            mode: "shadow"
+          })
+
+          if decision == {:pass, :verified}, do: send(owner, {:voice_gate_result, :verified})
+        end)
+
+        clear_ring_mark(data)
+    end
+  end
+
+  defp slice_turn(%{audio_ring: nil}), do: :unavailable
+
+  defp slice_turn(%{audio_ring: ring, config: cfg}) do
+    case App.Speaker.Ring.slice(ring, 32_000, cfg.voice_lock_slice_max_seconds * 32_000) do
+      :no_mark -> :unavailable
+      {:ok, bin, speech_ms} -> {bin, speech_ms}
+    end
+  end
+
+  defp gate_fail_open(t, data, why) do
+    Logger.warning("[gate] fail-open (#{inspect(why)}) — passing the turn")
+    log_gate(data, "fail_open", why, nil, 0, t)
+    feed({:endpoint, t}, clear_ring_mark(data))
+  end
+
+  defp verified_ago(%{last_verified_at: nil}), do: nil
+  defp verified_ago(%{last_verified_at: at}), do: System.monotonic_time(:millisecond) - at
+
+  defp clear_ring_mark(%{audio_ring: nil} = data), do: data
+
+  defp clear_ring_mark(data),
+    do: %{data | audio_ring: App.Speaker.Ring.clear_mark(data.audio_ring)}
+
+  defp log_gate(%{voice_lock: vl} = data, decision, reason, score, speech_ms, t) do
+    attrs = %{
+      user_id: vl.user_id,
+      decision: decision,
+      reason: to_string(reason),
+      score: score,
+      speech_ms: speech_ms,
+      transcript: String.slice(t, 0, 120),
+      mode: to_string(vl.mode)
+    }
+
+    Task.Supervisor.start_child(App.Conversations.TaskSup, fn -> App.Speaker.log_event(attrs) end)
+    data
   end
 
   defp unlock(data) do
@@ -1173,6 +1367,17 @@ defmodule App.Conversations.Conversation do
   defp handle_turn_start(data) do
     Logger.info("[turn] ◉ turn.start during #{data.policy.phase}")
     {:keep_state, data}
+  end
+
+  # Mirrors buffer_audio's lazy-creation guard: if this is the very first turn.start of a
+  # gated session (no mic audio has streamed yet, so the ring doesn't exist), create it AND
+  # mark it in the same step. Without this, a turn.start that beats the first push_audio frame
+  # leaves the mark stranded on a ring that gets created (unmarked) moments later by
+  # buffer_audio — slice_turn then sees `mark: nil` and fails open on every session's opener.
+  defp mark_ring(%{voice_lock: %{mode: mode}, ptt_mode: false, audio_ring: nil} = data)
+       when mode != :off do
+    cap = data.config.voice_lock_ring_seconds * 32_000
+    %{data | audio_ring: App.Speaker.Ring.mark(App.Speaker.Ring.new(cap))}
   end
 
   defp mark_ring(%{audio_ring: nil} = data), do: data
