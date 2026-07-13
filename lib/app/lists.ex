@@ -103,6 +103,18 @@ defmodule App.Lists do
     count
   end
 
+  @doc """
+  Delete EVERY item on `list` (checked or not) — keeps the list row itself. Used by the Books
+  modal's type-aware "Clear ↻" for a list book (the list stays, now empty). Returns the count
+  removed. Broadcasts (same rule as `clear_checked/1`: household lists also notify
+  `lists:household`).
+  """
+  def clear_items(%List{} = list) do
+    {count, _} = Item |> where([i], i.list_id == ^list.id) |> Repo.delete_all()
+    broadcast_changed(list.user_id, list.household)
+    count
+  end
+
   def remove_item(%Item{} = item) do
     item = Repo.preload(item, :list)
 

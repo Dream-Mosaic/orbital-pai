@@ -202,6 +202,42 @@ defmodule App.ListsTest do
     end
   end
 
+  describe "clear_items/1" do
+    test "deletes ALL items (checked and unchecked), keeps the list, and broadcasts", %{d: d} do
+      {:ok, list} = %List{} |> List.changeset(%{user_id: d, name: "Groceries"}) |> Repo.insert()
+      {:ok, checked} = Lists.add_item(list, "milk")
+      {:ok, _pending} = Lists.add_item(list, "eggs")
+      {:ok, _} = Lists.check_item(checked)
+
+      Phoenix.PubSub.subscribe(App.PubSub, "lists:#{d}")
+
+      assert Lists.clear_items(list) == 2
+      assert_receive {:lists_changed}
+
+      reloaded = Lists.with_items(list)
+      assert reloaded.items == []
+      assert Repo.get(List, list.id) != nil
+    end
+
+    test "on a household list, also broadcasts on lists:household", %{d: d} do
+      {:ok, list} =
+        %List{}
+        |> List.changeset(%{user_id: d, name: "Groceries", household: true})
+        |> Repo.insert()
+
+      {:ok, _} = Lists.add_item(list, "milk")
+
+      Phoenix.PubSub.subscribe(App.PubSub, "lists:household")
+      Lists.clear_items(list)
+      assert_receive {:lists_changed}
+    end
+
+    test "on an already-empty list, returns 0", %{d: d} do
+      {:ok, list} = %List{} |> List.changeset(%{user_id: d, name: "Groceries"}) |> Repo.insert()
+      assert Lists.clear_items(list) == 0
+    end
+  end
+
   describe "remove_item/1 and delete_list/1" do
     test "remove_item deletes it and broadcasts", %{d: d} do
       {:ok, list} = %List{} |> List.changeset(%{user_id: d, name: "To-do"}) |> Repo.insert()
