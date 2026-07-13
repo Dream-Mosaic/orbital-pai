@@ -24,8 +24,18 @@ FROM ${BUILDER_IMAGE} AS builder
 # nodejs + npm are needed by the assets pipeline: `mix assets.setup` runs
 # `npm install --prefix assets` (the JS the esbuild bundle imports).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git nodejs npm \
+  && apt-get install -y --no-install-recommends build-essential git nodejs npm curl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+
+# Rust toolchain — the Ortex speaker-embedding NIF (Voice Lock) is a `rustler` crate compiled
+# from source during `mix deps.compile`. EXLA's C++ NIF uses build-essential's g++ (already above).
+# Installed via rustup for a modern, complete stable toolchain; cargo goes on PATH for mix.
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable \
+  && rustc --version && cargo --version
 
 # prepare build dir
 WORKDIR /app
