@@ -107,7 +107,15 @@ defmodule App.Config do
             # Vision ("look at this"): grab a single webcam frame on an explicit spoken cue and
             # send it to the multimodal brain. ON by default (further gated by camera permission +
             # the explicit phrase); env-backed so `VISION=false`/`0` disables it without recompiling.
-            vision: true
+            vision: true,
+            # Voice Lock (speaker verification gate; spec 2026-07-12-voice-lock-design).
+            # threshold is PROVISIONAL (spike midpoint 0.4642, rounded) until shadow-mode calibration.
+            voice_lock_threshold: 0.46,
+            voice_lock_trust_window_ms: 15_000,
+            voice_lock_min_verify_ms: 1_200,
+            voice_lock_verify_budget_ms: 250,
+            voice_lock_ring_seconds: 30,
+            voice_lock_slice_max_seconds: 12
 
   @type t :: %__MODULE__{}
 
