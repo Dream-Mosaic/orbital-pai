@@ -40,7 +40,8 @@ defmodule App.Application do
       children ++
         reminder_scheduler() ++
         briefing_scheduler() ++
-        memory_consolidator() ++ memory_embedder() ++ source_ingester() ++ pool_warmer()
+        memory_consolidator() ++
+        memory_embedder() ++ source_ingester() ++ pool_warmer() ++ speaker_verifier()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -82,6 +83,12 @@ defmodule App.Application do
   defp pool_warmer do
     if Application.get_env(:app, :start_pool_warmer, false),
       do: [App.Http.Warmer],
+      else: []
+  end
+
+  defp speaker_verifier do
+    if Application.get_env(:app, :start_speaker_verifier, true),
+      do: [App.Speaker.Ortex],
       else: []
   end
 

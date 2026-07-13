@@ -9,6 +9,24 @@ defmodule App.Test.Fakes do
     def synthesize(_text, _opts), do: {:ok, :binary.copy(<<0, 0>>, 160)}
   end
 
+  defmodule Verifier do
+    @moduledoc "Controllable speaker verifier: embedding/error/delay/readiness via app env."
+    @behaviour App.Speaker.Verifier
+
+    @impl true
+    def embed(_pcm16) do
+      if ms = Application.get_env(:app, :fake_verifier_delay_ms), do: Process.sleep(ms)
+
+      case Application.get_env(:app, :fake_verifier_error) do
+        nil -> {:ok, Application.get_env(:app, :fake_verifier_embedding, [1.0, 0.0, 0.0, 0.0])}
+        reason -> {:error, reason}
+      end
+    end
+
+    @impl true
+    def ready?, do: Application.get_env(:app, :fake_verifier_ready, true)
+  end
+
   defmodule BrainStream do
     @moduledoc """
     Fake streaming brain: emits one tiny audio chunk then `{:brain_done, "the answer"}`.
