@@ -84,8 +84,19 @@ RUN mix release
 FROM ${RUNNER_IMAGE} AS final
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates \
+  && apt-get install -y --no-install-recommends libstdc++6 openssl libncurses6 locales ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
+
+# Voice Lock speaker-embedding model — baked into the image. It's gitignored + ~25MB, so it is NOT in
+# the git checkout Coolify builds from; without this the container boots "model unavailable" and Voice
+# Lock fails open (never verifies). Own layer above the release COPY so it caches across code changes;
+# checksum-verified so a partial/corrupt download fails the build loudly instead of shipping a bad model.
+ARG SPEAKER_MODEL_URL="https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM/resolve/main/voxceleb_ECAPA512_LM.onnx"
+ARG SPEAKER_MODEL_SHA256="d71b85d9b48058ef68004f04f1b78acebefb9dfcf542e19b976a12a5ad1f10b0"
+RUN mkdir -p /app/models \
+  && curl -fL --retry 3 -o /app/models/speaker_ecapa.onnx "$SPEAKER_MODEL_URL" \
+  && echo "${SPEAKER_MODEL_SHA256}  /app/models/speaker_ecapa.onnx" | sha256sum -c -
+ENV SPEAKER_MODEL_PATH=/app/models/speaker_ecapa.onnx
 
 # Prefer IPv4 in glibc name resolution. The deploy host has no working IPv6 egress, so resolving
 # AAAA-first makes the BEAM stall on unreachable IPv6 for every outbound call (Google OAuth, Gemini,

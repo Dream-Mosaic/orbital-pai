@@ -34,6 +34,15 @@ if config_env() == :prod do
     database: database_path,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
 
+  # Voice Lock speaker model. In a release the default relative "priv/models/..." path resolves
+  # against the container CWD, not the bundled priv, so we point at an absolute path. The Dockerfile
+  # bakes the model to /app/models and sets SPEAKER_MODEL_PATH; override it to a volume path
+  # (e.g. /data/models/speaker_ecapa.onnx) if you'd rather persist it there. Absent/unreadable →
+  # the verifier stays not-ready and Voice Lock fails open (works like today).
+  config :app,
+         :speaker_model_path,
+         System.get_env("SPEAKER_MODEL_PATH") || "/app/models/speaker_ecapa.onnx"
+
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want
