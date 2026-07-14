@@ -1,6 +1,22 @@
-# Henry — a naturally-responsive voice assistant
+<div align="center">
 
-Henry is a low-latency, voice-first personal assistant built in **Elixir/Phoenix**. You talk; it
+# Orbital P.A.I 🚀
+
+[![Elixir](https://img.shields.io/badge/Elixir-4B275F?style=for-the-badge&logo=elixir&logoColor=white)](https://elixir-lang.org/)
+[![Phoenix Framework](https://img.shields.io/badge/Phoenix_Framework-FD4F00?style=for-the-badge&logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org/)
+[![Status](https://img.shields.io/badge/Status-Active_Development-orange?style=for-the-badge)](https://github.com/)
+
+</div>
+
+---
+
+> [!WARNING]
+> **Hold onto your hats!** 🎢
+> This project is under **heavy, active development**. Expect sudden breaking changes, plenty of bugs, and a bit of a rollercoaster ride in the short term while the dust settles. Use at your own risk!
+
+# Orbital P.A.I — a naturally-responsive voice assistant
+
+Orbital (I named mine Henry) is a low-latency, voice-first personal assistant built in **Elixir/Phoenix**. You talk; it
 answers out loud — fast — and it can actually *do things* (calendar, email, reminders, weather, web
 search) through a tool-calling brain. It remembers what matters about you across conversations, works
 as an installable PWA, and has a "kiosk" wall mode.
@@ -11,8 +27,8 @@ as an installable PWA, and has a "kiosk" wall mode.
 |---|---|---|
 | ![phone](docs/screenshots/pai_phone_henry_user_02.png) | ![kiosk](docs/screenshots/pai_kiosk_henry_01.png) | ![off](docs/screenshots/pai_phone_henry_off_03.png) |
 
-The orb is the light source: it glows **amber** while you speak, **green** while Henry speaks, and the
-whole surface breathes with the live audio. Your turns run down an amber rail, Henry's down a green one.
+The orb is the light source: it glows **amber** while you speak, **green** while the AI speaks, and the
+whole surface breathes with the live audio. Your turns run down an amber rail, the AI's down a green one.
 
 ## How it works (the pipeline)
 
@@ -34,7 +50,7 @@ mic → Cartesia Ink-2 STT → Conversation (gen_statem) ──► reflex  (inst
 - **Memory** — durable profile facts + a rolling summary, auto-extracted, shown/editable in the UI.
 - **Turn-taking** — Ink-2's **native semantic endpointing** (a mid-thought pause doesn't cut you off),
   a **push-to-talk** mode (hold a button, via Ink's manual finalize), and **barge-in** ("allow
-  interruptions" — talk over Henry and he yields, driven by Ink's `turn.start`).
+  interruptions" — talk over the AI and they yields, driven by Ink's `turn.start`).
 - **Proactive** — a generic *agenda* system delivers self-initiated turns; reminders fire as spoken,
   polite interjections (speak when idle, queue mid-turn, interject at the next breath).
 - **Multi-user** — sign-in is gated by an allowlist; each user sees only their own memory, reminders,
@@ -62,7 +78,7 @@ button, allow the mic, and speak. (Chrome recommended for Web Audio.)
 
 ## Deploy
 
-Henry ships as a Docker image and runs behind any reverse proxy / tunnel that supports WebSockets
+Orbital P.A.I ships as a Docker image and runs behind any reverse proxy / tunnel that supports WebSockets
 (e.g. a Cloudflare Tunnel). All secrets + host come from environment variables — nothing is baked into
 the image. See `docker-compose.yml` and `docs/deploy-coolify.md` for a reference deployment (SQLite on
 a persistent volume, `SECRET_KEY_BASE`, `PHX_HOST`, `ALLOWED_USERS`, etc.).
@@ -76,6 +92,13 @@ a persistent volume, `SECRET_KEY_BASE`, `PHX_HOST`, `ALLOWED_USERS`, etc.).
 - `lib/app/google/` — OAuth + Calendar + Gmail; `lib/app/memory/` — facts/summary/turns.
 - `lib/app_web/` — `VoiceChannel`, `ConversationLive`, `GoogleAuthController`.
 - `assets/js/voice/` — the `Voice` hook (mic capture, gapless playback, the live orb + caption, push-to-talk).
+
+## Cloud LLM vs Local LLMs
+his project leans on a handful of paid API keys — Gemini (the LLM), Cartesia (speech-to-text and text-to-speech), and Voyage (embeddings). They cost money, but they get the infrastructure out of the way so I can focus on building features and iterate quickly.
+
+It's not all cloud, though: one model already runs locally, the speaker verifier behind Voice Lock, a small ONNX speaker-embedding model that runs in-process on the CPU. The long-term goal is to bring the heavier pieces local too, especially the LLMs, which would cut costs dramatically.
+
+I don't have enough usage data yet to give a monthly cost estimate with current apis.
 
 ## Contributing
 
