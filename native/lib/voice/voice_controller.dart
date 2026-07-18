@@ -18,6 +18,7 @@ class VoiceController extends ChangeNotifier {
   final MicCapture _mic = MicCapture();
   StreamSubscription<Uint8List>? _micSub;
   bool _micOn = false;
+  bool _disposed = false;
 
   ConnState get state => _state;
   String get caption => _caption;
@@ -30,11 +31,18 @@ class VoiceController extends ChangeNotifier {
     if (_eventLog.length > 200) _eventLog.removeAt(0);
   }
 
+  /// Notify listeners unless we've already been disposed. Guards against
+  /// async tails (e.g. stopMic's awaited cancel/stop) resolving after
+  /// dispose() has run, which would otherwise throw in debug/test builds.
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
   Future<void> connect() async {
     if (_state == ConnState.connecting || _state == ConnState.joined) return;
     _state = ConnState.connecting;
     _log('connecting…');
-    notifyListeners();
+    _safeNotify();
     try {
       final client = await connectVoice(
         kSocketUrl(kSocketToken),
@@ -42,25 +50,23 @@ class VoiceController extends ChangeNotifier {
         joinPayload: const {'kiosk': false},
       );
       _client = client;
-      client.messages.listen(_onMessage,
-          onError: (e) {
-            _state = ConnState.error;
-            _log('stream error: $e');
-            notifyListeners();
-          },
-          onDone: () {
-            _state = ConnState.idle;
-            _log('socket closed');
-            notifyListeners();
-          });
+      client.messages.listen(_onMessage, onError: (e) {
+        _state = ConnState.error;
+        _log('stream error: $e');
+        _safeNotify();
+      }, onDone: () {
+        _state = ConnState.idle;
+        _log('socket closed');
+        _safeNotify();
+      });
       final resp = await client.onJoin;
       _state = ConnState.joined;
       _log('joined voice:henry — reply: $resp');
-      notifyListeners();
+      _safeNotify();
     } catch (e) {
       _state = ConnState.error;
       _log('connect/join failed: $e');
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -109,7 +115,7 @@ class VoiceController extends ChangeNotifier {
       default:
         _log('event: ${m.event} $p');
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   // ---- audio seams, implemented in Tasks 5–6 ----
@@ -126,10 +132,10 @@ class VoiceController extends ChangeNotifier {
       _micSub = stream.listen((chunk) {
         _client?.pushBinary('audio', chunk);
       }, onError: (e) => _log('mic error: $e'));
-      notifyListeners();
+      _safeNotify();
     } catch (e) {
       _log('mic start failed: $e');
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -139,7 +145,7 @@ class VoiceController extends ChangeNotifier {
     await _mic.stop();
     _micOn = false;
     _log('mic stopped');
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> disconnect() async {
@@ -148,11 +154,12 @@ class VoiceController extends ChangeNotifier {
     _client = null;
     _state = ConnState.idle;
     _log('disconnected');
-    notifyListeners();
+    _safeNotify();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     stopMic();
     _client?.close();
     super.dispose();
