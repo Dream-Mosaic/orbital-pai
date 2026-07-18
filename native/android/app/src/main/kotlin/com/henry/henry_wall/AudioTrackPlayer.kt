@@ -12,20 +12,28 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /// Spike-grade gapless PCM16 mono player. MODE_STREAM AudioTrack fed by a
 /// background writer thread. playedMs() is derived from the playback head
-/// position relative to the current run's start (reset on stopAndFlush()).
+/// position relative to the current run's start. A run ends on stopAndFlush()
+/// (barge-in) or when the queue drains and the head catches up (natural end).
 ///
 /// Note: AudioTrack.playbackHeadPosition wraps at 2^31 frames (~24.8 h at
 /// 24 kHz) — fine for a spike; documented here rather than guarded.
 class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, "henry/audio_track")
-    private var track: AudioTrack? = null
+    @Volatile private var track: AudioTrack? = null
     private var sampleRate = 24000
     private val queue = LinkedBlockingQueue<ByteArray>()
     private var writer: Thread? = null
     private val running = AtomicBoolean(false)
 
     @Volatile private var idle = true
+    // Playback head position when the current run started (absolute frames).
     @Volatile private var runStartFrames = 0
+    // Frames written for the current run (run-relative), so the writer can tell
+    // when the head has caught up == the run ended naturally.
+    @Volatile private var runWrittenFrames = 0
+    // Bumped by stopAndFlush()/dispose() so a writer blocked mid-chunk discards
+    // the remainder instead of feeding it into the freshly flushed track.
+    @Volatile private var generation = 0
 
     init { channel.setMethodCallHandler(this) }
 
@@ -68,20 +76,43 @@ class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHan
         track!!.play()
         idle = true
         runStartFrames = 0
+        runWrittenFrames = 0
         running.set(true)
         writer = Thread { writerLoop() }.also { it.start() }
     }
 
     private fun writerLoop() {
         while (running.get()) {
-            val chunk = queue.poll(100, TimeUnit.MILLISECONDS) ?: continue
+            val chunk = queue.poll(100, TimeUnit.MILLISECONDS)
+            if (chunk == null) {
+                // Queue drained. Once the playback head has caught up to every
+                // frame written for this run, the run ended naturally and the
+                // next chunk starts a fresh one — mirrors the "idle gap: a new
+                // run starts now" reset in assets/js/voice/playback.js. Without
+                // this, runStartFrames stays anchored at the first turn and
+                // playedMs() reports every turn since the last stopAndFlush().
+                val t = track
+                if (!idle && t != null &&
+                    (t.playbackHeadPosition - runStartFrames) >= runWrittenFrames) {
+                    idle = true
+                }
+                continue
+            }
+            // Captured the instant we take the chunk: a stopAndFlush() from here
+            // on must invalidate what's left of it.
+            val gen = generation
             val t = track ?: continue
-            if (idle) { runStartFrames = t.playbackHeadPosition; idle = false }
+            if (idle) {
+                runStartFrames = t.playbackHeadPosition
+                runWrittenFrames = 0
+                idle = false
+            }
             var off = 0
-            while (off < chunk.size && running.get()) {
+            while (off < chunk.size && running.get() && generation == gen) {
                 val n = t.write(chunk, off, chunk.size - off, AudioTrack.WRITE_BLOCKING)
                 if (n < 0) break
                 off += n
+                runWrittenFrames += n / 2 // PCM16 mono: 2 bytes per frame
             }
         }
     }
@@ -91,28 +122,41 @@ class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHan
     private fun playedMs(): Int {
         val t = track ?: return 0
         if (idle) return 0
-        val frames = (t.playbackHeadPosition - runStartFrames).toLong()
+        // Clamp to what this run actually wrote (the head can never legitimately
+        // pass it; guards a mid-flush read too).
+        val frames = (t.playbackHeadPosition - runStartFrames)
+            .coerceIn(0, runWrittenFrames).toLong()
         return (frames * 1000L / sampleRate).toInt()
     }
 
     private fun stopAndFlush(): Int {
         val t = track ?: return 0
         val played = playedMs()
+        // Invalidate the in-flight chunk BEFORE pause() unblocks the writer,
+        // otherwise it resumes writing the remainder into the flushed track.
+        generation++
+        idle = true
         queue.clear()
         t.pause()
         t.flush()
         t.play()   // ready for the next run
-        idle = true
         return played
     }
 
     private fun dispose() {
         running.set(false)
+        generation++
+        // pause() unblocks a writer parked in WRITE_BLOCKING (up to the ~0.5 s
+        // buffer cushion) so the join below doesn't time out and release() the
+        // track out from under it.
+        track?.pause()
         writer?.join(200)
         writer = null
         queue.clear()
-        track?.let { it.pause(); it.flush(); it.release() }
+        track?.let { it.flush(); it.release() }
         track = null
         idle = true
+        runStartFrames = 0
+        runWrittenFrames = 0
     }
 }
