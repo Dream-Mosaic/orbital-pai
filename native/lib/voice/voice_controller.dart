@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import '../audio/mic_capture.dart';
 import '../config.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel_client.dart';
@@ -13,10 +15,15 @@ class VoiceController extends ChangeNotifier {
   final List<String> _transcript = [];
   final List<String> _eventLog = [];
 
+  final MicCapture _mic = MicCapture();
+  StreamSubscription<Uint8List>? _micSub;
+  bool _micOn = false;
+
   ConnState get state => _state;
   String get caption => _caption;
   List<String> get transcript => List.unmodifiable(_transcript);
   List<String> get eventLog => List.unmodifiable(_eventLog);
+  bool get micOn => _micOn;
 
   void _log(String line) {
     _eventLog.add(line);
@@ -110,7 +117,33 @@ class VoiceController extends ChangeNotifier {
   void _handleStopPlayback() {}
   void _handleDuck(bool on) {}
 
+  Future<void> startMic() async {
+    if (_micOn || _client == null) return;
+    try {
+      final stream = await _mic.start();
+      _micOn = true;
+      _log('mic started (16k PCM16)');
+      _micSub = stream.listen((chunk) {
+        _client?.pushBinary('audio', chunk);
+      }, onError: (e) => _log('mic error: $e'));
+      notifyListeners();
+    } catch (e) {
+      _log('mic start failed: $e');
+      notifyListeners();
+    }
+  }
+
+  Future<void> stopMic() async {
+    await _micSub?.cancel();
+    _micSub = null;
+    await _mic.stop();
+    _micOn = false;
+    _log('mic stopped');
+    notifyListeners();
+  }
+
   Future<void> disconnect() async {
+    await stopMic();
     await _client?.close();
     _client = null;
     _state = ConnState.idle;
@@ -120,6 +153,7 @@ class VoiceController extends ChangeNotifier {
 
   @override
   void dispose() {
+    stopMic();
     _client?.close();
     super.dispose();
   }

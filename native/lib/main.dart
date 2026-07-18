@@ -49,7 +49,11 @@ class _DebugHomeState extends State<DebugHome> {
             Wrap(spacing: 8, children: [
               FilledButton(onPressed: _vc.connect, child: const Text('Connect')),
               OutlinedButton(onPressed: _vc.disconnect, child: const Text('Disconnect')),
-              // Mic + spike buttons added in Tasks 5 & 7.
+              FilledButton.tonal(
+                onPressed: () => _vc.micOn ? _vc.stopMic() : _vc.startMic(),
+                child: Text(_vc.micOn ? 'Mic off' : 'Mic on'),
+              ),
+              // Spike buttons added in Task 7.
             ]),
             const SizedBox(height: 8),
             Text('caption: ${_vc.caption}',
