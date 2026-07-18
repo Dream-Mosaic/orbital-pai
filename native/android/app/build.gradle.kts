@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.henry.henry_wall"
-    compileSdk = 35
+    // record_android requires compileSdk >= 36 (checked at AAR-metadata time);
+    // compileSdk is independent of targetSdk/minSdk (runtime behavior below).
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

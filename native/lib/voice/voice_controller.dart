@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import '../audio/audio_track_player.dart';
 import '../audio/mic_capture.dart';
 import '../config.dart';
 import '../phoenix/decoded_message.dart';
@@ -19,6 +19,9 @@ class VoiceController extends ChangeNotifier {
   StreamSubscription<Uint8List>? _micSub;
   bool _micOn = false;
   bool _disposed = false;
+
+  final AudioTrackPlayer _player = AudioTrackPlayer();
+  bool _playerReady = false;
 
   ConnState get state => _state;
   String get caption => _caption;
@@ -62,6 +65,9 @@ class VoiceController extends ChangeNotifier {
       final resp = await client.onJoin;
       _state = ConnState.joined;
       _log('joined voice:henry — reply: $resp');
+      await _player.init(24000);
+      _playerReady = true;
+      _log('audio track ready (24k)');
       _safeNotify();
     } catch (e) {
       _state = ConnState.error;
@@ -118,10 +124,22 @@ class VoiceController extends ChangeNotifier {
     _safeNotify();
   }
 
-  // ---- audio seams, implemented in Tasks 5–6 ----
-  void _handleAudio(Uint8List pcm) {}
-  void _handleStopPlayback() {}
-  void _handleDuck(bool on) {}
+  // ---- audio seams ----
+  void _handleAudio(Uint8List pcm) {
+    if (_playerReady) _player.write(pcm);
+  }
+
+  void _handleStopPlayback() async {
+    if (!_playerReady) return;
+    final ms = await _player.stopAndFlush();
+    _client?.push('played', {'ms': ms});
+    _log('stop_playback → played ${ms}ms');
+    _safeNotify();
+  }
+
+  void _handleDuck(bool on) {
+    if (_playerReady) _player.setVolume(on ? 0.35 : 1.0);
+  }
 
   Future<void> startMic() async {
     if (_micOn || _client == null) return;
@@ -153,6 +171,10 @@ class VoiceController extends ChangeNotifier {
     await _client?.close();
     _client = null;
     _state = ConnState.idle;
+    if (_playerReady) {
+      await _player.dispose();
+      _playerReady = false;
+    }
     _log('disconnected');
     _safeNotify();
   }
@@ -162,6 +184,10 @@ class VoiceController extends ChangeNotifier {
     _disposed = true;
     stopMic();
     _client?.close();
+    if (_playerReady) {
+      _player.dispose();
+      _playerReady = false;
+    }
     super.dispose();
   }
 }
