@@ -60,11 +60,15 @@ class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
       );
       final frameLen = _porcupine!.frameLength; // expect 512
       final stream = await _mic.start();
-      setState(() => _status = 'listening (frameLength=$frameLen, '
-          'sampleRate=${_porcupine!.sampleRate})');
+      if (mounted) {
+        setState(() => _status = 'listening (frameLength=$frameLen, '
+            'sampleRate=${_porcupine!.sampleRate})');
+      }
       _sub = stream.listen((chunk) => _onAudio(chunk, frameLen));
     } catch (e) {
-      setState(() => _status = 'start failed: $e');
+      if (mounted) {
+        setState(() => _status = 'start failed: $e');
+      }
     }
   }
 
@@ -91,7 +95,7 @@ class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
         final frame = Int16List.fromList(_pending.sublist(0, frameLen));
         _pending.removeRange(0, frameLen);
         final idx = await _porcupine!.process(frame);
-        if (idx >= 0) {
+        if (idx >= 0 && mounted) {
           setState(() => _detections++);
         }
       }
@@ -107,7 +111,9 @@ class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
     await _porcupine?.delete();
     _porcupine = null;
     _pending.clear();
-    setState(() => _status = 'stopped');
+    if (mounted) {
+      setState(() => _status = 'stopped');
+    }
   }
 
   @override
