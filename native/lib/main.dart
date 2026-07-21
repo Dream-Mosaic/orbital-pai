@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 
 void main() => runApp(const HenryApp());
@@ -40,7 +41,18 @@ class _DebugHomeState extends State<DebugHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Henry 1a — ${_vc.state.name}')),
+      appBar: AppBar(
+        title: Text('Henry 1a — ${_vc.state.name}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.mic_none),
+            tooltip: 'Porcupine spike',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PorcupineSpikeScreen()),
+            ),
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
