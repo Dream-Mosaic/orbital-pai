@@ -192,6 +192,9 @@ class VoiceController extends ChangeNotifier {
 
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
+    // dispose() closes the socket fire-and-forget, so frames already in flight can
+    // land after orbFrame.dispose(); the waveform setter notifies, which would throw.
+    if (_disposed) return;
     if (_playerReady) _player.write(pcm);
     // Target only; advance() smooths per frame (see the mic listener).
     if (orbFrame.state == OrbState.speaking) {
@@ -222,6 +225,9 @@ class VoiceController extends ChangeNotifier {
       _syncOrb();
       _log('mic started (16k PCM16)');
       _micSub = stream.listen((chunk) {
+        // Same race as _handleAudio: cancelling the subscription is async, so a
+        // chunk can still arrive after orbFrame.dispose() ran synchronously.
+        if (_disposed) return;
         _client?.pushBinary('audio', chunk);
         // Set the TARGET only — OrbFrame.advance() smooths it once per frame, so
         // the orb's responsiveness never depends on the device's audio buffer size.
