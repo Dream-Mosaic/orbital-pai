@@ -50,9 +50,44 @@ void main() {
     expect(w.every((v) => v == 0.0), isTrue);
   });
 
-  test('waveform pads when input is shorter than the requested points', () {
+  test('waveform stretches when input is shorter than the requested points '
+      '(no zero-padding)', () {
     final w = waveformFromPcm16(pcm([1000, -1000]), 32);
     expect(w.length, 32);
+    const first = 1000 / 32768.0;
+    const second = -1000 / 32768.0;
+    for (var i = 0; i < 16; i++) {
+      expect(w[i], closeTo(first, 1e-9));
+    }
+    for (var i = 16; i < 32; i++) {
+      expect(w[i], closeTo(second, 1e-9));
+    }
+  });
+
+  test('waveform preserves sample sign (catches a signed/unsigned PCM misread)',
+      () {
+    final negative = waveformFromPcm16(pcm(List.filled(64, -30000)), 8);
+    expect(negative.length, 8);
+    for (final v in negative) {
+      expect(v, lessThan(0.0));
+    }
+
+    final positive = waveformFromPcm16(pcm(List.filled(64, 30000)), 8);
+    expect(positive.length, 8);
+    for (final v in positive) {
+      expect(v, greaterThan(0.0));
+    }
+  });
+
+  test('waveform with zero requested points returns an empty result', () {
+    final w = waveformFromPcm16(pcm(List.filled(64, 1000)), 0);
+    expect(w, isEmpty);
+  });
+
+  test('waveform does not crash on an odd byte-length input', () {
+    final bytes = pcm(List.filled(64, 1000));
+    final odd = Uint8List.sublistView(bytes, 0, bytes.length - 1);
+    expect(() => waveformFromPcm16(odd, 16), returnsNormally);
   });
 
   test('LevelSmoother approaches the target at 0.2 per update', () {

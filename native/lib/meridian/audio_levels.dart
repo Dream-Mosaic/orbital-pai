@@ -21,8 +21,12 @@ double rmsFromPcm16(Uint8List pcm) {
 }
 
 /// Downsample to exactly [points] samples in -1..1 for the waveform stroke.
-/// Each output point is the average of its input bucket (cheap anti-aliasing);
-/// if the input is shorter than [points], the tail is zero-padded.
+/// Each output point is the average of its input bucket (cheap anti-aliasing).
+/// If the input has fewer samples than [points] (this never happens in
+/// production — a mic chunk is ~1600 samples vs. 128 points), each input
+/// sample is repeated across several output points, stretching the trace
+/// rather than zero-padding it. The function always returns exactly [points]
+/// samples.
 Float32List waveformFromPcm16(Uint8List pcm, int points) {
   final out = Float32List(points);
   final n = pcm.lengthInBytes ~/ 2;
@@ -33,7 +37,6 @@ Float32List waveformFromPcm16(Uint8List pcm, int points) {
     final start = (i * bucket).floor();
     var end = ((i + 1) * bucket).floor();
     if (end <= start) end = start + 1;
-    if (start >= n) break; // zero-padded tail
     var sum = 0.0;
     var count = 0;
     for (var j = start; j < end && j < n; j++) {
