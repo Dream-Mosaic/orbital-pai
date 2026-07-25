@@ -4,7 +4,7 @@ import 'palette.dart';
 
 /// The lit "device" surface. Ported from `main:has(#voice)` (+ ::before/::after)
 /// in server/assets/css/app.css:
-///   * base: a 160deg white sheen over a top-anchored dark radial
+///   * base: a top-anchored dark radial with a 160deg white sheen painted over it
 ///   * bleed: an oversized radial glow seated at the orb (50%, 27%), tinted by the
 ///     live state colour, opacity = that state's `bleed`, cross-fading over 0.8s
 ///     and breathing scale(1.05) on a 9s loop
@@ -51,22 +51,23 @@ class _MeridianSurfaceState extends State<MeridianSurface>
     final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
     return DecoratedBox(
-      // base: linear sheen over the top-anchored dark radial
+      // base: top-anchored dark radial, painted first (farthest back)
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0x05FFFFFF), Color(0x00FFFFFF)],
-          stops: [0.0, 0.35],
+        gradient: RadialGradient(
+          center: Alignment(0.0, -1.0),
+          radius: 1.4,
+          colors: [Color(0xFF090A12), Color(0xFF060710)],
+          stops: [0.0, 0.6],
         ),
       ),
       child: DecoratedBox(
+        // linear white sheen, painted over the dark radial
         decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(0.0, -1.0),
-            radius: 1.4,
-            colors: [Color(0xFF090A12), Color(0xFF060710)],
-            stops: [0.0, 0.6],
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0x05FFFFFF), Color(0x00FFFFFF)],
+            stops: [0.0, 0.35],
           ),
         ),
         child: ClipRect(
@@ -77,7 +78,9 @@ class _MeridianSurfaceState extends State<MeridianSurface>
               IgnorePointer(
                 child: AnimatedOpacity(
                   opacity: pal.bleed,
-                  duration: const Duration(milliseconds: 800),
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 800),
                   curve: Curves.easeInOut,
                   child: AnimatedBuilder(
                     animation: _breathe,
