@@ -61,11 +61,15 @@ mic → Cartesia Ink-2 STT → Conversation (gen_statem) ──► reflex  (inst
 Needs Elixir/Erlang, Node (for asset deps), and API keys.
 
 ```bash
+cd server                # the Phoenix app lives here (the Flutter client is in native/)
 cp .env.example .env     # fill in GOOGLE_API_KEY, CARTESIA_API_KEY (STT + TTS), Google OAuth,
                          # and ALLOWED_USERS (the sign-in allowlist — set it to your own account)
 mix setup                # deps, DB, assets, npm
-./dev.sh                 # loads .env, runs the server, tees output to log/companion.log
+cd .. && ./dev.sh        # loads server/.env, runs the server, tees to server/log/companion.log
 ```
+
+Optional: `docker compose -f docker-compose.dev.yml up -d` starts Qdrant (semantic memory) on
+`localhost:6333`. Without it the server still runs; the embedder just logs a retry warning.
 
 Open the URL it prints (default `http://localhost:8787`, from `PORT` in `.env`), tap the **power**
 button, allow the mic, and speak. (Chrome recommended for Web Audio.)
@@ -84,6 +88,10 @@ the image. See `docker-compose.yml` and `docs/deploy-coolify.md` for a reference
 a persistent volume, `SECRET_KEY_BASE`, `PHX_HOST`, `ALLOWED_USERS`, etc.).
 
 ## Project layout
+
+The repo is a monorepo: **`server/`** (Phoenix — brain, tools, memory, channels + the web UI) and
+**`native/`** (one Flutter project targeting Android phone/tablet, desktop, and later iOS).
+The paths below are relative to `server/`.
 
 - `lib/app/conversations/` — the turn engine: `Conversation` (gen_statem), `Policy`, `BrainStream`, `Sessions`.
 - `lib/app/adapters/` — external services: `Stt.Cartesia` (Ink-2), `TextModel.Gemini`, `Tts.Cartesia` (Sonic).

@@ -9,7 +9,7 @@
 services:
   app:
     build:
-      context: .
+      context: ./server        # the Phoenix app lives in server/ (the Flutter client is native/)
       dockerfile: Dockerfile
     environment:
       # --- runtime config (non-secret) ---

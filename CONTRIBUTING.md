@@ -19,21 +19,21 @@ Elixir/Phoenix. Contributions — bug reports, fixes, features, docs — are wel
 
 ```bash
 git clone <your-fork>
-cd personal-assistant
+cd personal-assistant/server    # the Phoenix app (the Flutter client lives in native/)
 mix setup                       # deps + DB + assets
 
 cp .env.example .env            # then fill in your keys
 # set ALLOWED_USERS in .env to your own Google account(s) — that's the sign-in allowlist
 
-./dev.sh                        # runs the server on PORT (default 8787), tees to log/companion.log
+cd .. && ./dev.sh               # runs the server on PORT (default 8787)
 ```
 
-Open `http://localhost:8787`. **Read `log/companion.log`** when something misbehaves — it's the
+Open `http://localhost:8787`. **Read `server/log/companion.log`** when something misbehaves — it's the
 primary diagnostic surface.
 
 ## The gate
 
-Before opening a PR, make sure the full gate passes:
+Before opening a PR, make sure the full gate passes — **from `server/`**:
 
 ```bash
 mix precommit
@@ -42,6 +42,9 @@ mix precommit
 `mix precommit` = `compile --warnings-as-errors` + `deps.unlock --unused` + `format` + `test`. If you
 touched JS, also run `mix assets.build` and confirm the bundle is clean (there is no JS unit runner —
 JS is smoke-verified in the browser).
+
+Working in `native/` (Flutter) instead? The gate there is `flutter test` + `flutter analyze` clean,
+plus `flutter build apk --debug` if you touched Kotlin (analyze does not compile Kotlin).
 
 ## Conventions
 

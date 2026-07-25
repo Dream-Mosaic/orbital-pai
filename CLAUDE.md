@@ -36,19 +36,38 @@ sub-projects, each its own spec→plan→ship.
 **Bug fixes** (not new features) can skip the brainstorm gate — diagnose (read the logs!), fix
 directly, test, commit, hand off for a re-smoke.
 
+## Repo layout (monorepo)
+
+```
+server/    Phoenix app — brain, tools, memory, channels + the LiveView web UI
+native/    ONE Flutter project → Android (phone+tablet), desktop (macOS/Windows), iOS later
+docs/, docker-compose*.yml, dev.sh, CLAUDE.md, AGENTS.md …   top level
+```
+
+**All `lib/…`, `test/…`, `config/…`, `assets/…`, `priv/…` paths in this file are relative to
+`server/`.** Run every `mix` command from `server/`. The Flutter client is a *single* project —
+phone/tablet/desktop are build targets + responsive layout inside `native/`, not separate folders.
+Deploy: `docker-compose.yml` (Coolify) builds with `context: ./server`.
+
 ## Gates (always, before any commit)
 
-`mix precommit` = `compile --warnings-as-errors` + `deps.unlock --unused` + `format` + `test`.
-Equivalent manual gates used per-task: `mix format` (+ verify `--check-formatted`),
+**From `server/`:** `mix precommit` = `compile --warnings-as-errors` + `deps.unlock --unused` +
+`format` + `test`. Equivalent manual gates used per-task: `mix format` (+ verify `--check-formatted`),
 `mix compile --warnings-as-errors`, `mix test`. JS changes also: `mix assets.build` must bundle clean
 (no JS unit tests — the hook is **smoke-verified**).
+**From `native/`:** `flutter test` + `flutter analyze` clean; Kotlin changes need
+`flutter build apk --debug` (analyze does NOT compile Kotlin). Flutter is **not on PATH** — the SDK
+lives at `~/flutter/bin` (prepend `export PATH="$HOME/flutter/bin:$PATH"; ` per command).
 
 ## Running it
 
-`./dev.sh` loads `.env`, runs the server, tees output to `log/companion.log` (rotated to `.prev` each
-run). Port is `PORT` from `.env` (**8787**, not 4000). `mix setup` installs deps + DB + assets + npm.
-**Read the logs to debug** — `log/companion.log` is the diagnostic surface,
+`./dev.sh` (repo root — a thin delegator to `server/dev.sh`) loads `server/.env`, runs the server, and
+tees output to `server/log/companion.log` (rotated to `.prev` each run). Port is `PORT` from `.env`
+(**8787**, not 4000). `mix setup` (from `server/`) installs deps + DB + assets + npm.
+**Read the logs to debug** — `server/log/companion.log` is the diagnostic surface,
 and reading it (not guessing) has repeatedly been the thing that actually found bugs.
+Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (dev-only, exposed on
+`localhost:6333`, unauthenticated). Without it the embedder logs a harmless retry warning.
 
 ## Git / secrets
 

@@ -1,61 +1,69 @@
+# ── Elixir/Phoenix server (server/) ────────────────────────────────────────────
 # The directory Mix will write compiled artifacts to.
-/_build/
+/server/_build/
 
 # If you run "mix test --cover", coverage assets end up here.
-/cover/
+/server/cover/
 
 # The directory Mix downloads your dependencies sources to.
-/deps/
+/server/deps/
 
 # Where 3rd-party dependencies like ExDoc output generated docs.
-/doc/
+/server/doc/
 
 # Ignore .fetch files in case you like to edit your project deps locally.
-/.fetch
+/server/.fetch
 
-# If the VM crashes, it generates a dump, let's ignore it too.
-erl_crash.dump
-
-# Also ignore archive artifacts (built via "mix archive.build").
+# Ignore archive artifacts (built via "mix archive.build").
 *.ez
 
 # Temporary files, for example, from tests.
-/tmp/
+/server/tmp/
 
 # Ignore package tarball (built via "mix hex.build").
 app-*.tar
 
-# Ignore assets that are produced by build tools.
-/priv/static/assets/
-
-# Ignore digested assets cache.
-/priv/static/cache_manifest.json
+# Assets produced by build tools + digested assets cache.
+/server/priv/static/assets/
+/server/priv/static/cache_manifest.json
 
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
-/assets/node_modules/
+/server/assets/node_modules/
+
+# Local dev server logs (dev.sh tees here)
+/server/log/
+
+# Release artifact dir created by a local `mix release`
+/server/app/
+
+# Speaker verification model (fetched, not committed)
+/server/priv/models/
+
+# ElixirLS (editor) artifacts
+/server/.elixir_ls/
+
+# ── Flutter client (native/) ───────────────────────────────────────────────────
+# (native/.gitignore covers the rest; these are belt-and-suspenders for secrets)
+/native/lib/config.dart
+/native/assets/*.ppn
+
+# ── Repo-wide ──────────────────────────────────────────────────────────────────
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
 
 # Database files
 *.db
 *.db-*
 
-
-# Local dev server logs (dev.sh tees here)
-/log/
-
 # Secrets — never commit
 .env
 
-# ElixirLS (editor) artifacts
-/.elixir_ls/
-
 .claude/skills/daisyui
+
 # Internal build docs (plans/specs/build-status) — kept local, not published
 docs/superpowers/
 
 # Personal roadmap/wishlist — kept local
 IDEAS.md
 FEEDBACK.md
-
-# Speaker verification model (fetched, not committed)
-priv/models/
