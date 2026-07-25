@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
 import '../audio/audio_track_player.dart';
 import '../audio/mic_capture.dart';
 import '../config.dart';
+import '../meridian/audio_levels.dart';
+import '../meridian/orb_painter.dart';
+import '../meridian/orb_state.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel_client.dart';
 
@@ -23,11 +26,26 @@ class VoiceController extends ChangeNotifier {
   final AudioTrackPlayer _player = AudioTrackPlayer();
   bool _playerReady = false;
 
+  // ---- Meridian orb state ----
+  bool _talking = false;
+  bool _wakeLocked = false;
+  TurnState _turnState = TurnState.idle;
+  final OrbFrame orbFrame = OrbFrame();
+
   ConnState get state => _state;
   String get caption => _caption;
   List<String> get transcript => List.unmodifiable(_transcript);
   List<String> get eventLog => List.unmodifiable(_eventLog);
   bool get micOn => _micOn;
+
+  bool get talking => _talking;
+  bool get wakeLocked => _wakeLocked;
+  TurnState get turnState => _turnState;
+  OrbState get orbState => resolveOrbState(
+        talking: _talking,
+        wakeLocked: _wakeLocked,
+        turnState: _turnState,
+      );
 
   void _log(String line) {
     _eventLog.add(line);
@@ -40,6 +58,48 @@ class VoiceController extends ChangeNotifier {
   void _safeNotify() {
     if (!_disposed) notifyListeners();
   }
+
+  void _syncOrb() {
+    // Guard against the same class of post-dispose async tail as _safeNotify:
+    // dispose() fires stopMic() without awaiting it, so its awaited
+    // cancel/stop can resolve after orbFrame.dispose() has already run.
+    if (_disposed) return;
+    orbFrame.state = orbState;
+    _safeNotify();
+  }
+
+  /// Map a server turn-state event onto the orb, ported from index.js.
+  void _applyTurnEvent(String event) {
+    switch (event) {
+      case 'speak_start':
+      case 'speaking':
+        _turnState = TurnState.speaking;
+      case 'listening':
+        _turnState = TurnState.listening;
+      case 'thinking':
+        _turnState = TurnState.thinking;
+      default:
+        return;
+    }
+    _syncOrb();
+  }
+
+  // Test seams (no platform channels involved).
+  @visibleForTesting
+  void debugSetTalking(bool v) {
+    _talking = v;
+    if (!v) _turnState = TurnState.idle;
+    _syncOrb();
+  }
+
+  @visibleForTesting
+  void debugSetWakeLocked(bool v) {
+    _wakeLocked = v;
+    _syncOrb();
+  }
+
+  @visibleForTesting
+  void debugApplyEvent(String event) => _applyTurnEvent(event);
 
   Future<void> connect() async {
     if (_state == ConnState.connecting || _state == ConnState.joined) return;
@@ -97,6 +157,7 @@ class VoiceController extends ChangeNotifier {
         break;
       case 'speak_start':
         _transcript.add('${p['source']}: ${p['text']}');
+        _applyTurnEvent('speak_start');
         break;
       case 'brain_delta':
         _log('brain_delta: ${p['delta']}');
@@ -114,10 +175,15 @@ class VoiceController extends ChangeNotifier {
       case 'listening':
       case 'thinking':
         _log('state: ${m.event}');
-        break;
+        _applyTurnEvent(m.event);
+      case 'locked':
+        _wakeLocked = (p['locked'] as bool?) ?? false;
+        _log('locked: $_wakeLocked');
+        _syncOrb();
       case 'state':
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']}');
-        break;
+        _wakeLocked = (p['locked'] as bool?) ?? _wakeLocked;
+        _syncOrb();
       default:
         _log('event: ${m.event} $p');
     }
@@ -127,6 +193,11 @@ class VoiceController extends ChangeNotifier {
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
     if (_playerReady) _player.write(pcm);
+    // Target only; advance() smooths per frame (see the mic listener).
+    if (orbFrame.state == OrbState.speaking) {
+      orbFrame.audioTarget = rmsFromPcm16(pcm);
+      orbFrame.waveform = waveformFromPcm16(pcm, 128);
+    }
   }
 
   void _handleStopPlayback() async {
@@ -146,9 +217,18 @@ class VoiceController extends ChangeNotifier {
     try {
       final stream = await _mic.start();
       _micOn = true;
+      _talking = true;
+      _turnState = TurnState.idle;
+      _syncOrb();
       _log('mic started (16k PCM16)');
       _micSub = stream.listen((chunk) {
         _client?.pushBinary('audio', chunk);
+        // Set the TARGET only — OrbFrame.advance() smooths it once per frame, so
+        // the orb's responsiveness never depends on the device's audio buffer size.
+        if (orbFrame.state == OrbState.listening) {
+          orbFrame.audioTarget = rmsFromPcm16(chunk);
+          orbFrame.waveform = waveformFromPcm16(chunk, 128);
+        }
       }, onError: (e) => _log('mic error: $e'));
       _safeNotify();
     } catch (e) {
@@ -162,6 +242,10 @@ class VoiceController extends ChangeNotifier {
     _micSub = null;
     await _mic.stop();
     _micOn = false;
+    _talking = false;
+    _turnState = TurnState.idle;
+    orbFrame.audioTarget = 0.0; // advance() decays the level from here
+    _syncOrb();
     _log('mic stopped');
     _safeNotify();
   }
@@ -188,6 +272,7 @@ class VoiceController extends ChangeNotifier {
       _player.dispose();
       _playerReady = false;
     }
+    orbFrame.dispose();
     super.dispose();
   }
 }
