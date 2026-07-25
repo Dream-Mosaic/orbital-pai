@@ -79,6 +79,22 @@ void main() {
     expect(notified, 3);
   });
 
+  test('audioTarget must NOT notify (repaint is driven by advance())', () {
+    final f = OrbFrame()..state = OrbState.listening;
+    var notified = 0;
+    f.addListener(() => notified++);
+    f.audioTarget = 1.0;
+    expect(notified, 0);
+  });
+
+  test('off must NOT notify on advance (deliberate 24/7 wall-device power decision)', () {
+    final f = OrbFrame()..state = OrbState.off;
+    var notified = 0;
+    f.addListener(() => notified++);
+    f.advance(0.016);
+    expect(notified, 0);
+  });
+
   testWidgets('painter renders every state without throwing', (tester) async {
     for (final s in OrbState.values) {
       final f = OrbFrame()

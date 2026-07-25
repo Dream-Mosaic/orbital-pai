@@ -113,7 +113,11 @@ class OrbPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2 - f
           ..color = pal.glow.withValues(alpha: alpha.clamp(0.0, 1.0))
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, _sigma(10 + 14 * kGlow));
+          // Canvas 2D shadowBlur draws the blurred shadow AND THEN composites the
+          // crisp shape on top — BlurStyle.solid ("solid inside, fuzzy outside")
+          // is the matching semantic. BlurStyle.normal would replace the crisp
+          // stroke with the blur, crushing a thin stroke's peak alpha to near zero.
+          ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(10 + 14 * kGlow));
         canvas.drawCircle(center, rr, paint);
       }
     }
@@ -124,7 +128,7 @@ class OrbPainter extends CustomPainter {
         ..style = PaintingStyle.fill
         ..color = pal.glow.withValues(alpha: 0.06)
         ..maskFilter =
-            MaskFilter.blur(BlurStyle.normal, _sigma(30 * kGlow * (0.6 + level)));
+            MaskFilter.blur(BlurStyle.solid, _sigma(30 * kGlow * (0.6 + level)));
       canvas.drawCircle(center, r, paint);
     }
 
@@ -174,7 +178,13 @@ class OrbPainter extends CustomPainter {
     canvas.drawRect(shadowRect, Paint()..shader = sh.createShader(shadowRect));
 
     // --- 4. live waveform (reactive states only, inside the clip) ---
-    if (!off) {
+    // orb.js only draws this for REACTIVE[state] (listening = mic, speaking =
+    // playback) — idle/ambient/thinking draw no waveform at all. Gating on
+    // `!off` alone would leave the last listening/speaking buffer frozen on
+    // screen (OrbFrame.waveform is never cleared) across those other states.
+    final reactive =
+        frame.state == OrbState.listening || frame.state == OrbState.speaking;
+    if (reactive) {
       _drawWave(canvas, pal.wave, cx, cy + r * 0.06, r * 0.72, r * 0.24);
     }
     canvas.restore();
@@ -245,7 +255,7 @@ class OrbPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
       ..color = color.withValues(alpha: 0.62)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, _sigma(8));
+      ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(8));
     canvas.drawPath(path, paint);
   }
 
