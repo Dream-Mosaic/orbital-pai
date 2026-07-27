@@ -26,7 +26,13 @@ class VoiceController extends ChangeNotifier {
   VoiceController({
     VoiceConnector? connector,
     List<Duration>? rejoinBackoff,
+    Duration joinTimeout = const Duration(seconds: 15),
+    MicCapture? mic,
+    AudioTrackPlayer? player,
   })  : _connector = connector ?? defaultVoiceConnector,
+        _joinTimeout = joinTimeout,
+        _mic = mic ?? MicCapture(),
+        _player = player ?? AudioTrackPlayer(),
         _rejoinBackoff = rejoinBackoff ??
             const [
               Duration(seconds: 1),
@@ -37,6 +43,11 @@ class VoiceController extends ChangeNotifier {
 
   final VoiceConnector _connector;
   final List<Duration> _rejoinBackoff;
+
+  /// Upper bound on the phx_join handshake. The completer now always fails on
+  /// transport death, so this only covers the other half: a server that accepts
+  /// the socket and then never replies at all.
+  final Duration _joinTimeout;
 
   // Reconnect state. `_wantConnected` is the user's intent (set by connect(),
   // cleared by disconnect()/dispose()) — without it a deliberate teardown would
@@ -63,12 +74,15 @@ class VoiceController extends ChangeNotifier {
   final List<String> _transcript = [];
   final List<String> _eventLog = [];
 
-  final MicCapture _mic = MicCapture();
+  // Injected (defaulted to the real implementations in the constructor) so the
+  // mic/player teardown paths are testable headless — a real MicCapture or
+  // AudioTrackPlayer needs a device.
+  final MicCapture _mic;
   StreamSubscription<Uint8List>? _micSub;
   bool _micOn = false;
   bool _disposed = false;
 
-  final AudioTrackPlayer _player = AudioTrackPlayer();
+  final AudioTrackPlayer _player;
   bool _playerReady = false;
 
   // ---- Meridian orb state ----
@@ -156,8 +170,12 @@ class VoiceController extends ChangeNotifier {
     _state = ConnState.connecting;
     _log('connecting…');
     _safeNotify();
+    // The client THIS invocation opened, so the catch can clean it up.
+    PhoenixChannelClient? opened;
+    PhoenixChannelClient? joinedClient;
     try {
       final client = await _connector();
+      opened = client;
       // 5th post-dispose variant: dispose() can land inside this await. Without
       // the re-check the socket stays open forever behind a dead controller.
       if (_disposed || !_wantConnected) {
@@ -174,24 +192,33 @@ class VoiceController extends ChangeNotifier {
         if (!identical(client, _client)) return;
         _onSocketDown('socket closed', ConnState.idle);
       });
-      final resp = await client.onJoin;
+      // Bounded on purpose. PhoenixChannelClient now fails onJoin when the
+      // transport dies, which covers the bounce/disconnect races; the timeout
+      // covers the remaining one — a server that accepts the socket and then
+      // never answers phx_join. Either way this await MUST resolve, because the
+      // `finally` below is the only thing that clears `_connecting`, and a stuck
+      // `_connecting` no-ops every future connect() for the life of the app.
+      final resp = await client.onJoin.timeout(_joinTimeout);
       if (_disposed || !identical(client, _client)) return;
       _state = ConnState.joined;
       _rejoinAttempt = 0;
+      joinedClient = client;
       _log('joined voice:henry — reply: $resp');
-      if (!_playerReady) {
-        await _player.init(24000);
-        // Same window: a dispose during init() leaks an initialized AudioTrack.
-        if (_disposed) {
-          unawaited(_player.dispose());
-          return;
-        }
-        _playerReady = true;
-        _log('audio track ready (24k)');
-      }
       _safeNotify();
     } catch (e) {
-      if (_disposed) return;
+      // Close the socket THIS invocation opened. A join reply of
+      // `status: "error"` (expired token, user off the allowlist) does not make
+      // Phoenix close the socket, so without this every backoff retry leaked a
+      // live socket plus its heartbeat timer, forever.
+      final failed = opened;
+      if (failed != null) {
+        if (identical(failed, _client)) _client = null;
+        unawaited(failed.close());
+      }
+      // A dispose()/disconnect() landing inside the handshake is a deliberate
+      // teardown, not a failure: it owns the state it already set (and the
+      // `finally` below still frees `_connecting`, which is the actual bug fix).
+      if (_disposed || !_wantConnected) return;
       _state = ConnState.error;
       _log('connect/join failed: $e');
       _safeNotify();
@@ -199,6 +226,37 @@ class VoiceController extends ChangeNotifier {
     } finally {
       _connecting = false;
     }
+    // Deliberately OUTSIDE the try above: a platform failure from the audio
+    // player used to land in that catch → error state → rejoin → the same
+    // failure again → an infinite reconnect loop (leaking a socket each pass).
+    if (joinedClient != null) await _initPlayer(joinedClient);
+  }
+
+  /// Bring up the 24k output track. Best-effort: a device without a working
+  /// AudioTrack still has a usable session (mic + captions), so a failure here
+  /// is logged and dropped — it must never reach the reconnect machine.
+  Future<void> _initPlayer(PhoenixChannelClient client) async {
+    if (_disposed || _playerReady) return;
+    try {
+      await _player.init(24000);
+    } catch (e) {
+      _log('audio track init failed: $e');
+      _safeNotify();
+      return;
+    }
+    // A dispose()/disconnect() inside init() leaks an initialised AudioTrack —
+    // and neither of them can clean it up, since `_playerReady` was still false.
+    if (_disposed || !_wantConnected) {
+      unawaited(_player.dispose());
+      return;
+    }
+    _playerReady = true;
+    _log('audio track ready (24k)');
+    // The player is controller-scoped, not client-scoped, so a socket swap mid-init
+    // must NOT tear it down (the newer connect() would race the dispose). It only
+    // means this attempt no longer owns the UI: leave the notify to the live one.
+    if (!identical(client, _client)) return;
+    _safeNotify();
   }
 
   /// The socket died. The orb must never keep showing a live colour over a dead
@@ -206,7 +264,13 @@ class VoiceController extends ChangeNotifier {
   /// (it was streaming into nothing) and start backing off toward a rejoin.
   void _onSocketDown(String why, ConnState state) {
     if (_disposed) return;
+    final dead = _client;
     _client = null;
+    // close() is the ONLY thing that cancels the heartbeat Timer.periodic, so
+    // dropping the reference instead of closing leaked a timer (keeping the whole
+    // client graph alive, and on a real WebSocketChannel still calling sink.add
+    // on a closed sink) on every single server bounce.
+    unawaited(dead?.close());
     _state = state;
     _log(why);
     _talking = false;
@@ -233,6 +297,15 @@ class VoiceController extends ChangeNotifier {
     _rejoinTimer = Timer(delay, () {
       _rejoinTimer = null;
       if (_disposed || !_wantConnected) return;
+      if (_state == ConnState.joined) return; // already back up
+      if (_connecting) {
+        // An attempt is already in flight, so connect() would no-op — and this
+        // timer is the whole backoff chain. Re-arm instead of ending it: if that
+        // in-flight attempt fails it schedules its own retry, and if it succeeds
+        // the `joined` check above stops us on the next tick.
+        _scheduleRejoin();
+        return;
+      }
       connect();
     });
   }

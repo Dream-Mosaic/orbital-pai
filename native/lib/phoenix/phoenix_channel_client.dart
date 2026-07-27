@@ -33,6 +33,12 @@ class PhoenixChannelClient {
   Stream<DecodedMessage> get messages => _messages.stream;
   Future<Map<String, dynamic>> get onJoin => _joined.future;
 
+  /// Test seam (this file stays flutter-free, hence no @visibleForTesting):
+  /// close() is the ONLY thing that cancels the heartbeat, so this is how a test
+  /// proves a discarded client was actually closed and not just dereferenced —
+  /// a leaked Timer.periodic keeps the whole client graph alive.
+  bool get debugHeartbeatActive => _heartbeatTimer?.isActive ?? false;
+
   String _nextRef() => (++_refCounter).toString();
 
   void start() {
@@ -89,15 +95,36 @@ class PhoenixChannelClient {
   }
 
   void _onError(Object err, StackTrace st) {
+    _failJoin(err, st);
     if (!_messages.isClosed) _messages.addError(err, st);
   }
 
   void _onDone() {
+    _failJoin(StateError('socket closed before the join reply'));
     if (!_messages.isClosed) _messages.close();
+  }
+
+  /// The transport died before (or instead of) the join reply. Without this the
+  /// [onJoin] completer stays pending FOREVER, so `await onJoin` never returns
+  /// and the caller's `finally` never runs — which is how a server bounce (or a
+  /// disconnect) in the ready→ack window used to latch VoiceController's
+  /// `_connecting` flag true and kill every later reconnect.
+  void _failJoin(Object err, [StackTrace? st]) {
+    if (_joined.isCompleted) return;
+    _joined.completeError(err, st ?? StackTrace.current);
+    // Nobody is required to be awaiting onJoin (a caller can bail out before it
+    // gets there), and an unobserved completeError would surface as an unhandled
+    // async error. ignore() only adds a swallowing listener — anyone who does
+    // await onJoin still sees the error.
+    _joined.future.ignore();
   }
 
   Future<void> close() async {
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    // Closing the sink normally makes the stream emit done (→ _onDone), but a
+    // caller closing us mid-handshake must never be able to leave onJoin parked.
+    _failJoin(StateError('client closed before the join reply'));
     await _channel.sink.close();
     if (!_messages.isClosed) await _messages.close();
   }
