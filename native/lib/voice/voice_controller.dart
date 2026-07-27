@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import '../audio/audio_track_player.dart';
 import '../audio/mic_capture.dart';
@@ -11,7 +12,51 @@ import '../phoenix/phoenix_channel_client.dart';
 
 enum ConnState { idle, connecting, joined, error }
 
+/// Opens (or re-opens) the voice channel. Injectable so the reconnect logic is
+/// testable headless; production uses [defaultVoiceConnector].
+typedef VoiceConnector = Future<PhoenixChannelClient> Function();
+
+Future<PhoenixChannelClient> defaultVoiceConnector() => connectVoice(
+      kSocketUrl(kSocketToken),
+      topic: 'voice:henry',
+      joinPayload: const {'kiosk': false},
+    );
+
 class VoiceController extends ChangeNotifier {
+  VoiceController({
+    VoiceConnector? connector,
+    List<Duration>? rejoinBackoff,
+  })  : _connector = connector ?? defaultVoiceConnector,
+        _rejoinBackoff = rejoinBackoff ??
+            const [
+              Duration(seconds: 1),
+              Duration(seconds: 2),
+              Duration(seconds: 5),
+              Duration(seconds: 10),
+            ];
+
+  final VoiceConnector _connector;
+  final List<Duration> _rejoinBackoff;
+
+  // Reconnect state. `_wantConnected` is the user's intent (set by connect(),
+  // cleared by disconnect()/dispose()) — without it a deliberate teardown would
+  // race the backoff timer straight back onto the wire.
+  bool _wantConnected = false;
+  bool _connecting = false;
+  Timer? _rejoinTimer;
+  int _rejoinAttempt = 0;
+
+  // `_micWanted` is intent, `_micOn` is fact. They differ exactly inside
+  // startMic()'s await, which is where the 5th post-dispose variant lives.
+  bool _micWanted = false;
+
+  // Mirrors index.js's `this.pttHeld`; read by the `state` snapshot merge below
+  // and written by the PTT controls (Task 9) — nothing in this task mutates it
+  // yet, so it stays non-final on purpose (`prefer_final_fields` would fire
+  // otherwise, then have to be reverted the moment Task 9 lands its writer).
+  // ignore: prefer_final_fields
+  bool _pttHeld = false;
+
   PhoenixChannelClient? _client;
   ConnState _state = ConnState.idle;
   String _caption = '';
@@ -37,6 +82,7 @@ class VoiceController extends ChangeNotifier {
   List<String> get transcript => List.unmodifiable(_transcript);
   List<String> get eventLog => List.unmodifiable(_eventLog);
   bool get micOn => _micOn;
+  bool get pttHeld => _pttHeld;
 
   bool get talking => _talking;
   bool get wakeLocked => _wakeLocked;
@@ -102,38 +148,113 @@ class VoiceController extends ChangeNotifier {
   void debugApplyEvent(String event) => _applyTurnEvent(event);
 
   Future<void> connect() async {
-    if (_state == ConnState.connecting || _state == ConnState.joined) return;
+    if (_disposed || _connecting || _state == ConnState.joined) return;
+    _connecting = true;
+    _wantConnected = true;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
     _state = ConnState.connecting;
     _log('connecting…');
     _safeNotify();
     try {
-      final client = await connectVoice(
-        kSocketUrl(kSocketToken),
-        topic: 'voice:henry',
-        joinPayload: const {'kiosk': false},
-      );
+      final client = await _connector();
+      // 5th post-dispose variant: dispose() can land inside this await. Without
+      // the re-check the socket stays open forever behind a dead controller.
+      if (_disposed || !_wantConnected) {
+        unawaited(client.close());
+        return;
+      }
       _client = client;
-      client.messages.listen(_onMessage, onError: (e) {
-        _state = ConnState.error;
-        _log('stream error: $e');
-        _safeNotify();
+      client.messages.listen(_onMessage, onError: (Object e) {
+        // A superseded socket (rejoin already swapped it out) must NOT drive the
+        // reconnect state machine.
+        if (!identical(client, _client)) return;
+        _onSocketDown('stream error: $e', ConnState.error);
       }, onDone: () {
-        _state = ConnState.idle;
-        _log('socket closed');
-        _safeNotify();
+        if (!identical(client, _client)) return;
+        _onSocketDown('socket closed', ConnState.idle);
       });
       final resp = await client.onJoin;
+      if (_disposed || !identical(client, _client)) return;
       _state = ConnState.joined;
+      _rejoinAttempt = 0;
       _log('joined voice:henry — reply: $resp');
-      await _player.init(24000);
-      _playerReady = true;
-      _log('audio track ready (24k)');
+      if (!_playerReady) {
+        await _player.init(24000);
+        // Same window: a dispose during init() leaks an initialized AudioTrack.
+        if (_disposed) {
+          unawaited(_player.dispose());
+          return;
+        }
+        _playerReady = true;
+        _log('audio track ready (24k)');
+      }
       _safeNotify();
     } catch (e) {
+      if (_disposed) return;
       _state = ConnState.error;
       _log('connect/join failed: $e');
       _safeNotify();
+      _scheduleRejoin();
+    } finally {
+      _connecting = false;
     }
+  }
+
+  /// The socket died. The orb must never keep showing a live colour over a dead
+  /// socket (A1 final review, "Important 2"): reset the turn state, stop the mic
+  /// (it was streaming into nothing) and start backing off toward a rejoin.
+  void _onSocketDown(String why, ConnState state) {
+    if (_disposed) return;
+    _client = null;
+    _state = state;
+    _log(why);
+    _talking = false;
+    _turnState = TurnState.idle;
+    if (_micOn || _micWanted) {
+      _micWanted = false;
+      _micOn = false;
+      unawaited(_micSub?.cancel());
+      _micSub = null;
+      unawaited(_mic.stop());
+    }
+    orbFrame.audioTarget = 0.0;
+    _syncOrb();
+    _scheduleRejoin();
+  }
+
+  void _scheduleRejoin() {
+    if (_disposed || !_wantConnected) return;
+    _rejoinTimer?.cancel();
+    final delay = _rejoinBackoff[math.min(_rejoinAttempt, _rejoinBackoff.length - 1)];
+    _rejoinAttempt++;
+    _log('rejoin attempt $_rejoinAttempt in ${delay.inMilliseconds}ms');
+    _safeNotify();
+    _rejoinTimer = Timer(delay, () {
+      _rejoinTimer = null;
+      if (_disposed || !_wantConnected) return;
+      connect();
+    });
+  }
+
+  /// Force a fresh join. VoiceChannel.join/3 -> bind_session/1 ->
+  /// Conversation.set_client(pid, self()): the server re-points the conversation's
+  /// OUTBOUND client to whoever joined LAST. Anything else that joins this session
+  /// — notably a panel webview showing the web UI — therefore steals our event
+  /// stream until we join again. Rejoining takes it back, and the `state` snapshot
+  /// the server sends on every (re)bind re-anchors the UI.
+  Future<void> rejoin() async {
+    if (_disposed) return;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
+    _rejoinAttempt = 0;
+    final old = _client;
+    _client = null; // so the old client's onDone is ignored, not retried
+    _state = ConnState.connecting;
+    _safeNotify();
+    await old?.close();
+    if (_disposed) return;
+    await connect();
   }
 
   void _onMessage(DecodedMessage m) {
@@ -183,12 +304,26 @@ class VoiceController extends ChangeNotifier {
       case 'state':
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']}');
         _wakeLocked = (p['locked'] as bool?) ?? _wakeLocked;
+        // index.js:268 — a (re)binding client re-derives its turn state from the
+        // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
+        // An ABSENT phase must not clobber what we already know.
+        final phase = p['phase'] as String?;
+        if (_talking && phase != null) {
+          _turnState = phase == 'busy'
+              ? TurnState.thinking
+              : (_pttHeld ? TurnState.listening : TurnState.idle);
+        }
         _syncOrb();
       default:
         _log('event: ${m.event} $p');
     }
     _safeNotify();
   }
+
+  /// Test seam: drive the real event router without a socket. Nothing else in the
+  /// suite covers the literal event strings, so a typo would ship silently (M-T5d).
+  @visibleForTesting
+  void debugHandleMessage(DecodedMessage m) => _onMessage(m);
 
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
@@ -216,9 +351,17 @@ class VoiceController extends ChangeNotifier {
   }
 
   Future<void> startMic() async {
-    if (_micOn || _client == null) return;
+    if (_disposed || _micOn || _micWanted || _client == null) return;
+    _micWanted = true;
     try {
       final stream = await _mic.start();
+      // 5th post-dispose variant: a dispose() OR a stopMic() landing inside this
+      // await would otherwise register _micSub on a live recorder that nothing
+      // will ever stop — the mic records forever.
+      if (_disposed || !_micWanted) {
+        unawaited(_mic.stop());
+        return;
+      }
       _micOn = true;
       _talking = true;
       _turnState = TurnState.idle;
@@ -235,15 +378,17 @@ class VoiceController extends ChangeNotifier {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
           orbFrame.waveform = waveformFromPcm16(chunk, 128);
         }
-      }, onError: (e) => _log('mic error: $e'));
+      }, onError: (Object e) => _log('mic error: $e'));
       _safeNotify();
     } catch (e) {
+      _micWanted = false;
       _log('mic start failed: $e');
       _safeNotify();
     }
   }
 
   Future<void> stopMic() async {
+    _micWanted = false;
     await _micSub?.cancel();
     _micSub = null;
     await _mic.stop();
@@ -257,9 +402,14 @@ class VoiceController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    _wantConnected = false;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
+    _rejoinAttempt = 0;
     await stopMic();
-    await _client?.close();
+    final old = _client;
     _client = null;
+    await old?.close();
     _state = ConnState.idle;
     if (_playerReady) {
       await _player.dispose();
@@ -272,8 +422,12 @@ class VoiceController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _wantConnected = false;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
     stopMic();
     _client?.close();
+    _client = null;
     if (_playerReady) {
       _player.dispose();
       _playerReady = false;
