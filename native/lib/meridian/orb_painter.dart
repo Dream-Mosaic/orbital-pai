@@ -27,6 +27,14 @@ class OrbFrame extends ChangeNotifier {
   set state(OrbState v) {
     if (v == _state) return;
     _state = v;
+    if (v == OrbState.off) {
+      // Powering off no longer relies on a tick to reset the audio state (the
+      // ticker itself is now stopped the instant we go off) — do it here so
+      // the very next paint, driven by this same notifyListeners(), never
+      // inherits a stale level.
+      _smoother.reset();
+      _audioTarget = 0.0;
+    }
     notifyListeners();
   }
 

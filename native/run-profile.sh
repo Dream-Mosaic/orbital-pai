@@ -15,6 +15,14 @@ cd "$(dirname "$0")"
 
 export PATH="$HOME/flutter/bin:$PATH"
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+if [ ! -x "$ADB" ]; then
+  if command -v adb >/dev/null 2>&1; then
+    ADB="$(command -v adb)"
+  else
+    echo "No adb found (checked $HOME/Library/Android/sdk/platform-tools/adb and PATH)." >&2
+    exit 1
+  fi
+fi
 
 DEVICE="${1:-}"
 if [ -z "$DEVICE" ]; then
@@ -26,7 +34,10 @@ if [ -z "$DEVICE" ]; then
 fi
 
 # The app reaches the Mac's Phoenix server over USB. This dies on every unplug, so re-arm it.
-"$ADB" reverse tcp:8787 tcp:8787 >/dev/null
+# Target the chosen device explicitly — with two devices attached (the script's own
+# documented "Pixel as control, Lenovo as verdict" workflow), plain `adb reverse` fails
+# with "more than one device/emulator".
+"$ADB" -s "$DEVICE" reverse tcp:8787 tcp:8787 >/dev/null
 echo "▸ device:  $DEVICE"
 echo "▸ tunnel:  device:8787 -> mac:8787"
 

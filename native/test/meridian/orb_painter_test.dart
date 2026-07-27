@@ -95,6 +95,24 @@ void main() {
     expect(notified, 0);
   });
 
+  test('powering off resets the audio level without needing another advance()', () {
+    // The ticker stops the instant state becomes off, so advance()'s own
+    // off-branch reset never runs again after the first tick. The state
+    // setter must do the reset itself, or the orb pops bright on next wake.
+    final f = OrbFrame()
+      ..state = OrbState.listening
+      ..audioTarget = 1.0;
+    for (var i = 0; i < 40; i++) {
+      f.advance(0.016);
+    }
+    expect(f.level, greaterThan(0.9), reason: 'sanity: level is actually up');
+
+    f.state = OrbState.off;
+    expect(f.level, 0.0,
+        reason: 'off must reset the level immediately, not on the next tick '
+            'that will never come');
+  });
+
   testWidgets('painter renders every state without throwing', (tester) async {
     for (final s in OrbState.values) {
       final f = OrbFrame()
