@@ -116,4 +116,21 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('the breathe controller idles while off', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: MeridianSurface(state: OrbState.idle, child: SizedBox()),
+    ));
+    await tester.pump();
+    expect(tester.binding.transientCallbackCount, greaterThan(0),
+        reason: 'a live state must breathe');
+
+    await tester.pumpWidget(const MaterialApp(
+      home: MeridianSurface(state: OrbState.off, child: SizedBox()),
+    ));
+    await tester.pump(const Duration(seconds: 1)); // past the 0.8s tint cross-fade
+    expect(tester.binding.transientCallbackCount, 0,
+        reason:
+            'gating the orb Ticker alone buys nothing if a full-screen radial keeps re-rastering');
+  });
 }

@@ -33,10 +33,33 @@ class _MeridianSurfaceState extends State<MeridianSurface>
   late final Animation<double> _scale = Tween<double>(begin: 1.0, end: 1.05)
       .animate(CurvedAnimation(parent: _breathe, curve: Curves.easeInOut));
 
+  bool _reduceMotion = false;
+
   @override
-  void initState() {
-    super.initState();
-    _breathe.repeat(reverse: true);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    _syncBreathe();
+  }
+
+  @override
+  void didUpdateWidget(MeridianSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state) _syncBreathe();
+  }
+
+  /// `bleed-breathe` repaints a FULL-SCREEN RadialGradient under a Transform.
+  /// Running it while the orb is `off` (a frozen grey sphere) is ~144 Mpix/s of
+  /// gradient evaluation, 24/7, for no visible change (orb-futures §1b). Stop it
+  /// whenever the orb itself is stopped. Freezing mid-breath is invisible on a
+  /// gradient this soft, so no reset is needed.
+  void _syncBreathe() {
+    final shouldRun = !_reduceMotion && widget.state != OrbState.off;
+    if (shouldRun && !_breathe.isAnimating) {
+      _breathe.repeat(reverse: true);
+    } else if (!shouldRun && _breathe.isAnimating) {
+      _breathe.stop();
+    }
   }
 
   @override
@@ -48,7 +71,7 @@ class _MeridianSurfaceState extends State<MeridianSurface>
   @override
   Widget build(BuildContext context) {
     final pal = paletteFor(widget.state);
-    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final reduceMotion = _reduceMotion;
 
     return DecoratedBox(
       // base: top-anchored dark radial, painted first (farthest back)
