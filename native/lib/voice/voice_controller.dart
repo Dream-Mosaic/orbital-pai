@@ -61,6 +61,15 @@ class VoiceController extends ChangeNotifier {
   // startMic()'s await, which is where the 5th post-dispose variant lives.
   bool _micWanted = false;
 
+  // Set by _onSocketDown when it tears a LIVE mic down, so a successful rejoin
+  // can restore it (owner decision, A2: the web client never stops getUserMedia
+  // on a socket death; we do, to keep the orb honest mid-turn, so WE must be
+  // the one to undo it — otherwise a wall device goes silently deaf after
+  // every server bounce). Deliberately separate from `_micWanted`: a user's
+  // explicit stopMic() clears this too, so a mic switched off mid-outage is
+  // never resurrected by a later reconnect.
+  bool _micWasOn = false;
+
   // Mirrors index.js's `this.pttHeld`; read by the `state` snapshot merge below
   // and written by the PTT controls (Task 9) — nothing in this task mutates it
   // yet, so it stays non-final on purpose (`prefer_final_fields` would fire
@@ -230,6 +239,14 @@ class VoiceController extends ChangeNotifier {
     // player used to land in that catch → error state → rejoin → the same
     // failure again → an infinite reconnect loop (leaking a socket each pass).
     if (joinedClient != null) await _initPlayer(joinedClient);
+    // Re-arm the mic now that the rejoin actually landed. Guarded with
+    // `identical` (not just `joinedClient != null`) so a socket that died
+    // AGAIN during _initPlayer's await can't have this now-superseded attempt
+    // burn the flag — it stays set for the next join that actually sticks.
+    if (_micWasOn && identical(joinedClient, _client)) {
+      _micWasOn = false;
+      await startMic();
+    }
   }
 
   /// Bring up the 24k output track. Best-effort: a device without a working
@@ -276,6 +293,7 @@ class VoiceController extends ChangeNotifier {
     _talking = false;
     _turnState = TurnState.idle;
     if (_micOn || _micWanted) {
+      _micWasOn = true;
       _micWanted = false;
       _micOn = false;
       unawaited(_micSub?.cancel());
@@ -462,6 +480,9 @@ class VoiceController extends ChangeNotifier {
 
   Future<void> stopMic() async {
     _micWanted = false;
+    // A deliberate stop must never be resurrected by a later reconnect, even
+    // if a socket death upstream had already armed the restore flag.
+    _micWasOn = false;
     await _micSub?.cancel();
     _micSub = null;
     await _mic.stop();

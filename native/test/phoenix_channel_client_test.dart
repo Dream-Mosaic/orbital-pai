@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -59,6 +60,26 @@ void main() {
     final bytes = frame as Uint8List;
     expect(bytes[0], 0); // kind push
     expect(bytes.sublist(bytes.length - 2), equals(Uint8List.fromList([0x01, 0x02])));
+  });
+
+  test('onJoin fails when the remote closes before any reply (C1)', () async {
+    // C1's primary production trigger: a deploy restart lands exactly in the
+    // ready→ack window — the far end dies before ever answering phx_join.
+    // This must be pinned via _onDone's OWN _failJoin call: this test never
+    // calls PhoenixChannelClient.close() (tearDown below does, but only
+    // AFTER this assertion already resolved), so nothing else — no
+    // VoiceController-style cascade, no external timeout — can complete
+    // `onJoin` except _onDone itself. The `.timeout()` here is only a test
+    // guard: if _failJoin were stripped from _onDone, onJoin would hang and
+    // the timeout would fire a TimeoutException instead, which does NOT
+    // match `isA<StateError>()` below — so the mismatch is what actually
+    // fails the test, not the timeout being "the point."
+    await Future<void>.delayed(Duration.zero); // let phx_join go out first
+    unawaited(ctrl.foreign.sink.close()); // the remote vanishes; never replies
+    await expectLater(
+      client.onJoin.timeout(const Duration(seconds: 2)),
+      throwsA(isA<StateError>()),
+    );
   });
 
   test('emits a heartbeat text frame on the interval', () async {

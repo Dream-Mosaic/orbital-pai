@@ -216,6 +216,105 @@ void main() {
         reason: '_micSub must be cancelled, not merely dropped');
   });
 
+  test('the mic is re-armed once an automatic rejoin succeeds (A2)', () async {
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+      mic: mic,
+      player: FakePlayer(),
+    );
+    addTearDown(vc.dispose);
+
+    await vc.connect();
+    await vc.startMic();
+    expect(vc.micOn, isTrue);
+
+    await sockets.first.kill();
+    await settle();
+    expect(vc.micOn, isFalse,
+        reason: 'the socket death must still stop a mic streaming into it');
+
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(vc.state, ConnState.joined);
+    expect(vc.micOn, isTrue,
+        reason: 'a wall device must not go silently deaf after a server bounce');
+    expect(mic.startCalls, 2,
+        reason: 'once from the user, once from the automatic re-arm on rejoin');
+  });
+
+  test('an explicit stopMic() before the outage is not resurrected by the rejoin',
+      () async {
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+      mic: mic,
+      player: FakePlayer(),
+    );
+    addTearDown(vc.dispose);
+
+    await vc.connect();
+    await vc.startMic();
+    expect(vc.micOn, isTrue);
+
+    await vc.stopMic();
+    expect(vc.micOn, isFalse);
+
+    await sockets.first.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(vc.state, ConnState.joined);
+    expect(vc.micOn, isFalse,
+        reason:
+            'a deliberate stopMic() must never be resurrected by a later reconnect');
+  });
+
+  test('a deliberate disconnect() never re-arms the mic on the next connect()',
+      () async {
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(days: 1)],
+      mic: mic,
+      player: FakePlayer(),
+    );
+    addTearDown(vc.dispose);
+
+    await vc.connect();
+    await vc.startMic();
+    expect(vc.micOn, isTrue);
+
+    await vc.disconnect();
+    expect(vc.micOn, isFalse);
+
+    await vc.connect();
+    expect(vc.state, ConnState.joined);
+    expect(sockets, hasLength(2));
+    expect(vc.micOn, isFalse,
+        reason:
+            'a deliberate disconnect() must not resurrect the mic on the next connect()');
+  });
+
   test('a dead socket closes its client instead of leaking the heartbeat', () async {
     final fake = FakeSocket();
     final vc = VoiceController(
@@ -418,6 +517,65 @@ void main() {
     expect(vc.state, ConnState.error);
     expect(fake.localClosed, isTrue,
         reason: 'the timed-out socket must not be left open');
+  });
+
+  test('a server-side death mid-join recovers via backoff (C1, remote close)',
+      () async {
+    // C1's primary production trigger: a deploy restart lands exactly in the
+    // ready→ack window — the socket is accepted, then the REMOTE end dies
+    // before ever answering phx_join. This is distinct from every other case
+    // already covered here: disconnect()/rejoin() route the local teardown
+    // through PhoenixChannelClient.close(), and the "never answers" test above
+    // is pinned entirely by the join TIMEOUT.
+    //
+    // NOTE on what this test does and doesn't prove: VoiceController's own
+    // `_onSocketDown` reacts to the client.messages stream closing (which
+    // PhoenixChannelClient._onDone triggers unconditionally) by calling
+    // close() on the dead client — and close() has its OWN _failJoin call.
+    // That means this end-to-end path resolves `connecting` even if
+    // _onDone's direct _failJoin call were removed, one event-loop turn
+    // later via that cascade — verified empirically while building this
+    // test. So this test pins the desired BEHAVIOUR (recovers, self-heals),
+    // but the mechanism itself (_onDone/_onError's _failJoin call) is pinned
+    // in isolation by phoenix_channel_client_test.dart's
+    // 'onJoin fails when the remote closes before any reply' test, which
+    // deliberately never calls close() so nothing else can mask the gap.
+    final sockets = <FakeSocket>[];
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket(
+            joinReply: sockets.isEmpty ? JoinReply.none : JoinReply.ok);
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+      joinTimeout: const Duration(seconds: 30),
+      mic: FakeMic(),
+      player: FakePlayer(),
+    );
+    addTearDown(vc.dispose);
+
+    final connecting = vc.connect();
+    await settle();
+    expect(vc.state, ConnState.connecting);
+
+    // The remote end vanishes — no reply, no local close() call.
+    await sockets.first.kill();
+
+    await connecting.timeout(const Duration(seconds: 2),
+        onTimeout: () =>
+            fail('connect() never resolved — a remote death mid-join must '
+                'still fail the join, not park forever'));
+    await settle();
+    expect(vc.state, ConnState.error);
+
+    // Self-heals: the backoff fires and the retry actually joins.
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(sockets, hasLength(2),
+        reason: 'a server-side death mid-join must still schedule a rejoin');
+    expect(vc.state, ConnState.joined);
   });
 
   test('a rejected join closes the socket instead of leaking one per retry', () async {
