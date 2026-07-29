@@ -17,11 +17,45 @@ double _sigma(double shadowBlur) => shadowBlur / 2.0;
 /// Mutable orb frame state. Acts as the `CustomPainter.repaint` listenable so the
 /// orb repaints without rebuilding the widget tree.
 class OrbFrame extends ChangeNotifier {
+  /// `analyser.fftSize = 1024` on BOTH web analysers (capture.js:56,
+  /// playback.js:8), so a frame draws the most recent 1024 samples.
+  static const int kWaveWindow = 1024;
+
+  /// Points in the drawn trace. Unchanged from the per-chunk implementation.
+  static const int kWavePoints = 128;
+
+  /// Largest chunk seen so far. Chunk size is a device property — Android hands
+  /// back whatever `AudioRecord.getMinBufferSize` decided — so the read lag has
+  /// to be measured, not assumed.
+  int _chunk = 0;
+
+  /// How far behind the newest sample the cursor runs. The stream arrives in
+  /// bursts while the cursor drains smoothly, so the lag sawtooths by one chunk
+  /// between arrivals; keeping TWO chunks of lead means the trough never reaches
+  /// the write head. Too small and the cursor starves once per chunk — which is
+  /// exactly the stutter this buffering exists to remove.
+  int get _waveTargetLag =>
+      math.max(kWaveWindow, math.min(_chunk * 2, PcmRing.defaultCapacity ~/ 4));
+
+  /// Resync threshold, both directions. In steady state neither bound is reached:
+  /// the cursor and the stream advance at the same long-run rate. It trips on
+  /// startup, on a stalled or bursty stream, and on slow drift between the frame
+  /// clock and the audio clock.
+  int get _waveMaxLag => _waveTargetLag * 2;
+
   OrbState _state = OrbState.off;
   final LevelSmoother _smoother = LevelSmoother(); // the 0.2 alpha lives here (Task 2)
   double _audioTarget = 0.0;
   Float32List _waveform = Float32List(0);
   double _t = 0.0;
+
+  final PcmRing _ring = PcmRing();
+  final Float32List _waveScratch = Float32List(kWavePoints);
+  /// Absolute sample position the drawn window ends at. Advanced by wall-clock
+  /// time in [advance], NOT by audio arrival — that is what makes consecutive
+  /// frames overlap instead of jumping one whole chunk at a time.
+  double _playhead = 0.0;
+  int _feedRate = 16000; // 16k mic / 24k TTS, set by whoever is feeding us
 
   OrbState get state => _state;
   set state(OrbState v) {
@@ -34,8 +68,25 @@ class OrbFrame extends ChangeNotifier {
       // inherits a stale level.
       _smoother.reset();
       _audioTarget = 0.0;
+      // Same reasoning for the trace: a wake must not flash the audio from
+      // whatever was being said when we powered down.
+      _ring.clear();
+      _playhead = 0.0;
+      _chunk = 0; // the next source may be the other rate with other chunk sizes
+      _waveScratch.fillRange(0, kWavePoints, 0.0);
+      _waveform = Float32List(0);
     }
     notifyListeners();
+  }
+
+  /// Append live audio. Deliberately does NOT notify — [advance] samples the ring
+  /// once per frame and drives the repaint, mirroring the web's
+  /// read-the-analyser-inside-draw() behaviour.
+  void feedPcm(Uint8List pcm16, {int sampleRate = 16000}) {
+    _feedRate = sampleRate;
+    final n = pcm16.lengthInBytes ~/ 2;
+    if (n > _chunk) _chunk = n;
+    _ring.write(pcm16);
   }
 
   /// Raw loudness in (0..1). Set from the audio chunk listener; smoothed per
@@ -54,6 +105,13 @@ class OrbFrame extends ChangeNotifier {
   }
 
   double get t => _t;
+
+  /// Samples between the read cursor and the newest one. Test seam: keeping a
+  /// lead IS the mechanism here, and a cursor sitting on the write head reads a
+  /// fresh window per chunk — the exact stutter this replaced — while still
+  /// producing plausible-looking output.
+  @visibleForTesting
+  double get debugWaveLag => _ring.written - _playhead;
 
   /// Advance one frame. Ported from orb.js's frame():
   ///   * `level` is smoothed toward the target ONCE PER FRAME (not per audio
@@ -74,11 +132,40 @@ class OrbFrame extends ChangeNotifier {
     final reactive =
         _state == OrbState.listening || _state == OrbState.speaking;
     _smoother.update(reactive ? _audioTarget : 0.0);
+    if (reactive) _advanceWave(dt);
     final speed = _state == OrbState.thinking
         ? 1.4
         : 1.0 + (reactive ? _smoother.value * 1.4 : 0.0);
     _t += dt * speed;
     notifyListeners();
+  }
+
+  /// Slide the read cursor by one frame of wall-clock time and resample.
+  ///
+  /// In steady state the stream delivers `sampleRate` samples per second and the
+  /// cursor advances by the same amount, so the lag is self-maintaining and the
+  /// two clamps below effectively never fire. They exist for the edges: the very
+  /// first frames (cursor starts at 0 while the stream is already running), a
+  /// stalled or bursty stream, and long-run drift between the frame clock and the
+  /// audio clock.
+  void _advanceWave(double dt) {
+    _playhead += dt * _feedRate;
+    final written = _ring.written;
+    final lag = written - _playhead;
+    // Both bounds resync to the same place. Clamping a starved cursor to the
+    // write head instead would leave it pinned there — reading `written` every
+    // frame is precisely the per-chunk behaviour this replaced, and nothing
+    // would ever restore the lead, so one stall would degrade the trace for the
+    // rest of the session.
+    if (lag < 0 || lag > _waveMaxLag) {
+      _playhead = (written - _waveTargetLag).toDouble();
+    }
+    _ring.readInto(_waveScratch,
+        end: _playhead.floor(), window: kWaveWindow);
+    // Reused in place: advance() is the only writer and it runs on the frame
+    // callback, and the painter reads it synchronously in the paint that this
+    // same notifyListeners() schedules.
+    _waveform = _waveScratch;
   }
 }
 

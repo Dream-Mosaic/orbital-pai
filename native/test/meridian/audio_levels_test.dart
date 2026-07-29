@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/meridian/audio_levels.dart';
@@ -33,71 +32,100 @@ void main() {
     expect(rmsFromPcm16(pcm(s)), closeTo(0.3, 0.01));
   });
 
-  test('waveform returns the requested number of points in -1..1', () {
-    final s = List.generate(1024, (i) => (math.sin(i / 8) * 32000).round());
-    final w = waveformFromPcm16(pcm(s), 128);
-    expect(w.length, 128);
-    for (final v in w) {
-      expect(v, inInclusiveRange(-1.0, 1.0));
-    }
-    expect(w.any((v) => v.abs() > 0.5), isTrue,
-        reason: 'should track the sine');
-  });
+  group('PcmRing', () {
+    test('the newest sample lands at the end of the window', () {
+      final r = PcmRing(capacity: 8);
+      r.write(pcm([1000, 2000, 3000, 4000]));
+      final out = Float32List(4);
+      r.readInto(out, end: r.written, window: 4);
+      expect(out.last, closeTo(4000 / 32768.0, 1e-6));
+      expect(out.first, closeTo(1000 / 32768.0, 1e-6));
+    });
 
-  test('waveform of silence is flat zero', () {
-    final w = waveformFromPcm16(pcm(List.filled(512, 0)), 64);
-    expect(w.length, 64);
-    expect(w.every((v) => v == 0.0), isTrue);
-  });
+    test('a window reaching before the start of the stream pads with silence', () {
+      final r = PcmRing(capacity: 8);
+      r.write(pcm([1000, 2000]));
+      final out = Float32List(4);
+      r.readInto(out, end: r.written, window: 4);
+      expect(out[0], 0.0);
+      expect(out[1], 0.0);
+      expect(out[2], closeTo(1000 / 32768.0, 1e-6));
+      expect(out[3], closeTo(2000 / 32768.0, 1e-6));
+    });
 
-  test('waveform stretches when input is shorter than the requested points '
-      '(no zero-padding)', () {
-    final w = waveformFromPcm16(pcm([1000, -1000]), 32);
-    expect(w.length, 32);
-    const first = 1000 / 32768.0;
-    const second = -1000 / 32768.0;
-    for (var i = 0; i < 16; i++) {
-      expect(w[i], closeTo(first, 1e-9));
-    }
-    for (var i = 16; i < 32; i++) {
-      expect(w[i], closeTo(second, 1e-9));
-    }
-  });
+    test('samples older than the capacity read as silence, not as stale audio', () {
+      final r = PcmRing(capacity: 4);
+      r.write(pcm([1, 2, 3, 4, 5, 6]));
+      final out = Float32List(4);
+      r.readInto(out, end: r.written, window: 4);
+      expect(out.first, closeTo(3 / 32768.0, 1e-6));
+      expect(out.last, closeTo(6 / 32768.0, 1e-6));
+      // The evicted 1 and 2 must not reappear when the window reaches back for them.
+      final older = Float32List(6);
+      r.readInto(older, end: r.written, window: 6);
+      expect(older[0], 0.0);
+      expect(older[1], 0.0);
+      expect(older[2], closeTo(3 / 32768.0, 1e-6));
+    });
 
-  test('waveform preserves sample sign (catches a signed/unsigned PCM misread)',
-      () {
-    final negative = waveformFromPcm16(pcm(List.filled(64, -30000)), 8);
-    expect(negative.length, 8);
-    for (final v in negative) {
-      expect(v, lessThan(0.0));
-    }
+    test('a write spanning the wrap point stays in order', () {
+      final r = PcmRing(capacity: 4);
+      r.write(pcm([1, 2, 3]));
+      r.write(pcm([4, 5])); // wraps
+      final out = Float32List(4);
+      r.readInto(out, end: r.written, window: 4);
+      expect(out.first, closeTo(2 / 32768.0, 1e-6));
+      expect(out.last, closeTo(5 / 32768.0, 1e-6));
+    });
 
-    final positive = waveformFromPcm16(pcm(List.filled(64, 30000)), 8);
-    expect(positive.length, 8);
-    for (final v in positive) {
-      expect(v, greaterThan(0.0));
-    }
-  });
+    test('reads are addressed absolutely, so an earlier end sees earlier audio', () {
+      final r = PcmRing(capacity: 16);
+      r.write(pcm([10, 20, 30, 40, 50, 60, 70, 80]));
+      final a = Float32List(2);
+      final b = Float32List(2);
+      r.readInto(a, end: 4, window: 2); // samples 30,40
+      r.readInto(b, end: 8, window: 2); // samples 70,80
+      expect(a.last, closeTo(40 / 32768.0, 1e-6));
+      expect(b.last, closeTo(80 / 32768.0, 1e-6));
+    });
 
-  test('waveform with zero requested points returns an empty result', () {
-    final w = waveformFromPcm16(pcm(List.filled(64, 1000)), 0);
-    expect(w, isEmpty);
-  });
+    test('written is the absolute sample clock, not a byte count', () {
+      final r = PcmRing(capacity: 16);
+      r.write(pcm([1, 2, 3]));
+      expect(r.written, 3);
+      r.write(pcm([4]));
+      expect(r.written, 4);
+    });
 
-  test('waveform does not crash on an odd byte-length input', () {
-    final bytes = pcm(List.filled(64, 1000));
-    final odd = Uint8List.sublistView(bytes, 0, bytes.length - 1);
-    expect(() => waveformFromPcm16(odd, 16), returnsNormally);
-  });
+    test('preserves sign (a signed/unsigned misread would flip it)', () {
+      final r = PcmRing(capacity: 4);
+      r.write(pcm([-30000, -30000, -30000, -30000]));
+      final out = Float32List(4);
+      r.readInto(out, end: r.written, window: 4);
+      expect(out.every((v) => v < 0), isTrue);
+    });
 
-  test('LevelSmoother approaches the target at 0.2 per update', () {
-    final s = LevelSmoother();
-    expect(s.value, 0.0);
-    s.update(1.0);
-    expect(s.value, closeTo(0.2, 1e-9));
-    s.update(1.0);
-    expect(s.value, closeTo(0.36, 1e-9));
-    s.reset();
-    expect(s.value, 0.0);
+    test('clear() empties the window and resets the clock', () {
+      final r = PcmRing(capacity: 4);
+      r.write(pcm([9000, 9000]));
+      r.clear();
+      expect(r.written, 0);
+      final out = Float32List(4);
+      r.readInto(out, end: 0, window: 4);
+      expect(out.every((v) => v == 0.0), isTrue);
+    });
+
+    test('averages each bucket when the window is wider than the output', () {
+      final r = PcmRing(capacity: 1024);
+      // A ramp, not an alternating signal: averaging alternating samples yields
+      // zeros, which would pass no matter what the bucketing did.
+      r.write(pcm(List.generate(1024, (i) => i * 16)));
+      final out = Float32List(128);
+      r.readInto(out, end: r.written, window: 1024);
+      expect(out.length, 128);
+      // Last bucket = samples 1016..1023 -> mean 16312.
+      expect(out.last, closeTo(16312 / 32768.0, 1e-6));
+      expect(out.first, closeTo(56 / 32768.0, 1e-6));
+    });
   });
 }

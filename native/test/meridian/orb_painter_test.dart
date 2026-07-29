@@ -151,4 +151,138 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  group('waveform sampling', () {
+    // A varied, CONTINUOUS ramp fed in realistic chunks. Variety matters because
+    // a flat or alternating signal makes every overlap assertion below vacuous;
+    // continuity across chunk boundaries matters because a sliding window that
+    // straddles two chunks must not see a seam that isn't in the audio.
+    void feed(OrbFrame f,
+        {int chunks = 16, int each = 512, int rate = 16000, int from = 0}) {
+      var k = from;
+      for (var c = 0; c < chunks; c++) {
+        final b = ByteData(each * 2);
+        for (var i = 0; i < each; i++) {
+          b.setInt16(i * 2, (k % 257) * 100 - 12800, Endian.little);
+          k++;
+        }
+        f.feedPcm(b.buffer.asUint8List(), sampleRate: rate);
+      }
+    }
+
+    test('consecutive frames overlap instead of jumping a whole chunk', () {
+      final f = OrbFrame()..state = OrbState.listening;
+      feed(f);
+      f.advance(0.016);
+      final first = Float32List.fromList(f.waveform);
+      // NO new audio this frame: the cursor alone must move the trace on.
+      f.advance(0.016);
+      final second = Float32List.fromList(f.waveform);
+
+      expect(first.toSet().length, greaterThan(10),
+          reason: 'a flat trace would make the rest of this test vacuous');
+      expect(second, isNot(equals(first)),
+          reason: 'the trace must advance on frames where no chunk arrived');
+
+      // 0.016s at 16kHz = 256 samples = exactly 32 of the 128 points, so this
+      // frame is the previous one shifted left by 32 — a slide, not a redraw.
+      for (var i = 0; i < OrbFrame.kWavePoints - 32; i++) {
+        expect(second[i], closeTo(first[i + 32], 1e-9),
+            reason: 'point $i must be the previous frame\'s point ${i + 32}');
+      }
+    });
+
+    test('the cursor advances at the feeding stream\'s sample rate', () {
+      final f = OrbFrame()..state = OrbState.speaking;
+      feed(f, rate: 24000); // TTS
+      f.advance(0.016);
+      final first = Float32List.fromList(f.waveform);
+      f.advance(0.016);
+      final second = Float32List.fromList(f.waveform);
+
+      // 0.016s at 24kHz = 384 samples = 48 points. Reading 24k audio at the mic
+      // rate would slide 32 and drift out of sync with what is being heard.
+      for (var i = 0; i < OrbFrame.kWavePoints - 48; i++) {
+        expect(second[i], closeTo(first[i + 48], 1e-9),
+            reason: '24kHz audio must slide 48 points per 16ms frame');
+      }
+    });
+
+    test('the lead is sized from the observed chunk, not assumed', () {
+      // Chunk size is a device property (Android hands back whatever
+      // AudioRecord.getMinBufferSize decided), and a lead shorter than a chunk
+      // starves the cursor once per chunk.
+      final small = OrbFrame()..state = OrbState.listening;
+      feed(small, chunks: 16, each: 512);
+      small.advance(0.016);
+
+      final large = OrbFrame()..state = OrbState.listening;
+      feed(large, chunks: 4, each: 2048);
+      large.advance(0.016);
+
+      expect(large.debugWaveLag, greaterThan(small.debugWaveLag),
+          reason: 'a 2048-sample chunk needs more lead than a 512-sample one');
+      expect(large.debugWaveLag, greaterThanOrEqualTo(2048.0),
+          reason: 'the lead must cover at least one whole chunk');
+    });
+
+    test('a stalled stream does not leave the cursor pinned to the write head',
+        () {
+      final f = OrbFrame()..state = OrbState.listening;
+      feed(f);
+      f.advance(0.016); // settles the cursor behind the newest sample
+
+      // The stream stalls (jitter, a late buffer) and the cursor eats its lead.
+      for (var i = 0; i < 6; i++) {
+        f.advance(0.016);
+      }
+
+      expect(f.debugWaveLag, greaterThanOrEqualTo(512.0),
+          reason: 'a cursor left on the write head reads a fresh window per '
+              'chunk forever after — the stutter this replaced');
+      expect(f.debugWaveLag, lessThanOrEqualTo(0.0 + 2048),
+          reason: 'and it must not fall so far behind that the ring evicts it');
+    });
+
+    test('feedPcm does not notify — advance() drives the repaint', () {
+      final f = OrbFrame()..state = OrbState.listening;
+      var notified = 0;
+      f.addListener(() => notified++);
+      feed(f, chunks: 1, each: 32);
+      expect(notified, 0);
+    });
+
+    test('a stream that never started draws silence rather than reading garbage',
+        () {
+      final f = OrbFrame()..state = OrbState.listening;
+      f.advance(0.016);
+      expect(f.waveform.every((v) => v == 0.0), isTrue);
+      f.advance(0.016);
+      expect(f.waveform.every((v) => v == 0.0), isTrue);
+    });
+
+    test('powering off clears the ring so a wake shows no stale trace', () {
+      final f = OrbFrame()..state = OrbState.listening;
+      feed(f);
+      f.advance(0.016);
+      expect(f.waveform.any((v) => v != 0.0), isTrue);
+
+      f.state = OrbState.off;
+      f.state = OrbState.listening;
+      f.advance(0.016);
+      expect(f.waveform.every((v) => v == 0.0), isTrue,
+          reason: 'a wake must not flash whatever was being said at power-down');
+    });
+
+    test('non-reactive states do not resample (idle/thinking draw no trace)', () {
+      final f = OrbFrame()..state = OrbState.listening;
+      feed(f);
+      f.advance(0.016);
+      final live = Float32List.fromList(f.waveform);
+      f.state = OrbState.thinking;
+      f.advance(0.016);
+      expect(f.waveform, equals(live),
+          reason: 'the painter gates on state; resampling here is wasted work');
+    });
+  });
 }

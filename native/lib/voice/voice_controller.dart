@@ -425,7 +425,7 @@ class VoiceController extends ChangeNotifier {
     // Target only; advance() smooths per frame (see the mic listener).
     if (orbFrame.state == OrbState.speaking) {
       orbFrame.audioTarget = rmsFromPcm16(pcm);
-      orbFrame.waveform = waveformFromPcm16(pcm, 128);
+      orbFrame.feedPcm(pcm, sampleRate: 24000); // TTS rate
     }
   }
 
@@ -467,7 +467,7 @@ class VoiceController extends ChangeNotifier {
         // the orb's responsiveness never depends on the device's audio buffer size.
         if (orbFrame.state == OrbState.listening) {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
-          orbFrame.waveform = waveformFromPcm16(chunk, 128);
+          orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
       }, onError: (Object e) => _log('mic error: $e'));
       _safeNotify();
