@@ -95,9 +95,15 @@ class FakeMic implements MicCapture {
 
 /// Headless AudioTrackPlayer (the real one is a MethodChannel facade).
 class FakePlayer implements AudioTrackPlayer {
-  FakePlayer({this.failInit = false});
+  FakePlayer({this.failInit = false, this.onInit});
 
   final bool failInit;
+
+  /// Runs *inside* `init()`'s await. The real one is a platform-channel call
+  /// taking tens of ms, so this is the honest way to land an event in that
+  /// window — deterministically, instead of racing a sleep against it.
+  final Future<void> Function()? onInit;
+
   int initCalls = 0;
   int disposeCalls = 0;
   final List<Uint8List> writes = <Uint8List>[];
@@ -105,6 +111,7 @@ class FakePlayer implements AudioTrackPlayer {
   @override
   Future<void> init(int sampleRate) async {
     initCalls++;
+    if (onInit != null) await onInit!();
     if (failInit) throw StateError('no audio device');
   }
 
@@ -313,6 +320,105 @@ void main() {
     expect(vc.micOn, isFalse,
         reason:
             'a deliberate disconnect() must not resurrect the mic on the next connect()');
+  });
+
+  test('a stopMic() DURING the outage is not resurrected by the rejoin', () async {
+    // The "before the outage" test above never actually reaches stopMic()'s
+    // `_micWasOn = false`: with the mic already stopped, _onSocketDown's
+    // `if (_micOn || _micWanted)` is false, so the restore flag was never armed
+    // in the first place. Deleting that line leaves the whole suite green.
+    //
+    // THIS is the ordering that arms the flag first and then asks for a stop —
+    // i.e. the one where a missing clear turns a deliberate "mic off" into a
+    // microphone that switches itself back on a few seconds later.
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 30)],
+      mic: mic,
+      player: FakePlayer(),
+    );
+    addTearDown(vc.dispose);
+
+    await vc.connect();
+    await vc.startMic();
+    expect(vc.micOn, isTrue);
+
+    await sockets.first.kill();
+    await settle();
+    expect(vc.micOn, isFalse); // the outage armed the restore flag
+
+    await vc.stopMic();
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await settle();
+
+    expect(vc.state, ConnState.joined, reason: 'the rejoin must still happen');
+    expect(vc.micOn, isFalse,
+        reason: 'a mic stopped during an outage must stay stopped across the rejoin');
+    expect(mic.startCalls, 1, reason: 'only the start the user actually asked for');
+  });
+
+  test('a socket that dies again mid-rejoin does not burn the mic-restore flag',
+      () async {
+    // Reachable on a device whose AudioTrack init has failed: `_playerReady`
+    // stays false, so every join re-enters the real (slow, awaited) init() —
+    // and a second server bounce can land inside that await. Without the
+    // `identical(joinedClient, _client)` guard, the now-superseded join clears
+    // _micWasOn and then calls startMic(), which returns immediately because
+    // _client is null. Net effect: the flag is spent, and the wall device comes
+    // back from the outage permanently deaf.
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    var killInsideInit = false;
+    final vc = VoiceController(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.client;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 5)],
+      mic: mic,
+      player: FakePlayer(
+        failInit: true, // keeps _playerReady false → init() re-runs every join
+        onInit: () async {
+          if (!killInsideInit) return;
+          killInsideInit = false;
+          await sockets.last.kill();
+          await settle(); // let _onSocketDown run before init() returns
+        },
+      ),
+    );
+    addTearDown(vc.dispose);
+
+    await vc.connect();
+    await vc.startMic();
+    expect(vc.micOn, isTrue);
+    expect(sockets, hasLength(1));
+
+    killInsideInit = true;
+    await sockets.first.kill(); // outage #1 arms the restore flag
+    await settle();
+    expect(vc.micOn, isFalse);
+
+    // The rejoin lands, then dies again inside _initPlayer's await.
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+    expect(sockets.length, greaterThanOrEqualTo(2),
+        reason: 'the first rejoin must have opened a second socket');
+
+    // The next rejoin is the one that sticks — and it must still re-arm.
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    await settle();
+
+    expect(vc.state, ConnState.joined);
+    expect(vc.micOn, isTrue,
+        reason: 'the restore flag must survive a join that got superseded');
   });
 
   test('a dead socket closes its client instead of leaking the heartbeat', () async {
