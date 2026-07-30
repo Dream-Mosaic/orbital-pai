@@ -106,6 +106,15 @@ class OrbFrame extends ChangeNotifier {
 
   double get t => _t;
 
+  /// Test seams: pin the clock and the smoothed level so OrbPainter.paint becomes
+  /// an explicitly pure function of (state, t, level, waveform, size) — which is
+  /// what makes a golden possible. Neither notifies.
+  @visibleForTesting
+  set debugT(double v) => _t = v;
+
+  @visibleForTesting
+  void debugSetLevel(double v) => _smoother.debugSet(v);
+
   /// Samples between the read cursor and the newest one. Test seam: keeping a
   /// lead IS the mechanism here, and a cursor sitting on the write head reads a
   /// fresh window per chunk — the exact stutter this replaced — while still
@@ -168,6 +177,25 @@ class OrbFrame extends ChangeNotifier {
     _waveform = _waveScratch;
   }
 }
+
+/// Where the specular gradient's centre sits, as an [Alignment] fraction of the
+/// highlight ellipse's half-width (0.44R) and half-height (0.3R).
+///
+/// orb.js centres this gradient at (cx - 0.32R, cy - 0.4R) — offset from the
+/// highlight ellipse's own centre (cx - 0.28R, cy - 0.34R) by (-0.04R, -0.06R),
+/// deliberately off-centre for a glass-sparkle look.
+///
+/// The subtlety: orb.js never rotates the canvas. Its `-0.5` is the `rotation`
+/// ARGUMENT of `ctx.ellipse(...)` (orb.js:172), which tilts the ellipse path
+/// alone, so the gradient is filled under an identity transform. We get the same
+/// path by rotating the canvas instead — but that also rotates the shader, which
+/// drags the gradient's centre off to (-0.0639R, -0.0335R) absolute: an error of
+/// 0.0357R, i.e. 3.21px at r=90. Pre-rotating the offset by +0.5 rad cancels the
+/// canvas rotation exactly and lands it back on orb.js's pixel.
+///
+/// Derived, not hand-tuned — `orb_geometry_test.dart` recomputes the rotation
+/// from first principles and asserts this value.
+const Alignment kSpecularGradientCenter = Alignment(-0.0144, -0.2394);
 
 /// Six-layer glass orb, a 1:1 port of orb.js's draw().
 class OrbPainter extends CustomPainter {
@@ -292,15 +320,10 @@ class OrbPainter extends CustomPainter {
       height: r * 0.6,
     );
     final spec = RadialGradient(
-      // orb.js centers this gradient at (cx - 0.32R, cy - 0.4R) — offset from
-      // the ellipse's own center (cx - 0.28R, cy - 0.34R, i.e. specCenter) by
-      // (-0.04R, -0.06R) — deliberately off-center from the highlight shape
-      // for a glass-sparkle look, rather than dead-centering it. Express
-      // that offset as an Alignment fraction of specRect's own half-width
-      // (0.44R) / half-height (0.3R); default focal (== center) is correct
-      // since orb.js's inner circle here has radius 0 (a plain, non-focal
-      // gradient).
-      center: const Alignment((-0.32 + 0.28) / 0.44, (-0.4 + 0.34) / 0.3),
+      // Pre-rotated into the canvas frame — see kSpecularGradientCenter. The
+      // default focal (== center) is correct: orb.js's inner circle here has
+      // radius 0, so it is a plain, non-focal gradient.
+      center: kSpecularGradientCenter,
       // radius is a fraction of specRect's shortestSide (0.6R): R*0.55 / 0.6R.
       radius: 0.55 / 0.6,
       colors: [

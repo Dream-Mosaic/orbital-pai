@@ -111,4 +111,10 @@ class LevelSmoother {
   void reset() {
     _level = 0.0;
   }
+
+  /// Test seam behind [OrbFrame.debugSetLevel] (which carries the
+  /// @visibleForTesting annotation; putting it here too would flag that call).
+  /// Pins the smoothed level, otherwise only reachable by running update()
+  /// dozens of times.
+  void debugSet(double v) => _level = v;
 }
