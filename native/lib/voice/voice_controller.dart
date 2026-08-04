@@ -7,6 +7,8 @@ import '../config.dart';
 import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
+import '../meridian/thread_model.dart';
+import '../meridian/tokens.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel_client.dart';
 
@@ -70,11 +72,8 @@ class VoiceController extends ChangeNotifier {
   // never resurrected by a later reconnect.
   bool _micWasOn = false;
 
-  // Mirrors index.js's `this.pttHeld`; read by the `state` snapshot merge below
-  // and written by the PTT controls (Task 9) — nothing in this task mutates it
-  // yet, so it stays non-final on purpose (`prefer_final_fields` would fire
-  // otherwise, then have to be reverted the moment Task 9 lands its writer).
-  // ignore: prefer_final_fields
+  // Mirrors index.js's `this.pttHeld`: read by the `state` snapshot merge and
+  // written by pttPress/pttRelease.
   bool _pttHeld = false;
 
   PhoenixChannelClient? _client;
@@ -94,6 +93,24 @@ class VoiceController extends ChangeNotifier {
   final AudioTrackPlayer _player;
   bool _playerReady = false;
 
+  // ---- Meridian chrome state ----
+  /// index.js reads this from a data attribute; the native client has no such
+  /// channel, and the server-side default is "Henry".
+  static const String assistantName = 'Henry';
+
+  final List<ThreadItem> _thread = <ThreadItem>[];
+
+  // Turn-scoped handles, all reset on `listening`/`state` exactly as index.js
+  // resets brainEl / metricsEl / toolChips / thinkingEl.
+  int? _brainIndex;
+  int? _metricsIndex;
+  int? _thinkingIndex;
+  final List<int> _toolChipIndexes = <int>[];
+  bool _historyBackfilled = false;
+
+  bool _pttEnabled = false;
+  bool _abiEnabled = false;
+
   // ---- Meridian orb state ----
   bool _talking = false;
   bool _wakeLocked = false;
@@ -106,6 +123,18 @@ class VoiceController extends ChangeNotifier {
   List<String> get eventLog => List.unmodifiable(_eventLog);
   bool get micOn => _micOn;
   bool get pttHeld => _pttHeld;
+
+  List<ThreadItem> get thread => List.unmodifiable(_thread);
+  bool get pttEnabled => _pttEnabled;
+  bool get abiEnabled => _abiEnabled;
+
+  /// The header dot is CONNECTION status, not conversation state.
+  ConnStatus get connStatus => switch (_state) {
+        ConnState.joined => ConnStatus.connected,
+        ConnState.idle => ConnStatus.connecting,
+        ConnState.connecting => ConnStatus.connecting,
+        ConnState.error => ConnStatus.offline,
+      };
 
   bool get talking => _talking;
   bool get wakeLocked => _wakeLocked;
@@ -170,6 +199,153 @@ class VoiceController extends ChangeNotifier {
   @visibleForTesting
   void debugApplyEvent(String event) => _applyTurnEvent(event);
 
+  // ---- thread construction (the port of index.js's addLine/appendBrainDelta/
+  // showThinking/addToolChip/resolveToolChips/renderMetrics/offerAck) ----
+
+  void _addLine(String source, String text) {
+    final kind = lineKindFromSource(source);
+    if (kind == null) {
+      _log('unknown speak_start source: $source');
+      return;
+    }
+    final label =
+        (kind == LineKind.brain || kind == LineKind.reflex) ? assistantName : source;
+    _thread.add(ThreadLine(
+      kind: kind,
+      label: label,
+      text: text,
+      markdown: kind != LineKind.you,
+    ));
+  }
+
+  void _showThinking() {
+    if (_thinkingIndex != null) return;
+    _thread.add(const ThreadLine(
+      kind: LineKind.brain,
+      label: assistantName,
+      text: '$assistantName: thinking…',
+      thinking: true,
+    ));
+    _thinkingIndex = _thread.length - 1;
+  }
+
+  void _clearThinking() {
+    final i = _thinkingIndex;
+    _thinkingIndex = null;
+    if (i == null || i >= _thread.length) return;
+    _thread.removeAt(i);
+    _shiftHandlesAfter(i);
+  }
+
+  void _resolveToolChips() {
+    for (final i in _toolChipIndexes) {
+      if (i < _thread.length && _thread[i] is ThreadToolChip) {
+        _thread[i] = (_thread[i] as ThreadToolChip).resolve();
+      }
+    }
+    _toolChipIndexes.clear();
+  }
+
+  /// A turn barged mid-tool-call: drop the chips that never resolved. Resolved ✓
+  /// chips are already out of the list and stay in the log as the turn's story.
+  void _dropUnresolvedToolChips() {
+    final doomed = _toolChipIndexes.toList()..sort((a, b) => b.compareTo(a));
+    for (final i in doomed) {
+      if (i < _thread.length && _thread[i] is ThreadToolChip) {
+        _thread.removeAt(i);
+        _shiftHandlesAfter(i);
+      }
+    }
+    _toolChipIndexes.clear();
+  }
+
+  void _shiftHandlesAfter(int removed) {
+    if (_brainIndex != null && _brainIndex! > removed) _brainIndex = _brainIndex! - 1;
+    if (_metricsIndex != null && _metricsIndex! > removed) {
+      _metricsIndex = _metricsIndex! - 1;
+    }
+    if (_thinkingIndex != null && _thinkingIndex! > removed) {
+      _thinkingIndex = _thinkingIndex! - 1;
+    }
+    for (var i = 0; i < _toolChipIndexes.length; i++) {
+      if (_toolChipIndexes[i] > removed) _toolChipIndexes[i] -= 1;
+    }
+  }
+
+  void _endTurn() {
+    _clearThinking();
+    _dropUnresolvedToolChips();
+    _brainIndex = null;
+    _metricsIndex = null;
+  }
+
+  /// Drop the local transcript. NOTE: the web's trash button fires the LiveView's
+  /// `clear_conversation` handler, which also clears server-side memory — the
+  /// voice CHANNEL has no equivalent handle_in, and A2 makes no server changes
+  /// beyond the panel route. So this is local-only; clearing memory stays a panel
+  /// action.
+  void clearThread() {
+    _thread.clear();
+    _brainIndex = null;
+    _metricsIndex = null;
+    _thinkingIndex = null;
+    _toolChipIndexes.clear();
+    _safeNotify();
+  }
+
+  void ackReminder(int id) {
+    for (var i = _thread.length - 1; i >= 0; i--) {
+      final item = _thread[i];
+      if (item is ThreadLine && item.ackId == id) {
+        _thread[i] = item.copyWith(ack: AckState.acked);
+        break;
+      }
+    }
+    _safeNotify();
+  }
+
+  // ---- controls ----
+
+  /// The native twin of index.js's startTalking()/stopTalking().
+  Future<void> togglePower() async {
+    if (_micOn || _micWanted) {
+      await stopMic();
+    } else {
+      _caption = '';
+      await startMic();
+    }
+  }
+
+  void setPtt(bool enabled) {
+    _pttEnabled = enabled;
+    _client?.push('ptt', {'enabled': enabled});
+    _safeNotify();
+    // index.js:396 — enabling PTT mode while powered off starts the mic.
+    if (enabled && !_micOn && !_micWanted) unawaited(startMic());
+  }
+
+  void pttPress() {
+    if (!_pttEnabled || _pttHeld) return;
+    _pttHeld = true;
+    _turnState = TurnState.listening; // amber while held (ambient if wake-locked)
+    _client?.push('ptt_press', const {});
+    _syncOrb();
+  }
+
+  void pttRelease() {
+    if (!_pttHeld) return;
+    _pttHeld = false;
+    _turnState = TurnState.idle;
+    _client?.push('ptt_release', const {});
+    _syncOrb();
+  }
+
+  void setAllowInterruptions(bool enabled) {
+    _abiEnabled = enabled;
+    _client?.push('allow_interruptions', {'enabled': enabled});
+    _safeNotify();
+  }
+
   Future<void> connect() async {
     if (_disposed || _connecting || _state == ConnState.joined) return;
     _connecting = true;
@@ -213,6 +389,10 @@ class VoiceController extends ChangeNotifier {
       _rejoinAttempt = 0;
       joinedClient = client;
       _log('joined voice:henry — reply: $resp');
+      // Re-announce our local toggles: a rejoin lands on a conversation that may
+      // have been re-pointed at another client in the meantime.
+      client.push('allow_interruptions', {'enabled': _abiEnabled});
+      client.push('ptt', {'enabled': _pttEnabled});
       _safeNotify();
     } catch (e) {
       // Close the socket THIS invocation opened. A join reply of
@@ -359,42 +539,113 @@ class VoiceController extends ChangeNotifier {
       case 'history':
         final turns = (p['turns'] as List?) ?? const [];
         _log('history: ${turns.length} turns');
-        break;
+        // One-shot: a rebind re-pushes history and must not duplicate lines.
+        if (turns.isNotEmpty && !_historyBackfilled && _thread.isEmpty) {
+          _historyBackfilled = true;
+          for (final t in turns) {
+            final turn = (t as Map).cast<String, dynamic>();
+            final you = turn['you'] as String?;
+            final assistant = turn['assistant'] as String?;
+            if (you != null) _addLine('you', you);
+            if (assistant != null) _addLine('brain', assistant);
+          }
+          _thread.add(const ThreadDivider());
+        }
       case 'partial':
         _caption = (p['text'] as String?) ?? '';
-        break;
       case 'transcript':
         _caption = '';
-        _transcript.add('you: ${p['text']}');
-        break;
+        final text = (p['text'] as String?) ?? '';
+        _transcript.add('you: $text');
+        _addLine('you', text);
       case 'speak_start':
-        _transcript.add('${p['source']}: ${p['text']}');
+        final source = (p['source'] as String?) ?? 'brain';
+        final text = (p['text'] as String?) ?? '';
+        _transcript.add('$source: $text');
         _applyTurnEvent('speak_start');
-        break;
+        if (source == 'brain') {
+          _clearThinking();
+          _resolveToolChips();
+          final i = _brainIndex;
+          if (i != null && i < _thread.length && _thread[i] is ThreadLine) {
+            // Snap the streamed plaintext to the full markdown render.
+            _thread[i] = (_thread[i] as ThreadLine).copyWith(text: text, markdown: true);
+            _brainIndex = null;
+            break;
+          }
+        }
+        _addLine(source, text);
       case 'brain_delta':
-        _log('brain_delta: ${p['delta']}');
-        break;
+        final delta = (p['delta'] as String?) ?? '';
+        var i = _brainIndex;
+        if (i == null) {
+          _resolveToolChips();
+          _clearThinking();
+          _thread.add(const ThreadLine(
+            kind: LineKind.brain,
+            label: assistantName,
+            text: '',
+          ));
+          i = _thread.length - 1;
+          _brainIndex = i;
+        }
+        final line = _thread[i] as ThreadLine;
+        _thread[i] = line.copyWith(text: line.text + delta);
+      case 'tool_call':
+        _thread.add(ThreadToolChip(name: (p['name'] as String?) ?? 'tool'));
+        _toolChipIndexes.add(_thread.length - 1);
+      case 'metrics':
+        final metrics = ThreadMetrics(
+          ttfaMs: (p['ttfa'] as num?)?.round(),
+          ttbMs: (p['ttb'] as num?)?.round(),
+        );
+        final i = _metricsIndex;
+        if (i != null && i < _thread.length) {
+          _thread[i] = metrics;
+        } else {
+          _thread.add(metrics);
+          _metricsIndex = _thread.length - 1;
+        }
+      case 'reminder_ack_offer':
+        final id = (p['id'] as num?)?.toInt();
+        if (id != null) {
+          for (var i = _thread.length - 1; i >= 0; i--) {
+            final item = _thread[i];
+            if (item is ThreadLine &&
+                (item.kind == LineKind.reminder || item.kind == LineKind.followup)) {
+              _thread[i] = item.copyWith(ack: AckState.offered, ackId: id);
+              break;
+            }
+          }
+        }
       case 'stop_playback':
-        _handleStopPlayback(); // Task 6
-        break;
+        _handleStopPlayback();
       case 'duck':
-        _handleDuck(true); // Task 6
-        break;
+        _handleDuck(true);
       case 'unduck':
-        _handleDuck(false); // Task 6
-        break;
+        _handleDuck(false);
       case 'speaking':
+        _log('state: ${m.event}');
+        _applyTurnEvent(m.event);
       case 'listening':
+        _log('state: ${m.event}');
+        _endTurn();
+        _applyTurnEvent(m.event);
       case 'thinking':
         _log('state: ${m.event}');
+        _showThinking();
         _applyTurnEvent(m.event);
       case 'locked':
         _wakeLocked = (p['locked'] as bool?) ?? false;
+        _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         _log('locked: $_wakeLocked');
         _syncOrb();
       case 'state':
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']}');
+        _clearThinking();
+        _brainIndex = null;
         _wakeLocked = (p['locked'] as bool?) ?? _wakeLocked;
+        _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
         // An ABSENT phase must not clobber what we already know.
