@@ -11,9 +11,15 @@ defmodule AppWeb.VoiceModals do
   drawer can slide closed while still showing its last content. `modal` (atom, may
   be stale while closing) drives the title and is what callers should `case` on for
   the panel content — it is intentionally NOT reset to nil on close.
+
+  `dismissible` (default true) controls the close affordances — the close button, the scrim's
+  click target and the Escape handler. Panel-only mode (`/?panel=<name>`, rendered for the native
+  client's webview) passes false, because there is no voice shell behind the drawer to return to;
+  the native app owns the back button.
   """
   attr :open, :boolean, default: false
   attr :modal, :atom, default: nil
+  attr :dismissible, :boolean, default: true
   slot :inner_block, required: true
 
   def modal_panel(assigns) do
@@ -21,8 +27,8 @@ defmodule AppWeb.VoiceModals do
     <div
       id="voice-modal"
       data-modal-open={to_string(@open)}
-      phx-window-keydown="close_modal"
-      phx-key="Escape"
+      phx-window-keydown={@dismissible && "close_modal"}
+      phx-key={@dismissible && "Escape"}
       class={[
         "fixed inset-0 z-50",
         (!@open && "pointer-events-none") || "pointer-events-auto"
@@ -33,7 +39,7 @@ defmodule AppWeb.VoiceModals do
           "absolute inset-0 bg-black/40 transition-opacity duration-300",
           (!@open && "opacity-0") || "opacity-100"
         ]}
-        phx-click="close_modal"
+        phx-click={@dismissible && "close_modal"}
         aria-hidden="true"
       >
       </div>
@@ -46,7 +52,12 @@ defmodule AppWeb.VoiceModals do
         </div>
         <header class="flex items-center justify-between border-b border-base-300 p-4">
           <h2 class="text-lg font-semibold">{modal_title(@modal)}</h2>
-          <button phx-click="close_modal" class="btn btn-ghost btn-circle btn-sm" aria-label="Close">
+          <button
+            :if={@dismissible}
+            phx-click="close_modal"
+            class="btn btn-ghost btn-circle btn-sm"
+            aria-label="Close"
+          >
             <.icon name="hero-x-mark" class="size-5" />
           </button>
         </header>

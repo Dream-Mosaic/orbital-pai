@@ -1124,4 +1124,65 @@ defmodule AppWeb.ConversationLiveTest do
     refute render(lv) =~ "a@x.com"
     assert App.Google.Accounts.list(Process.get(:test_user_id)) == []
   end
+
+  # ---------------------------------------------------------------------------
+  # `?panel=<name>` — panel-only rendering for the native client's webview.
+  # ---------------------------------------------------------------------------
+
+  test "?panel= opens that drawer and renders NO voice shell for a webview to join from",
+       %{conn: conn} do
+    html = conn |> get("/?panel=books") |> html_response(200)
+
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Books"
+
+    # The whole point: nothing here may mount the Voice hook, because the hook
+    # joins voice:<session_id> unconditionally and VoiceChannel's set_client is
+    # last-client-wins — it would steal the conversation from the native client.
+    refute html =~ ~s(phx-hook="Voice")
+    refute html =~ ~s(id="voice")
+    refute html =~ ~s(id="orb-canvas")
+    refute html =~ ~s(id="ptt-hold")
+    refute html =~ ~s(id="bottom-nav")
+  end
+
+  test "?panel= survives the connected mount (the webview's real path)", %{conn: conn} do
+    {:ok, _lv, html} = live(conn, "/?panel=reminders")
+
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Upcoming"
+    refute html =~ ~s(phx-hook="Voice")
+  end
+
+  test "panel mode offers no way to dismiss the drawer into an empty shell", %{conn: conn} do
+    panel_html = conn |> get("/?panel=settings") |> html_response(200)
+    refute panel_html =~ ~s(aria-label="Close")
+
+    # ...but the normal drawer keeps its close button.
+    {:ok, lv, _} = live(conn, "/")
+    html = lv |> element(~s(button[phx-value-modal="settings"])) |> render_click()
+    assert html =~ ~s(aria-label="Close")
+  end
+
+  test "a close_modal in panel mode cannot blank the page", %{conn: conn} do
+    # Every close affordance is removed above, so this cannot fire from the UI.
+    # Structurally impossible beats merely unreachable: without the guard clause
+    # a stray event would close the only thing the page renders.
+    {:ok, lv, _} = live(conn, "/?panel=books")
+    html = render_click(lv, "close_modal", %{})
+
+    assert html =~ ~s(data-modal-open="true")
+    assert html =~ "Books"
+  end
+
+  test "an unknown or absent ?panel= leaves the voice shell exactly as it was", %{conn: conn} do
+    for path <- ["/", "/?panel=", "/?panel=nope", "/?panel=../etc"] do
+      html = conn |> get(path) |> html_response(200)
+
+      assert html =~ ~s(phx-hook="Voice"), "#{path} must still render the voice shell"
+      assert html =~ ~s(id="orb-canvas"), path
+      assert html =~ ~s(id="bottom-nav"), path
+      refute html =~ ~s(data-modal-open="true"), "#{path} must not open a drawer"
+    end
+  end
 end

@@ -24,6 +24,16 @@ defmodule AppWeb.ConversationLive do
     sid = to_string(socket.assigns.current_user.id)
     kiosk = params["kiosk"] == "1"
 
+    # Panel-only mode (`/?panel=books`): render just the named drawer, WITHOUT the
+    # voice shell. The native client opens the unbuilt panels in a webview, and the
+    # web Voice hook joins `voice:<session_id>` unconditionally in mounted()
+    # (assets/js/voice/index.js) — while VoiceChannel.join/3 -> bind_session/1 ->
+    # Conversation.set_client/2 is LAST-CLIENT-WINS. So a webview that mounted the
+    # hook would re-point the conversation's outbound stream at itself and cut the
+    # native client out mid-turn. No shell -> no hook -> no join.
+    # nil (absent or unrecognised) keeps every assign at today's value.
+    panel = panel_modal(params["panel"])
+
     switchable_users =
       if kiosk and App.Config.default().kiosk_user_switch do
         # Only allowlisted users are switchable (matches the controller gate) — a de-allowlisted
@@ -60,8 +70,9 @@ defmodule AppWeb.ConversationLive do
        page_title: App.Config.default().name,
        kiosk: kiosk,
        switchable_users: switchable_users,
-       modal_open: false,
-       modal: nil,
+       panel_only: panel != nil,
+       modal_open: panel != nil,
+       modal: panel,
        grant: nil,
        default_abi: socket.assigns.current_user.default_abi,
        default_ptt: socket.assigns.current_user.default_ptt,
@@ -151,6 +162,13 @@ defmodule AppWeb.ConversationLive do
       atom -> {:noreply, assign(socket, modal_open: true, modal: atom)}
     end
   end
+
+  # In panel mode the drawer is the ONLY thing rendered, so closing it would leave
+  # a blank page. Every close affordance is gated off in render/1, but this clause
+  # makes that structural rather than merely unreachable. Must precede the clauses
+  # below.
+  def handle_event("close_modal", _params, %{assigns: %{panel_only: true}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("close_modal", _params, %{assigns: %{modal_open: false}} = socket),
     do: {:noreply, socket}
@@ -505,6 +523,14 @@ defmodule AppWeb.ConversationLive do
 
   # Kiosk ambient strip: the present segments joined with " · " — a missing/errored source (nil
   # weather or next_event, or zero due reminders) simply drops out, with no dangling separator.
+  # `?panel=<name>` -> the modal atom, or nil for an absent/unknown value. Shares
+  # @valid_modals with open_modal/2 so the two lists can never drift, and an
+  # unrecognised value degrades to the ordinary voice screen rather than erroring.
+  defp panel_modal(name) when is_binary(name),
+    do: Enum.find(@valid_modals, &(to_string(&1) == name))
+
+  defp panel_modal(_), do: nil
+
   defp ambient_line(ambient, due) do
     reminders =
       case length(due) do
@@ -705,7 +731,7 @@ defmodule AppWeb.ConversationLive do
           if(@kiosk, do: "kiosk w-full", else: "mx-auto max-w-[26rem]")
         ]}
       >
-        <header>
+        <header :if={!@panel_only}>
           <div class="hd-l">
             <span class="wordmark">{@assistant_name}</span>
             <%!-- server/connection status: green=connected, amber=reconnecting, red=offline --%>
@@ -780,6 +806,7 @@ defmodule AppWeb.ConversationLive do
         </div>
 
         <section
+          :if={!@panel_only}
           id="voice"
           phx-hook="Voice"
           phx-update="ignore"
@@ -870,7 +897,7 @@ defmodule AppWeb.ConversationLive do
         </section>
 
         <%!-- Bottom nav: slide-in modals, engraved stations mirroring the header's kiosk strip --%>
-        <nav :if={!@kiosk} id="bottom-nav" aria-label="Panels">
+        <nav :if={!@kiosk and !@panel_only} id="bottom-nav" aria-label="Panels">
           <button
             type="button"
             phx-click="open_modal"
@@ -920,7 +947,7 @@ defmodule AppWeb.ConversationLive do
         </nav>
       </main>
 
-      <.modal_panel open={@modal_open} modal={@modal}>
+      <.modal_panel open={@modal_open} modal={@modal} dismissible={!@panel_only}>
         <%= case @modal do %>
           <% :memory -> %>
             <.memory_panel facts={@facts} summary={@summary} assistant_name={@assistant_name} />
