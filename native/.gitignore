@@ -48,3 +48,6 @@ app.*.map.json
 /lib/config.dart
 # Trained wake-word model (per-device artifact; keep out of git).
 /assets/henry.ppn
+
+# Screenshots from shot.sh — scratch, never committed.
+/shots/
