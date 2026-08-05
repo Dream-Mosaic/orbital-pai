@@ -1,0 +1,25 @@
+Bundled typefaces
+=================
+
+Both files are the SAME faces the web client self-hosts
+(server/priv/static/fonts/*.woff2), converted woff2 -> ttf because Flutter
+cannot consume woff2. Nothing was re-drawn, subset or re-hinted; only the
+container changed. Both are variable fonts.
+
+  SpaceGrotesk.ttf   --font-display   wght 300-700
+    Copyright 2020 The Space Grotesk Project Authors
+    https://github.com/floriankarsten/space-grotesk
+    Licence: SIL Open Font License 1.1 — https://scripts.sil.org/OFL
+
+  Inter.ttf          --font-sans      wght 100-900
+    Copyright 2016 The Inter Project Authors
+    https://github.com/rsms/inter
+    Licence: SIL Open Font License 1.1 — https://openfontlicense.org
+
+The copyright lines and licence URLs above are transcribed from each file's own
+`name` table (IDs 0 and 14), not from memory.
+
+TODO before any public distribution: the OFL requires the full licence text to
+travel with the fonts. Drop the upstream OFL.txt for each family in beside them
+and extend the LicenseRegistry entry in main.dart to read it. Fine as-is for a
+personal side-loaded build.

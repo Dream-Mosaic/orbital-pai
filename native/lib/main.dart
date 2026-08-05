@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
 import 'meridian/nav.dart';
 import 'meridian/panel_webview.dart';
@@ -8,7 +10,17 @@ import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 import 'web_url.dart';
 
-void main() => runApp(const HenryApp());
+void main() {
+  // The bundled Space Grotesk / Inter are SIL OFL; surface their attribution in
+  // the standard licence page rather than burying it in the asset folder.
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+      const ['Space Grotesk', 'Inter'],
+      await rootBundle.loadString('assets/fonts/ATTRIBUTION.txt'),
+    );
+  });
+  runApp(const HenryApp());
+}
 
 class HenryApp extends StatelessWidget {
   const HenryApp({super.key});

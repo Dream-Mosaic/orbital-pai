@@ -53,15 +53,20 @@ abstract final class M {
 }
 
 /// The web self-hosts Inter (body, `--font-sans`) and Space Grotesk (display,
-/// `--font-display`) as **woff2**, which Flutter cannot consume. A2 runs on the
-/// platform default sans and carries every OTHER type token exactly (spec §9).
-/// Bundling real fonts later is a change to these two constants and nothing else.
-const String? kDisplayFamily = null;
-const String? kBodyFamily = null;
+/// `--font-display`) as woff2, which Flutter cannot consume — so the SAME files
+/// are converted to ttf at `assets/fonts/` and bundled. Both are variable fonts;
+/// see [MType.wght] for reaching a CSS weight exactly.
+const String kDisplayFamily = 'Space Grotesk';
+const String kBodyFamily = 'Inter';
 
 abstract final class MType {
   /// CSS `letter-spacing` is in `em`; Flutter's is in logical px.
   static double track(double fontSize, double em) => fontSize * em;
+
+  /// Both bundled families are VARIABLE (Space Grotesk wght 300-700, Inter
+  /// 100-900), so a CSS `font-weight: 650` lands exactly instead of rounding to
+  /// FontWeight.w600. Pair with `fontWeight` for the non-variable fallback.
+  static List<FontVariation> wght(double w) => [FontVariation('wght', w)];
 
   /// `text-shadow: 0 -1px 0 rgba(0,0,0,0.7)` — the "engraved" chrome labels.
   static const List<Shadow> engraved = [

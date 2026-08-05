@@ -17,6 +17,7 @@ dependencies:
   path_provider: ^2.1.0
   permission_handler: ^11.3.0
   webview_flutter: ^4.10.0
+  flutter_svg: ^2.0.10
 
 dev_dependencies:
   flutter_test:
@@ -37,3 +38,19 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/icons/
+    - assets/fonts/
+
+  # The exact families the web self-hosts (server/priv/static/fonts/*.woff2),
+  # converted woff2 -> ttf. Both are VARIABLE (Space Grotesk wght 300-700, Inter
+  # 100-900), so CSS weights like 650 are reachable exactly via fontVariations
+  # instead of rounding to the nearest FontWeight.
+  fonts:
+    - family: Space Grotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk.ttf
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf

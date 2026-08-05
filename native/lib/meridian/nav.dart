@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'hero_icon.dart';
 import 'tokens.dart';
 
 /// The five bottom-nav stations, in the web's source order
@@ -15,13 +16,13 @@ extension MeridianTabInfo on MeridianTab {
         MeridianTab.search => 'Search',
       };
 
-  /// heroicon -> Material equivalent (spec §8).
-  IconData get icon => switch (this) {
-        MeridianTab.settings => Icons.settings_outlined, // hero-cog-6-tooth
-        MeridianTab.reminders => Icons.notifications_none, // hero-bell
-        MeridianTab.books => Icons.menu_book_outlined, // hero-book-open
-        MeridianTab.connectors => Icons.link, // hero-link
-        MeridianTab.search => Icons.search, // hero-magnifying-glass
+  /// The web's own heroicon, bundled — not a Material lookalike.
+  HeroIcon get icon => switch (this) {
+        MeridianTab.settings => HeroIcon.cog6Tooth,
+        MeridianTab.reminders => HeroIcon.bell,
+        MeridianTab.books => HeroIcon.bookOpen,
+        MeridianTab.connectors => HeroIcon.link,
+        MeridianTab.search => HeroIcon.magnifyingGlass,
       };
 
   /// The `phx-value-modal` the web's nav button carries — also the `?panel=`
@@ -45,7 +46,11 @@ class MeridianNav extends StatelessWidget {
   /// badge is built and styled but stays false until a later phase feeds it.
   final bool hasDue;
 
-  static const double _labelSize = 7.04; // 0.44rem
+  /// 0.44rem (7.04px) in the CSS. The web wraps "CONNECTORS" to two lines at
+  /// phone width rather than shrinking it; we keep one line instead, and the
+  /// widest label is what sets the size. Dropping it uniformly reads as chrome —
+  /// letting FittedBox shrink only the two long ones read as a bug.
+  static const double _labelSize = 6.4;
 
   @override
   Widget build(BuildContext context) {
@@ -70,26 +75,35 @@ class MeridianNav extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: () => onTap(tab),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(tab.icon,
+                          HeroIconView(tab.icon,
                               size: 18, color: M.chromeDim.withValues(alpha: 0.42)),
                           const SizedBox(height: 5), // .nbtn gap
-                          Text(
-                            tab.label.toUpperCase(),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontFamily: kDisplayFamily,
-                              fontSize: _labelSize,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: MType.track(_labelSize, 0.34),
-                              color: M.chromeDim.withValues(alpha: 0.3),
-                              shadows: MType.engraved,
+                          // The CSS lets the label wrap; at 360px that splits
+                          // "REMINDERS" across two lines, which reads as broken
+                          // rather than as chrome. One line, scaled down only if
+                          // the station is genuinely too narrow for it.
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              tab.label.toUpperCase(),
+                              maxLines: 1,
+                              softWrap: false,
+                              style: TextStyle(
+                                fontFamily: kDisplayFamily,
+                                fontSize: _labelSize,
+                                fontWeight: FontWeight.w600,
+                                fontVariations: MType.wght(600),
+                                letterSpacing: MType.track(_labelSize, 0.34),
+                                color: M.chromeDim.withValues(alpha: 0.3),
+                                shadows: MType.engraved,
+                              ),
                             ),
                           ),
                         ],

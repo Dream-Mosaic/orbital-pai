@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:henry_wall/meridian/hero_icon.dart';
 import 'package:henry_wall/meridian/orb_bezel.dart';
 import 'package:henry_wall/meridian/orb_painter.dart';
 import 'package:henry_wall/meridian/orb_view.dart';
 import 'package:henry_wall/meridian/tokens.dart';
+
+/// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
+Finder findHero(HeroIcon icon) =>
+    find.byWidgetPredicate((w) => w is HeroIconView && w.icon == icon);
 
 void main() {
   late OrbFrame frame;
@@ -46,17 +51,17 @@ void main() {
     await tester.pump();
 
     final origin = tester.getTopLeft(find.byType(OrbBezel));
-    Offset centreOf(IconData icon) => tester.getCenter(find.byIcon(icon)) - origin;
+    Offset centreOf(HeroIcon icon) => tester.getCenter(findHero(icon)) - origin;
 
     // app.css: .d-power 8%/8%, .d-clear 92%/8%, .d-ptt 8%/92%, .d-abi 92%/92%
-    expect(centreOf(Icons.power_settings_new).dx, closeTo(240 * 0.08, 0.6));
-    expect(centreOf(Icons.power_settings_new).dy, closeTo(240 * 0.08, 0.6));
-    expect(centreOf(Icons.delete_outline).dx, closeTo(240 * 0.92, 0.6));
-    expect(centreOf(Icons.delete_outline).dy, closeTo(240 * 0.08, 0.6));
-    expect(centreOf(Icons.mic_none).dx, closeTo(240 * 0.08, 0.6));
-    expect(centreOf(Icons.mic_none).dy, closeTo(240 * 0.92, 0.6));
-    expect(centreOf(Icons.pan_tool_outlined).dx, closeTo(240 * 0.92, 0.6));
-    expect(centreOf(Icons.pan_tool_outlined).dy, closeTo(240 * 0.92, 0.6));
+    expect(centreOf(HeroIcon.power).dx, closeTo(240 * 0.08, 0.6));
+    expect(centreOf(HeroIcon.power).dy, closeTo(240 * 0.08, 0.6));
+    expect(centreOf(HeroIcon.trash).dx, closeTo(240 * 0.92, 0.6));
+    expect(centreOf(HeroIcon.trash).dy, closeTo(240 * 0.08, 0.6));
+    expect(centreOf(HeroIcon.microphone).dx, closeTo(240 * 0.08, 0.6));
+    expect(centreOf(HeroIcon.microphone).dy, closeTo(240 * 0.92, 0.6));
+    expect(centreOf(HeroIcon.handRaised).dx, closeTo(240 * 0.92, 0.6));
+    expect(centreOf(HeroIcon.handRaised).dy, closeTo(240 * 0.92, 0.6));
   });
 
   testWidgets('the orb is oversized so its halos spill onto the rim',
@@ -78,17 +83,17 @@ void main() {
 
   testWidgets('each satellite reports its own tap', (tester) async {
     await tester.pumpWidget(host());
-    await tester.tap(find.byIcon(Icons.power_settings_new));
-    await tester.tap(find.byIcon(Icons.delete_outline));
-    await tester.tap(find.byIcon(Icons.mic_none));
-    await tester.tap(find.byIcon(Icons.pan_tool_outlined));
+    await tester.tap(findHero(HeroIcon.power));
+    await tester.tap(findHero(HeroIcon.trash));
+    await tester.tap(findHero(HeroIcon.microphone));
+    await tester.tap(findHero(HeroIcon.handRaised));
     expect(taps, ['power', 'clear', 'ptt:true', 'abi:true']);
   });
 
   testWidgets('a toggle that is ON reports turning OFF', (tester) async {
     await tester.pumpWidget(host(pttOn: true, abiOn: true));
-    await tester.tap(find.byIcon(Icons.mic_none));
-    await tester.tap(find.byIcon(Icons.pan_tool_outlined));
+    await tester.tap(findHero(HeroIcon.microphone));
+    await tester.tap(findHero(HeroIcon.handRaised));
     expect(taps, ['ptt:false', 'abi:false'],
         reason: 'the detent must report the INTENT, not its current state');
   });
@@ -96,13 +101,13 @@ void main() {
   testWidgets('power ON tints the icon success-teal; OFF dims the whole detent',
       (tester) async {
     await tester.pumpWidget(host(powerOn: true));
-    expect(tester.widget<Icon>(find.byIcon(Icons.power_settings_new)).color, M.success);
+    expect(tester.widget<HeroIconView>(findHero(HeroIcon.power)).color, M.success);
 
     await tester.pumpWidget(host());
     await tester.pump();
     final opacity = tester.widget<Opacity>(find
         .ancestor(
-          of: find.byIcon(Icons.power_settings_new),
+          of: findHero(HeroIcon.power),
           matching: find.byType(Opacity),
         )
         .first);
@@ -111,12 +116,12 @@ void main() {
 
   testWidgets('PTT/ABI ON use the amber ring, not the power recipe', (tester) async {
     await tester.pumpWidget(host(pttOn: true));
-    expect(tester.widget<Icon>(find.byIcon(Icons.mic_none)).color, M.you);
+    expect(tester.widget<HeroIconView>(findHero(HeroIcon.microphone)).color, M.you);
     expect(tester.widget<Text>(find.text('PTT')).style!.color!.a, closeTo(0.7, 0.02));
 
     // ...and OFF is the unlit chrome grey, not the amber.
     await tester.pumpWidget(host());
-    expect(tester.widget<Icon>(find.byIcon(Icons.mic_none)).color!.a,
+    expect(tester.widget<HeroIconView>(findHero(HeroIcon.microphone)).color!.a,
         closeTo(0.55, 0.02));
     expect(tester.widget<Text>(find.text('PTT')).style!.color!.a, closeTo(0.36, 0.02));
   });

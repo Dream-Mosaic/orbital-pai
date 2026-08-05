@@ -86,44 +86,51 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
 
         return MeridianSurface(
           state: orb,
-          child: SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: M.maxWidth),
-                child: Padding(
-                  padding: const EdgeInsets.all(M.pagePad),
-                  child: Column(
-                    children: [
-                      MeridianHeader(
-                        assistantName: VoiceController.assistantName,
-                        status: vc.connStatus,
-                        version: widget.appVersion,
-                        userName: widget.userName,
-                        onVersionLongPress: widget.onDevEntry,
-                      ),
-                      const SizedBox(height: M.columnGap),
-                      _orbPane(vc, glow),
-                      const SizedBox(height: M.columnGap),
-                      Expanded(
-                        child: Thread(
-                          items: vc.thread,
-                          glow: glow,
-                          scrollController: _scroll,
-                          onAck: vc.ackReminder,
+          // Without a Material ancestor, WidgetsApp's fallback DefaultTextStyle
+          // applies — and our styles override its colour/size/family but NOT its
+          // `decoration`, so every Text on the screen inherits a yellow double
+          // underline. Transparent, so MeridianSurface still owns the backdrop.
+          child: Material(
+            type: MaterialType.transparency,
+            child: SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: M.maxWidth),
+                  child: Padding(
+                    padding: const EdgeInsets.all(M.pagePad),
+                    child: Column(
+                      children: [
+                        MeridianHeader(
+                          assistantName: VoiceController.assistantName,
+                          status: vc.connStatus,
+                          version: widget.appVersion,
+                          userName: widget.userName,
+                          onVersionLongPress: widget.onDevEntry,
                         ),
-                      ),
-                      const SizedBox(height: M.columnGap),
-                      HoldToTalkBar(
-                        enabled: vc.pttEnabled,
-                        held: vc.pttHeld,
-                        onPress: vc.pttPress,
-                        onRelease: vc.pttRelease,
-                      ),
-                      const SizedBox(height: M.columnGap),
-                      MeridianNav(
-                        onTap: (tab) => widget.onOpenPanel?.call(tab),
-                      ),
-                    ],
+                        const SizedBox(height: M.columnGap),
+                        _orbPane(vc, glow),
+                        const SizedBox(height: M.columnGap),
+                        Expanded(
+                          child: Thread(
+                            items: vc.thread,
+                            glow: glow,
+                            scrollController: _scroll,
+                            onAck: vc.ackReminder,
+                          ),
+                        ),
+                        const SizedBox(height: M.columnGap),
+                        HoldToTalkBar(
+                          enabled: vc.pttEnabled,
+                          held: vc.pttHeld,
+                          onPress: vc.pttPress,
+                          onRelease: vc.pttRelease,
+                        ),
+                        const SizedBox(height: M.columnGap),
+                        MeridianNav(
+                          onTap: (tab) => widget.onOpenPanel?.call(tab),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

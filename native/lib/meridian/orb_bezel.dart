@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'hero_icon.dart';
 import 'live_caption.dart';
 import 'orb_painter.dart';
 import 'orb_view.dart';
@@ -79,31 +80,43 @@ class OrbBezel extends StatelessWidget {
                   ),
                 ),
               ),
-              _at(d, 0.08, 0.08,
+              _at(
+                  d,
+                  0.08,
+                  0.08,
                   OrbDetent(
-                    icon: Icons.power_settings_new,
+                    icon: HeroIcon.power,
                     tooltip: 'Power on/off',
                     onTap: onPower,
                     iconColor: powerOn ? M.success : null,
                     dimmed: !powerOn,
                   )),
-              _at(d, 0.92, 0.08,
+              _at(
+                  d,
+                  0.92,
+                  0.08,
                   OrbDetent(
-                    icon: Icons.delete_outline,
+                    icon: HeroIcon.trash,
                     tooltip: 'Clear conversation',
                     onTap: onClear,
                   )),
-              _at(d, 0.08, 0.92,
+              _at(
+                  d,
+                  0.08,
+                  0.92,
                   OrbDetent(
-                    icon: Icons.mic_none,
+                    icon: HeroIcon.microphone,
                     tooltip: 'Push-to-talk mode',
                     label: 'PTT',
                     on: pttOn,
                     onTap: () => onPtt(!pttOn),
                   )),
-              _at(d, 0.92, 0.92,
+              _at(
+                  d,
+                  0.92,
+                  0.92,
                   OrbDetent(
-                    icon: Icons.pan_tool_outlined,
+                    icon: HeroIcon.handRaised,
                     tooltip: 'Allow barge-in',
                     label: 'ABI',
                     on: abiOn,
@@ -240,7 +253,7 @@ class OrbDetent extends StatelessWidget {
     this.dimmed = false,
   });
 
-  final IconData icon;
+  final HeroIcon icon;
   final String tooltip;
   final VoidCallback onTap;
   final String? label;
@@ -287,7 +300,7 @@ class OrbDetent extends StatelessWidget {
               ],
             ),
             child: Center(
-              child: Icon(
+              child: HeroIconView(
                 icon,
                 size: 15,
                 color: iconColor ?? (on ? M.you : M.chrome.withValues(alpha: 0.55)),
@@ -305,7 +318,8 @@ class OrbDetent extends StatelessWidget {
                 style: TextStyle(
                   fontFamily: kDisplayFamily,
                   fontSize: 7.36, // 0.46rem
-                  fontWeight: FontWeight.w600, // CSS 650
+                  fontWeight: FontWeight.w600,
+                  fontVariations: MType.wght(650), // CSS 650, exactly
                   letterSpacing: MType.track(7.36, 0.3),
                   color: on
                       ? M.you.withValues(alpha: 0.7)
