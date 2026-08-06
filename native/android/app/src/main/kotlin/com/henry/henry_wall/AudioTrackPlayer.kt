@@ -1,8 +1,12 @@
 package com.henry.henry_wall
 
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Build
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -17,8 +21,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 ///
 /// Note: AudioTrack.playbackHeadPosition wraps at 2^31 frames (~24.8 h at
 /// 24 kHz) — fine for a spike; documented here rather than guarded.
-class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
+class AudioTrackPlayer(messenger: BinaryMessenger, private val context: Context) :
+    MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, "henry/audio_track")
+    private val audio =
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     @Volatile private var track: AudioTrack? = null
     private var sampleRate = 24000
     private val queue = LinkedBlockingQueue<ByteArray>()
@@ -58,10 +65,18 @@ class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHan
         val minBuf = AudioTrack.getMinBufferSize(
             rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val bufSize = maxOf(minBuf, rate * 2) // ~0.5 s cushion
+        // USAGE_VOICE_COMMUNICATION, not USAGE_MEDIA. Android's echo canceller
+        // cancels the mic against the VOICE-COMMUNICATION stream only; a media
+        // stream is not part of its reference signal. With MEDIA here the mic
+        // (already opened on the voiceCommunication source) heard Henry's own
+        // answers unsuppressed, Ink-2 endpointed them as a fresh turn, and he
+        // answered himself in a loop — see the "heard:" lines echoing his own
+        // "brain:" lines in companion.log.
+        enterCommunicationMode()
         track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build())
             .setAudioFormat(
@@ -79,6 +94,34 @@ class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHan
         runWrittenFrames = 0
         running.set(true)
         writer = Thread { writerLoop() }.also { it.start() }
+    }
+
+    /// Put the whole audio session into communication mode, which is what arms
+    /// the platform AEC/NS against our own playback, then force it back onto the
+    /// loudspeaker — communication mode otherwise routes to the EARPIECE, which
+    /// on a wall device means Henry is inaudible.
+    private fun enterCommunicationMode() {
+        audio.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audio.availableCommunicationDevices
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                ?.let { audio.setCommunicationDevice(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            audio.isSpeakerphoneOn = true
+        }
+    }
+
+    /// Hand the audio focus/mode back so the device is not left stuck in call
+    /// mode (media volume, earpiece routing) after Henry is torn down.
+    private fun leaveCommunicationMode() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audio.clearCommunicationDevice()
+        } else {
+            @Suppress("DEPRECATION")
+            audio.isSpeakerphoneOn = false
+        }
+        audio.mode = AudioManager.MODE_NORMAL
     }
 
     private fun writerLoop() {
@@ -155,6 +198,10 @@ class AudioTrackPlayer(messenger: BinaryMessenger) : MethodChannel.MethodCallHan
         queue.clear()
         track?.let { it.flush(); it.release() }
         track = null
+        // Only surrender call mode once the track is really gone; init() calls
+        // dispose() first, and dropping the mode between two live tracks would
+        // bounce routing back to the earpiece mid-session.
+        leaveCommunicationMode()
         idle = true
         runStartFrames = 0
         runWrittenFrames = 0
