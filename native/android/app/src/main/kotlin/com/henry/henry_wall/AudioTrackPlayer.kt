@@ -4,9 +4,12 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioDeviceCallback
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -96,25 +99,61 @@ class AudioTrackPlayer(messenger: BinaryMessenger, private val context: Context)
         writer = Thread { writerLoop() }.also { it.start() }
     }
 
-    /// Put the whole audio session into communication mode, which is what arms
-    /// the platform AEC/NS against our own playback, then force it back onto the
-    /// loudspeaker — communication mode otherwise routes to the EARPIECE, which
-    /// on a wall device means Henry is inaudible.
+    /// Re-routes whenever something is plugged in or unplugged. setCommunicationDevice
+    /// PINS a route, so without this, earbuds connected mid-answer would be ignored
+    /// for the rest of the session.
+    private val routeWatcher = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = route()
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = route()
+    }
+    private var watching = false
+
+    /// Put the whole audio session into communication mode, which is what arms the
+    /// platform AEC/NS against our own playback, then choose a route.
     private fun enterCommunicationMode() {
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
+        route()
+        if (!watching) {
+            audio.registerAudioDeviceCallback(routeWatcher, Handler(Looper.getMainLooper()))
+            watching = true
+        }
+    }
+
+    /// Headset if there is one, loudspeaker otherwise.
+    ///
+    /// Communication mode defaults to the EARPIECE, which on a hands-free device
+    /// means Henry is inaudible — so the speaker is only a FALLBACK, not a forced
+    /// route. Anything that is neither the earpiece nor the built-in speaker is a
+    /// headset of some kind (wired, USB, BT SCO, BLE, hearing aid); testing by
+    /// exclusion means a route type we have never heard of still wins over the
+    /// speaker, which is the behaviour you want when you have earbuds in.
+    private fun route() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audio.availableCommunicationDevices
-                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                ?.let { audio.setCommunicationDevice(it) }
+            val devices = audio.availableCommunicationDevices
+            val headset = devices.firstOrNull {
+                it.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE &&
+                    it.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            }
+            val target = headset
+                ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            target?.let { audio.setCommunicationDevice(it) }
         } else {
             @Suppress("DEPRECATION")
-            audio.isSpeakerphoneOn = true
+            val wired = audio.isWiredHeadsetOn
+            @Suppress("DEPRECATION")
+            val bt = audio.isBluetoothScoOn || audio.isBluetoothA2dpOn
+            @Suppress("DEPRECATION")
+            audio.isSpeakerphoneOn = !(wired || bt)
         }
     }
 
     /// Hand the audio focus/mode back so the device is not left stuck in call
     /// mode (media volume, earpiece routing) after Henry is torn down.
     private fun leaveCommunicationMode() {
+        if (watching) {
+            audio.unregisterAudioDeviceCallback(routeWatcher)
+            watching = false
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audio.clearCommunicationDevice()
         } else {
