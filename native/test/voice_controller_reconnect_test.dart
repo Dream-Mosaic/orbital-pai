@@ -51,6 +51,12 @@ class FakeSocket {
   late final PhoenixSocket socket;
   bool localClosed = false;
 
+  /// The event names this client actually put on the wire, in order.
+  List<String> get sentEvents => sent
+      .whereType<String>()
+      .map((f) => (jsonDecode(f) as List<dynamic>)[3] as String)
+      .toList();
+
   void push(String event, String jsonPayload) =>
       ctrl.foreign.sink.add('[null,null,"voice:henry","$event",$jsonPayload]');
 
@@ -116,6 +122,59 @@ void main() {
       json: {'locked': false},
     ));
     expect(vc.orbState, OrbState.speaking);
+  });
+
+  test('a controller built against an ALREADY-JOINED connection initialises its '
+      'audio track and announces its toggles', () async {
+    // main.dart builds the controller lazily (`late final`, first touched in
+    // build()), so the connection can already be up by the time it exists.
+    // There is no onJoined left to fire for it: without the constructor
+    // adopting the live channel, the output track never initialises and every
+    // TTS byte is silently dropped — while mic, captions and thread all keep
+    // working, which is what makes it so easy to miss.
+    final fake = FakeSocket();
+    final conn = AppConnection(
+      connector: () async => fake.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+
+    await conn.connect();
+    await settle();
+    expect(conn.state, ConnState.joined, reason: 'the connection is up FIRST');
+
+    final player = FakePlayer();
+    final vc =
+        VoiceController(connection: conn, mic: FakeMic(), player: player);
+    addTearDown(vc.dispose);
+    await settle();
+
+    expect(player.initCalls, 1,
+        reason: 'a late-built consumer still needs its 24k output track');
+    expect(fake.sentEvents,
+        containsAll(<String>['allow_interruptions', 'ptt']),
+        reason: 'the server must learn a late-built client\'s toggles too');
+  });
+
+  test('a controller built BEFORE the join initialises its audio track exactly once',
+      () async {
+    // The other half of the same fix: adopting in the constructor must not make
+    // the onJoined that follows re-run the join work on the same channel.
+    final fake = FakeSocket();
+    final player = FakePlayer();
+    final b = build(connector: () async => fake.socket, player: player);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    expect(player.initCalls, 0, reason: 'there is no channel to init against yet');
+
+    await b.conn.connect();
+    await settle();
+
+    expect(player.initCalls, 1,
+        reason: 'the constructor and onJoined must not both init the same channel');
+    expect(fake.sentEvents.where((e) => e == 'ptt'), hasLength(1),
+        reason: 'the toggles are announced once per join, not twice');
   });
 
   test('a dead socket resets the orb instead of lying', () async {

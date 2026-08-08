@@ -23,17 +23,12 @@ class VoiceController extends ChangeNotifier {
   })  : _connection = connection,
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer() {
-    _channel = _connection.openChannel(_topic, joinPayload: _joinPayload);
-    _wireChannel();
-    // Re-announce the local toggles after every (re)join: a rejoin lands on a
-    // conversation that may have been re-pointed at another client meanwhile.
-    _joinSub = _connection.onJoined.listen((_) {
-      _channel = _connection.openChannel(_topic, joinPayload: _joinPayload);
-      _wireChannel();
-      _announceToggles();
-      unawaited(_initPlayer());
-      _reArmMic();
-    });
+    // Adopt now if the connection is ALREADY up, and again on every later
+    // (re)join. Both, because a consumer built after the connection has joined
+    // gets no onJoined of its own — and a consumer that only works when it is
+    // built first is a trap for every future panel client.
+    _adoptChannel();
+    _joinSub = _connection.onJoined.listen((_) => _adoptChannel());
     // The other half of the mic-restore contract: a deliberate teardown that
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
@@ -331,6 +326,28 @@ class VoiceController extends ChangeNotifier {
   }
 
   // ---- transport seam (the connection owns the socket; we own one topic) ----
+
+  /// Take (or re-take) the voice channel, and do everything a fresh join owes
+  /// the server and the device: re-announce our toggles (a rejoin lands on a
+  /// conversation that may have been re-pointed at another client meanwhile),
+  /// bring the output track up, and restore a mic an outage tore down.
+  ///
+  /// Safe to call repeatedly, which is what lets both callers exist: before the
+  /// connection is up there is no channel to adopt, and re-adopting one we
+  /// already hold is a no-op — so the constructor and the `onJoined` that may
+  /// follow it cannot double-announce or double-init.
+  void _adoptChannel() {
+    final ch = _connection.openChannel(_topic, joinPayload: _joinPayload);
+    // Not connected yet — `onJoined` will bring us back here with a real one.
+    // (That null is what covers the built-before-the-join path; the identity
+    // check below is the belt-and-braces for any other repeated adopt.)
+    if (ch == null || identical(ch, _channel)) return;
+    _channel = ch;
+    _wireChannel();
+    _announceToggles();
+    unawaited(_initPlayer());
+    _reArmMic();
+  }
 
   void _wireChannel() {
     unawaited(_msgSub?.cancel());
