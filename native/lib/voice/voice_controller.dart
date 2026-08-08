@@ -7,7 +7,6 @@ import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
-import '../meridian/tokens.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
 
@@ -108,12 +107,6 @@ class VoiceController extends ChangeNotifier {
   List<ThreadItem> get thread => List.unmodifiable(_thread);
   bool get pttEnabled => _pttEnabled;
   bool get abiEnabled => _abiEnabled;
-
-  /// TEMPORARY passthrough. The header dot is CONNECTION status and now lives
-  /// on [AppConnection]; `MeridianVoiceScreen` still reads it off the
-  /// controller, and repointing the screen (with the `connection` parameter it
-  /// needs) is Task 4. Delete this with that change.
-  ConnStatus get connStatus => _connection.connStatus;
 
   bool get talking => _talking;
   bool get wakeLocked => _wakeLocked;

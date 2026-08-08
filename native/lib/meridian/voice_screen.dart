@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../connection/app_connection.dart';
 import '../voice/voice_controller.dart';
 import 'header.dart';
 import 'hold_to_talk.dart';
@@ -19,6 +20,7 @@ class MeridianVoiceScreen extends StatefulWidget {
   const MeridianVoiceScreen({
     super.key,
     required this.controller,
+    required this.connection,
     required this.userName,
     this.onOpenPanel,
     this.onDevEntry,
@@ -26,6 +28,7 @@ class MeridianVoiceScreen extends StatefulWidget {
   });
 
   final VoiceController controller;
+  final AppConnection connection;
   final String userName;
   final void Function(MeridianTab tab)? onOpenPanel;
   final VoidCallback? onDevEntry;
@@ -78,7 +81,9 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
   Widget build(BuildContext context) {
     final vc = widget.controller;
     return AnimatedBuilder(
-      animation: vc,
+      // Two sources now: the conversation, and the connection under it. Merge
+      // rather than nest, so a connection blip does not rebuild twice.
+      animation: Listenable.merge([vc, widget.connection]),
       builder: (context, _) {
         final orb = vc.orbState;
         final glow = paletteFor(orb).glow;
@@ -102,7 +107,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                       children: [
                         MeridianHeader(
                           assistantName: VoiceController.assistantName,
-                          status: vc.connStatus,
+                          status: widget.connection.connStatus,
                           version: widget.appVersion,
                           userName: widget.userName,
                           onVersionLongPress: widget.onDevEntry,

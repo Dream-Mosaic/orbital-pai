@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, Licens
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
+import 'connection/app_connection.dart';
 import 'meridian/nav.dart';
 import 'meridian/panel_webview.dart';
 import 'meridian/tokens.dart';
@@ -44,18 +45,26 @@ class HenryHome extends StatefulWidget {
 }
 
 class _HenryHomeState extends State<HenryHome> {
-  final VoiceController _vc = VoiceController();
+  final AppConnection _conn = AppConnection();
+
+  // Assigned in initState(), NOT via `late final ... = VoiceController(...)`:
+  // that lazy form would defer construction to build()'s first read, which
+  // runs AFTER connect() below — so the controller would adopt an
+  // already-joined connection instead of joining alongside it.
+  late final VoiceController _vc;
 
   @override
   void initState() {
     super.initState();
-    // No manual Connect button any more — the controller owns connect + rejoin.
-    _vc.connect();
+    _vc = VoiceController(connection: _conn);
+    // The connection owns connect + rejoin; consumers just open channels.
+    _conn.connect();
   }
 
   @override
   void dispose() {
     _vc.dispose();
+    _conn.dispose();
     super.dispose();
   }
 
@@ -80,6 +89,7 @@ class _HenryHomeState extends State<HenryHome> {
   Widget build(BuildContext context) {
     return MeridianVoiceScreen(
       controller: _vc,
+      connection: _conn,
       userName: 'David',
       appVersion: kAppVersion,
       onOpenPanel: _openPanel,

@@ -6,6 +6,7 @@ import 'package:henry_wall/meridian/hero_icon.dart';
 import 'package:henry_wall/meridian/nav.dart';
 import 'package:henry_wall/meridian/orb_bezel.dart';
 import 'package:henry_wall/meridian/thread.dart';
+import 'package:henry_wall/meridian/tokens.dart';
 import 'package:henry_wall/meridian/voice_screen.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/connection/app_connection.dart';
@@ -38,7 +39,7 @@ void main() {
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
-      home: MeridianVoiceScreen(controller: vc, userName: 'David'),
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
     ));
     await tester.pump();
 
@@ -61,7 +62,7 @@ void main() {
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
-      home: MeridianVoiceScreen(controller: vc, userName: 'David'),
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
     ));
     await tester.pump();
 
@@ -80,7 +81,7 @@ void main() {
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
-      home: MeridianVoiceScreen(controller: vc, userName: 'David'),
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
     ));
     vc.debugHandleMessage(const DecodedMessage(
       topic: 'voice:henry',
@@ -101,7 +102,7 @@ void main() {
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
-      home: MeridianVoiceScreen(controller: vc, userName: 'David'),
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
     ));
     for (var i = 0; i < 40; i++) {
       vc.debugHandleMessage(DecodedMessage(
@@ -125,6 +126,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: MeridianVoiceScreen(
         controller: vc,
+        connection: conn,
         userName: 'David',
         onOpenPanel: opened.add,
       ),
@@ -141,6 +143,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: MeridianVoiceScreen(
         controller: vc,
+        connection: conn,
         userName: 'David',
         appVersion: '9.9.9',
       ),
@@ -148,5 +151,25 @@ void main() {
     expect(find.text('P.A.I V9.9.9'), findsOneWidget);
     expect(find.text('DAVID'), findsOneWidget);
     expect(find.text('HENRY'), findsOneWidget);
+  });
+
+  testWidgets('the header dot reflects the CONNECTION, not the conversation',
+      (tester) async {
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(
+          controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.pump();
+
+    // Never connected -> the dot is the connecting amber, and it got there from
+    // AppConnection. Reading it off the controller would not even compile now,
+    // which is the point.
+    final dot = tester.widget<Container>(find.byKey(const ValueKey('conn-dot')));
+    expect((dot.decoration! as BoxDecoration).color,
+        connDotColors(conn.connStatus).fill);
   });
 }
