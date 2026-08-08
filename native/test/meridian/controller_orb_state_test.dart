@@ -1,17 +1,27 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/orb_state.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
 
+import '../support/fakes.dart';
+
 void main() {
+  late AppConnection conn;
+
+  // Never connected: every assertion here is driven through the debug seams.
+  setUp(() =>
+      conn = AppConnection(connector: () async => throw StateError('no socket')));
+  tearDown(() => conn.dispose());
+
   test('starts powered off', () {
-    final c = VoiceController();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     expect(c.talking, isFalse);
     expect(c.orbState, OrbState.off);
     c.dispose();
   });
 
   test('server events drive turnState and orbState', () {
-    final c = VoiceController();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     c.debugSetTalking(true);
     expect(c.orbState, OrbState.idle);
 
@@ -28,7 +38,7 @@ void main() {
   });
 
   test('wake lock shows ambient while idle, but not mid-answer', () {
-    final c = VoiceController();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     c.debugSetTalking(true);
     c.debugSetWakeLocked(true);
     expect(c.orbState, OrbState.ambient);
@@ -42,7 +52,7 @@ void main() {
   });
 
   test('the orb frame tracks the resolved state', () {
-    final c = VoiceController();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     c.debugSetTalking(true);
     c.debugApplyEvent('speaking');
     expect(c.orbFrame.state, OrbState.speaking);

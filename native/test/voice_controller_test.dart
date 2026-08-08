@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
 
 void main() {
@@ -18,7 +19,10 @@ void main() {
     // when it was never recording — but it's still an `async` method
     // reached via two `await`s, so its notifyListeners() call still lands
     // on a later microtask than dispose()'s synchronous continuation.
-    final controller = VoiceController();
+    final conn =
+        AppConnection(connector: () async => throw StateError('no socket'));
+    addTearDown(conn.dispose);
+    final controller = VoiceController(connection: conn);
 
     var uncaughtError = false;
     final zoneDone = runZonedGuarded(() async {

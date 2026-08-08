@@ -145,6 +145,11 @@ void main() {
     await ctrl.foreign.sink.close();
     await pumpEventQueue();
     expect(closes, 1);
+    // Used to be VoiceController's job (it close()d the dead client by hand);
+    // a socket that tears itself down owns this now, and a leaked
+    // Timer.periodic keeps calling sink.add on a dead socket every 30s forever.
+    expect(socket.debugHeartbeatActive, isFalse,
+        reason: 'a transport death must cancel the heartbeat, not just the joins');
   });
 
   test('leave() stops delivery to that channel only', () async {

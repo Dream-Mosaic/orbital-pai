@@ -8,13 +8,23 @@ import 'package:henry_wall/meridian/orb_bezel.dart';
 import 'package:henry_wall/meridian/thread.dart';
 import 'package:henry_wall/meridian/voice_screen.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
+import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
+
+import '../support/fakes.dart';
 
 /// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
 Finder findHero(HeroIcon icon) =>
     find.byWidgetPredicate((w) => w is HeroIconView && w.icon == icon);
 
 void main() {
+  late AppConnection conn;
+
+  // The screen never drives the transport; Task 4 points its dot at this.
+  setUp(() =>
+      conn = AppConnection(connector: () async => throw StateError('no socket')));
+  tearDown(() => conn.dispose());
+
   void phone(WidgetTester tester) {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3.0;
@@ -24,7 +34,7 @@ void main() {
   testWidgets('the whole chrome mounts and lays out without overflow',
       (tester) async {
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
@@ -47,7 +57,7 @@ void main() {
     // The declared style is clean either way, so this has to assert the MERGED
     // style the RichText actually paints.
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
@@ -66,7 +76,7 @@ void main() {
 
   testWidgets('a live turn flows through to the thread', (tester) async {
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
@@ -87,7 +97,7 @@ void main() {
   testWidgets('a long transcript scrolls instead of overflowing',
       (tester) async {
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(
@@ -108,7 +118,7 @@ void main() {
 
   testWidgets('the nav reports taps up to the host', (tester) async {
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
     final opened = <MeridianTab>[];
 
@@ -125,7 +135,7 @@ void main() {
 
   testWidgets('the header shows the app version and user', (tester) async {
     phone(tester);
-    final vc = VoiceController();
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
     addTearDown(vc.dispose);
 
     await tester.pumpWidget(MaterialApp(

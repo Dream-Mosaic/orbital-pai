@@ -64,6 +64,13 @@ class AppConnection extends ChangeNotifier {
   ConnState get state => _state;
   Stream<void> get onJoined => _joined.stream;
 
+  /// The user's intent, exposed so a consumer can tell a transport FAILURE
+  /// (a reconnect is coming — restore what you tore down) from a DELIBERATE
+  /// teardown (stay down). Both land on the same `_state`, so the state alone
+  /// cannot answer it. disconnect()/dispose() clear this before they close
+  /// anything, so a consumer reacting to the close already sees `false`.
+  bool get wantConnected => _wantConnected;
+
   /// The header dot is CONNECTION status. It lives here because the socket does;
   /// on the conversation it would be reporting the health of something it no
   /// longer owns.

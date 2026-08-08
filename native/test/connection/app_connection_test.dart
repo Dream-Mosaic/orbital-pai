@@ -194,6 +194,36 @@ void main() {
         reason: 'every retry used to leak a live socket + heartbeat timer');
   });
 
+  test('rejoin() replaces the socket without the old one scheduling a retry',
+      () async {
+    // Moved here from voice_controller_reconnect_test.dart, which used to own
+    // rejoin(). The hazard is the superseded socket: its onClose still fires,
+    // and if the backoff listened to it we would open a THIRD socket (and, on a
+    // real WebSocket, leak the second one's heartbeat).
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+    );
+    addTearDown(conn.dispose);
+
+    await conn.connect();
+    await conn.rejoin();
+    await pumpEventQueue();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await pumpEventQueue();
+
+    expect(sockets, hasLength(2),
+        reason: "the superseded socket's onClose must be ignored, not retried");
+    expect(sockets.first.socket.debugHeartbeatActive, isFalse,
+        reason: 'a dropped-but-unclosed socket leaks its heartbeat Timer.periodic');
+    expect(conn.state, ConnState.joined);
+  });
+
   test('onJoined fires after each successful (re)join', () async {
     final sockets = <FakeSocket>[];
     final conn = AppConnection(

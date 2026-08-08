@@ -1,22 +1,34 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/thread_model.dart';
 import 'package:henry_wall/meridian/tokens.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
 
+import 'support/fakes.dart';
+
 DecodedMessage msg(String event, Map<String, dynamic> json) =>
     DecodedMessage(topic: 'voice:henry', event: event, json: json);
 
 void main() {
+  late AppConnection conn;
   late VoiceController vc;
 
-  setUp(() => vc = VoiceController());
-  tearDown(() => vc.dispose());
+  setUp(() {
+    // Never connected: these tests drive the router directly through
+    // debugHandleMessage, so no socket is needed.
+    conn = AppConnection(connector: () async => throw StateError('no socket'));
+    vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+  });
+  tearDown(() {
+    vc.dispose();
+    conn.dispose();
+  });
 
   test('connStatus maps ConnState onto the header dot', () {
-    expect(vc.connStatus, ConnStatus.connecting); // ConnState.idle
+    expect(conn.connStatus, ConnStatus.connecting); // ConnState.idle
     vc.debugHandleMessage(msg('noop', const {}));
-    expect(vc.connStatus, ConnStatus.connecting);
+    expect(conn.connStatus, ConnStatus.connecting);
   });
 
   test('a transcript becomes a `you` line and clears the caption', () {
