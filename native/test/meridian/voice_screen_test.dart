@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/meridian/header.dart';
@@ -165,11 +167,33 @@ void main() {
     ));
     await tester.pump();
 
+    Color? dotColor() => (tester
+            .widget<Container>(find.byKey(const ValueKey('conn-dot')))
+            .decoration! as BoxDecoration)
+        .color;
+
     // Never connected -> the dot is the connecting amber, and it got there from
     // AppConnection. Reading it off the controller would not even compile now,
     // which is the point.
-    final dot = tester.widget<Container>(find.byKey(const ValueKey('conn-dot')));
-    expect((dot.decoration! as BoxDecoration).color,
-        connDotColors(conn.connStatus).fill);
+    expect(conn.connStatus, ConnStatus.connecting);
+    expect(dotColor(), connDotColors(ConnStatus.connecting).fill);
+
+    // Drive the CONNECTION (not the controller — vc never touches conn's
+    // state) to a new status: connect() awaits the injected connector, which
+    // throws, landing on ConnState.error -> ConnStatus.offline. If the screen
+    // rebuilt only off `vc`, this would still show the stale amber dot.
+    unawaited(conn.connect());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(conn.connStatus, ConnStatus.offline);
+    expect(dotColor(), connDotColors(ConnStatus.offline).fill);
+    expect(dotColor(), isNot(connDotColors(ConnStatus.connecting).fill));
+
+    // The failed connect() scheduled a rejoin Timer (default backoff starts at
+    // 1s); disconnect() cancels it. Without this, flutter_test's pending-timer
+    // invariant fails BEFORE the file's tearDown(conn.dispose) ever runs —
+    // addTearDown/tearDown fire after binding.runTest's own invariant check.
+    await conn.disconnect();
   });
 }

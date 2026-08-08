@@ -203,6 +203,33 @@ void main() {
     expect(wire.single, isA<Uint8List>());
   });
 
+  test('emits a heartbeat text frame on the interval', () async {
+    // The shared `socket` from setUp() is deliberately pinned at a 1-day
+    // interval so it never fires during the other tests here — so this needs
+    // its own transport and a short interval to actually observe a beat land
+    // on the wire. A socket that silently stops heart-beating looks connected
+    // right up until Phoenix closes it around the 60s server timeout.
+    final ctrl2 = StreamChannelController<dynamic>(sync: true);
+    final wire2 = <dynamic>[];
+    ctrl2.foreign.stream.listen(wire2.add);
+    final hbSocket =
+        PhoenixSocket(ctrl2.local, heartbeatInterval: const Duration(milliseconds: 20));
+    hbSocket.start();
+
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+
+    final heartbeats =
+        wire2.whereType<String>().map(sent).where((f) => f[3] == 'heartbeat').toList();
+    expect(heartbeats, isNotEmpty,
+        reason: 'a socket that stops heart-beating is closed by Phoenix at ~60s');
+    final hb = heartbeats.first;
+    expect(hb[0], isNull, reason: 'a heartbeat carries no join_ref');
+    expect(hb[2], 'phoenix');
+    expect(hb[4], <String, dynamic>{});
+
+    await hbSocket.close();
+  });
+
   test('close() closes every channel and cancels the heartbeat', () async {
     final voice = socket.channel('voice:henry');
     final panel = socket.channel('panel:reminders:1');
