@@ -22,12 +22,23 @@ class VoiceController extends ChangeNotifier {
   })  : _connection = connection,
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer() {
-    // Adopt now if the connection is ALREADY up, and again on every later
-    // (re)join. Both, because a consumer built after the connection has joined
-    // gets no onJoined of its own — and a consumer that only works when it is
-    // built first is a trap for every future panel client.
-    _adoptChannel();
-    _joinSub = _connection.onJoined.listen((_) => _adoptChannel());
+    // Register the topic once and take delivery of every channel the
+    // connection makes for it — the one that already exists if we were built
+    // after the connect, and a fresh one after every reconnect. Both, because
+    // a consumer that only works when it is built first is a trap for every
+    // future panel client.
+    //
+    // Delivery is at channel CREATION, not at join, and that is load-bearing:
+    // the server pushes `state` and `history` immediately behind its join
+    // reply, so a listener attached on a "joined" signal misses both on every
+    // single connect. `essential: true` because a refused `voice:henry` means
+    // a dead token — there is nothing to stay connected for.
+    _connection.openChannel(
+      _topic,
+      joinPayload: _joinPayload,
+      essential: true,
+      onChannel: _adoptChannel,
+    );
     // The other half of the mic-restore contract: a deliberate teardown that
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
@@ -39,8 +50,19 @@ class VoiceController extends ChangeNotifier {
 
   final AppConnection _connection;
   PhoenixChannel? _channel;
-  StreamSubscription<void>? _joinSub;
   StreamSubscription<DecodedMessage>? _msgSub;
+
+  /// The channel only when the server has actually let us in.
+  ///
+  /// We now adopt at channel CREATION (so nothing pushed behind the join reply
+  /// is lost), which means holding a handle no longer implies a live topic.
+  /// Everything that PUSHES must go through this, or a toggle / mic frame
+  /// would be written into a channel Phoenix has not joined yet — and, on a
+  /// refused join, into one it never will.
+  PhoenixChannel? get _live {
+    final ch = _channel;
+    return (ch != null && ch.isJoined) ? ch : null;
+  }
 
   // `_micWanted` is intent, `_micOn` is fact. They differ exactly inside
   // startMic()'s await, which is where the 5th post-dispose variant lives.
@@ -290,7 +312,7 @@ class VoiceController extends ChangeNotifier {
 
   void setPtt(bool enabled) {
     _pttEnabled = enabled;
-    _channel?.push('ptt', {'enabled': enabled});
+    _live?.push('ptt', {'enabled': enabled});
     _safeNotify();
     // index.js:396 — enabling PTT mode while powered off starts the mic.
     if (enabled && !_micOn && !_micWanted) unawaited(startMic());
@@ -300,7 +322,7 @@ class VoiceController extends ChangeNotifier {
     if (!_pttEnabled || _pttHeld) return;
     _pttHeld = true;
     _turnState = TurnState.listening; // amber while held (ambient if wake-locked)
-    _channel?.push('ptt_press', const {});
+    _live?.push('ptt_press', const {});
     _syncOrb();
   }
 
@@ -308,62 +330,77 @@ class VoiceController extends ChangeNotifier {
     if (!_pttHeld) return;
     _pttHeld = false;
     _turnState = TurnState.idle;
-    _channel?.push('ptt_release', const {});
+    _live?.push('ptt_release', const {});
     _syncOrb();
   }
 
   void setAllowInterruptions(bool enabled) {
     _abiEnabled = enabled;
-    _channel?.push('allow_interruptions', {'enabled': enabled});
+    _live?.push('allow_interruptions', {'enabled': enabled});
     _safeNotify();
   }
 
   // ---- transport seam (the connection owns the socket; we own one topic) ----
 
-  /// Take (or re-take) the voice channel, and do everything a fresh join owes
-  /// the server and the device: re-announce our toggles (a rejoin lands on a
-  /// conversation that may have been re-pointed at another client meanwhile),
-  /// bring the output track up, and restore a mic an outage tore down.
+  /// Take (or re-take) the voice channel the connection just made for us.
   ///
-  /// Safe to call repeatedly, which is what lets both callers exist: before the
-  /// connection is up there is no channel to adopt, and re-adopting one we
-  /// already hold is a no-op — so the constructor and the `onJoined` that may
-  /// follow it cannot double-announce or double-init.
-  void _adoptChannel() {
-    final ch = _connection.openChannel(_topic, joinPayload: _joinPayload);
-    // Not connected yet — `onJoined` will bring us back here with a real one.
-    // (That null is what covers the built-before-the-join path; the identity
-    // check below is the belt-and-braces for any other repeated adopt.)
-    if (ch == null || identical(ch, _channel)) return;
+  /// This runs BEFORE the join is even on the wire, so the only thing it may
+  /// do is start listening — everything the server has to be *told*, and
+  /// everything the device owes a live session, waits for [_onJoined].
+  ///
+  /// Safe to call repeatedly, which is what lets the connection re-offer a
+  /// channel we already hold: re-adopting is a no-op, so nothing here can
+  /// double-announce or double-init.
+  void _adoptChannel(PhoenixChannel ch) {
+    if (_disposed || identical(ch, _channel)) return;
     _channel = ch;
-    _wireChannel();
+    _wireChannel(ch);
+    unawaited(ch.onJoin.then(
+      (_) => _onJoined(ch),
+      // A refused join is the connection's problem (it escalates an essential
+      // refusal into a reconnect); ours is only to not do the join work.
+      onError: (Object _, StackTrace __) {},
+    ));
+  }
+
+  /// The join landed: do everything a fresh join owes the server and the
+  /// device — re-announce our toggles (a rejoin lands on a conversation that
+  /// may have been re-pointed at another client meanwhile), bring the output
+  /// track up, and restore a mic an outage tore down.
+  void _onJoined(PhoenixChannel ch) {
+    // A join that resolved after we were superseded (or torn down) must not
+    // announce toggles onto a channel nobody is holding.
+    if (_disposed || !identical(ch, _channel)) return;
     _announceToggles();
     unawaited(_initPlayer());
     _reArmMic();
   }
 
-  void _wireChannel() {
+  void _wireChannel(PhoenixChannel ch) {
     unawaited(_msgSub?.cancel());
-    _msgSub = _channel?.messages.listen(
+    _msgSub = ch.messages.listen(
       _onMessage,
       onError: (Object e) => _log('channel error: $e'),
-      onDone: _onChannelDown,
+      onDone: () => _onChannelDown(ch),
     );
   }
 
   void _announceToggles() {
-    _channel?.push('allow_interruptions', {'enabled': _abiEnabled});
-    _channel?.push('ptt', {'enabled': _pttEnabled});
+    _live?.push('allow_interruptions', {'enabled': _abiEnabled});
+    _live?.push('ptt', {'enabled': _pttEnabled});
   }
 
   /// The channel died under us. The orb must never keep showing a live colour
   /// over a dead channel (A1 final review, "Important 2"): reset the turn state
   /// and stop the mic, which was streaming into nothing. Reconnecting is
   /// AppConnection's job now — this is only the conversation's half.
-  void _onChannelDown() {
-    if (_disposed) return;
+  void _onChannelDown(PhoenixChannel ch) {
+    // A superseded channel's `done` can land after we already adopted its
+    // replacement; tearing the mic down for it would deafen a session that is
+    // in fact alive.
+    if (_disposed || !identical(ch, _channel)) return;
     // Drop the handle as well: pushing into a dead channel is a silent no-op,
-    // and startMic()'s `_channel == null` guard is what keeps the mic from
+    // and startMic()'s `_live == null` guard is what keeps the mic from
     // opening into an outage.
     _channel = null;
     _log('channel down');
@@ -582,7 +619,7 @@ class VoiceController extends ChangeNotifier {
   void _handleStopPlayback() async {
     if (!_playerReady) return;
     final ms = await _player.stopAndFlush();
-    _channel?.push('played', {'ms': ms});
+    _live?.push('played', {'ms': ms});
     _log('stop_playback → played ${ms}ms');
     _safeNotify();
   }
@@ -592,7 +629,7 @@ class VoiceController extends ChangeNotifier {
   }
 
   Future<void> startMic() async {
-    if (_disposed || _micOn || _micWanted || _channel == null) return;
+    if (_disposed || _micOn || _micWanted || _live == null) return;
     _micWanted = true;
     try {
       final stream = await _mic.start();
@@ -612,7 +649,7 @@ class VoiceController extends ChangeNotifier {
         // Same race as _handleAudio: cancelling the subscription is async, so a
         // chunk can still arrive after orbFrame.dispose() ran synchronously.
         if (_disposed) return;
-        _channel?.pushBinary('audio', chunk);
+        _live?.pushBinary('audio', chunk);
         // Set the TARGET only — OrbFrame.advance() smooths it once per frame, so
         // the orb's responsiveness never depends on the device's audio buffer size.
         if (orbFrame.state == OrbState.listening) {
@@ -651,7 +688,6 @@ class VoiceController extends ChangeNotifier {
     // The socket belongs to AppConnection: drop our handles on it, never close
     // it. Its own dispose() is the app's job.
     _connection.removeListener(_onConnectionChanged);
-    unawaited(_joinSub?.cancel());
     unawaited(_msgSub?.cancel());
     _channel = null;
     stopMic();

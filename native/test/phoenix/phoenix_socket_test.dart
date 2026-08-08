@@ -14,6 +14,38 @@ String topicOf(Object frame) => sent(frame)[2] as String;
 String eventOf(Object frame) => sent(frame)[3] as String;
 String refOf(Object frame) => sent(frame)[1] as String;
 
+/// Decodes an OUTBOUND binary push the way the Elixir V2 serializer does.
+///
+/// It cannot go through `V2Serializer.decode`: that one decodes INBOUND frames,
+/// and a server→client push has no ref, so its push branch has no field for the
+/// one `encodeBinary` writes. This reads `encodeBinary`'s own documented
+/// layout: `[kind=0, jrLen, refLen, topicLen, evLen, jr, ref, topic, event,
+/// payload]`.
+({String joinRef, String ref, String topic, String event, List<int> payload})
+    sentBinary(Object frame) {
+  final b = frame as Uint8List;
+  expect(b[0], 0, reason: 'a client push is kind 0');
+  final sizes = [b[1], b[2], b[3], b[4]];
+  var off = 5;
+  String take(int n) {
+    final s = utf8.decode(b.sublist(off, off + n));
+    off += n;
+    return s;
+  }
+
+  final joinRef = take(sizes[0]);
+  final ref = take(sizes[1]);
+  final topic = take(sizes[2]);
+  final event = take(sizes[3]);
+  return (
+    joinRef: joinRef,
+    ref: ref,
+    topic: topic,
+    event: event,
+    payload: b.sublist(off),
+  );
+}
+
 String okReply(String ref, String topic) => jsonEncode(
     [null, ref, topic, 'phx_reply', {'status': 'ok', 'response': {}}]);
 String errReply(String ref, String topic) => jsonEncode(
@@ -196,11 +228,32 @@ void main() {
   });
 
   test('binary frames carry their own topic and join_ref', () async {
+    // Mic audio is the ONLY binary push we make, and Phoenix drops a frame
+    // whose join_ref does not match the topic it joined under — so getting
+    // either wrong makes the device silently deaf while everything else about
+    // the session still looks healthy. A sibling channel is open so that
+    // "whatever the socket happened to pick" is not right by luck.
     final voice = socket.channel('voice:henry');
+    socket.channel('panel:reminders:1');
     await ackJoins();
+    final voiceJoinRef = refOf(wire.firstWhere(
+        (f) => eventOf(f) == 'phx_join' && topicOf(f) == 'voice:henry'));
+    final panelJoinRef = refOf(wire.firstWhere(
+        (f) => eventOf(f) == 'phx_join' && topicOf(f) == 'panel:reminders:1'));
     wire.clear();
+
     voice.pushBinary('audio', Uint8List.fromList([1, 2, 3]));
-    expect(wire.single, isA<Uint8List>());
+
+    final frame = sentBinary(wire.single as Object);
+    expect(frame.topic, 'voice:henry');
+    expect(frame.joinRef, voiceJoinRef,
+        reason: 'Phoenix drops a frame whose join_ref is not the one this topic '
+            'joined under — the mic goes nowhere');
+    expect(frame.joinRef, isNot(panelJoinRef));
+    expect(frame.event, 'audio');
+    expect(frame.payload, <int>[1, 2, 3]);
+    expect(frame.ref, isNot(voiceJoinRef),
+        reason: 'each push gets a fresh ref; only join_ref is reused');
   });
 
   test('emits a heartbeat text frame on the interval', () async {

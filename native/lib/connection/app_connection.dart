@@ -14,6 +14,28 @@ enum ConnState { idle, connecting, joined, error }
 /// headless; production uses [defaultSocketConnector].
 typedef SocketConnector = Future<PhoenixSocket> Function();
 
+/// Handed each channel a registered topic gets, the moment it is CREATED.
+/// See [AppConnection.openChannel] for why creation and not join.
+typedef ChannelListener = void Function(PhoenixChannel channel);
+
+/// A topic the app wants held open: how to join it, whether the app has any
+/// reason to stay connected without it, and who receives its channels.
+class _WantedTopic {
+  _WantedTopic(this.joinPayload, this.essential);
+
+  Map<String, dynamic> joinPayload;
+
+  /// Spec §5.1's split, made explicit rather than incidental. An ESSENTIAL
+  /// topic is one there is no point being connected without — `voice:henry`,
+  /// whose refusal means a dead token — so its refusal is escalated to a
+  /// socket-level failure: close, back off, retry. Every other topic is a
+  /// panel: a refusal stops that channel and touches nothing else, because a
+  /// bad panel topic must never tear down the conversation.
+  bool essential;
+
+  final listeners = <ChannelListener>[];
+}
+
 Future<PhoenixSocket> defaultSocketConnector() =>
     connectSocket(kSocketUrl(kSocketToken));
 
@@ -55,8 +77,8 @@ class AppConnection extends ChangeNotifier {
   PhoenixSocket? _socket;
   ConnState _state = ConnState.idle;
 
-  /// Topics to (re)open on every successful connect, and their payloads.
-  final _wanted = <String, Map<String, dynamic>>{};
+  /// Topics to (re)open on every successful connect.
+  final _wanted = <String, _WantedTopic>{};
   final _channels = <String, PhoenixChannel>{};
 
   final _joined = StreamController<void>.broadcast();
@@ -110,14 +132,17 @@ class AppConnection extends ChangeNotifier {
         _onSocketDown();
       });
 
-      // Re-open every wanted topic and wait for their joins together. A join
-      // that never resolves would park this method and latch _connecting.
+      // Re-open every wanted topic and wait for the ESSENTIAL joins together. A
+      // join that never resolves would park this method and latch _connecting.
       _channels.clear();
       final joins = <Future<void>>[];
       for (final entry in _wanted.entries) {
-        final ch = socket.channel(entry.key, joinPayload: entry.value);
-        _channels[entry.key] = ch;
-        joins.add(ch.onJoin);
+        final ch = _createChannel(socket, entry.key, entry.value);
+        // Spec §5.2: each join resolves independently, so a panel that fails to
+        // come back does not hold up the conversation. Only the essential
+        // topics gate the connection — a refused (or merely slow) panel must
+        // neither fail this batch nor park it behind the join timeout.
+        if (entry.value.essential) joins.add(ch.onJoin);
       }
       if (joins.isNotEmpty) {
         await Future.wait(joins).timeout(_joinTimeout);
@@ -146,31 +171,86 @@ class AppConnection extends ChangeNotifier {
     }
   }
 
-  /// Open a topic now (if connected) and on every later reconnect.
-  PhoenixChannel? openChannel(String topic,
-      {Map<String, dynamic> joinPayload = const {}}) {
+  /// Register a topic: open it now (if the socket is up) and on every later
+  /// reconnect.
+  ///
+  /// [onChannel] is how a consumer should take delivery. It fires
+  /// SYNCHRONOUSLY with each channel created for this topic — and immediately,
+  /// with the live one, if a channel already exists. Subscribe to
+  /// `channel.messages` from there and nowhere else: the server pushes frames
+  /// straight behind its join reply, so a consumer that waits for a "joined"
+  /// signal is two microtask hops too late and silently loses them.
+  ///
+  /// [essential] marks a topic the app has no reason to stay connected
+  /// without; see [_WantedTopic.essential] for the split.
+  PhoenixChannel? openChannel(
+    String topic, {
+    Map<String, dynamic> joinPayload = const {},
+    bool essential = false,
+    ChannelListener? onChannel,
+  }) {
     if (_disposed) return null;
-    _wanted[topic] = joinPayload;
+    final want = _wanted.putIfAbsent(topic, () => _WantedTopic(joinPayload, essential))
+      ..joinPayload = joinPayload
+      ..essential = essential;
+    if (onChannel != null && !want.listeners.contains(onChannel)) {
+      want.listeners.add(onChannel);
+    }
+
     final live = _channels[topic];
-    if (live != null) return live;
+    if (live != null) {
+      // A consumer built after the connection came up gets no creation of its
+      // own, so hand it the channel that already exists. Listeners must be
+      // idempotent for exactly this reason.
+      onChannel?.call(live);
+      return live;
+    }
+
+    // Not connected yet: the topic is registered, so connect()'s sweep will
+    // create the channel and notify the listener then.
     final socket = _socket;
     if (socket == null) return null;
-    final ch = socket.channel(topic, joinPayload: joinPayload);
-    _channels[topic] = ch;
+
+    final ch = _createChannel(socket, topic, want);
     // A topic opened against an already-joined socket bypasses connect()'s
-    // batch join/timeout below, so its refusal would otherwise go unwatched
-    // and leave the connection stuck half-joined forever. Once this fails,
-    // the topic is already in _wanted, so every later retry rejoins it
-    // through the normal connect() sweep — this only has to catch the first.
+    // batch join/timeout above, so its refusal would otherwise go unwatched
+    // and leave the connection stuck half-joined forever. Only an ESSENTIAL
+    // topic escalates — spec §5.1's whole point is that a refused panel leaves
+    // the conversation and its socket alone. Once this fails, the topic is
+    // already in _wanted, so every later retry rejoins it through the normal
+    // connect() sweep — this only has to catch the first.
     unawaited(ch.onJoin.then((_) {}, onError: (Object _, StackTrace __) {
-      _failConnection(socket);
+      if (want.essential) _failConnection(socket);
     }));
     return ch;
   }
 
-  /// A channel opened on a live socket was refused. Treat it like a failed
-  /// (re)connect: close this socket, drop every channel on it, and fall back
-  /// onto the backoff.
+  /// Create the channel for [topic] and hand it straight to its listeners.
+  ///
+  /// The handover happens inside `socket.channel`'s `onCreate`, i.e. before the
+  /// phx_join is even written — see [PhoenixSocket.channel]. Doing it on the
+  /// join instead is what made the app drop the server's `state` and `history`
+  /// pushes on every single connect.
+  PhoenixChannel _createChannel(
+      PhoenixSocket socket, String topic, _WantedTopic want) {
+    final ch = socket.channel(
+      topic,
+      joinPayload: want.joinPayload,
+      onCreate: (created) {
+        _channels[topic] = created;
+        // toList(): a listener is free to re-enter openChannel.
+        for (final listener in want.listeners.toList()) {
+          listener(created);
+        }
+      },
+    );
+    _channels[topic] = ch;
+    return ch;
+  }
+
+  /// An ESSENTIAL channel opened on a live socket was refused. Treat it like a
+  /// failed (re)connect: close this socket, drop every channel on it, and fall
+  /// back onto the backoff.
   void _failConnection(PhoenixSocket socket) {
     if (_disposed || !identical(socket, _socket)) return; // superseded already
     _socket = null;

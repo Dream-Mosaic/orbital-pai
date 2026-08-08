@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/audio/audio_track_player.dart';
 import 'package:henry_wall/audio/mic_capture.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/orb_state.dart';
+import 'package:henry_wall/meridian/thread_model.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/phoenix/phoenix_socket.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
@@ -22,6 +24,7 @@ enum JoinReply { ok, error, none }
 class FakeSocket {
   FakeSocket({
     this.joinReply = JoinReply.ok,
+    this.joinPushes = const <String>[],
     Duration heartbeat = const Duration(days: 1),
   }) {
     ctrl.foreign.stream.listen((f) {
@@ -39,6 +42,13 @@ class FakeSocket {
           'phx_reply',
           {'status': status, 'response': <String, dynamic>{}},
         ]));
+        if (status != 'ok') return;
+        // Straight behind the reply, in the SAME turn. That is what
+        // VoiceChannel does: `set_client` inside join/3 pushes the `state`
+        // snapshot, and `send(self(), :after_join)` pushes `history`.
+        for (final frame in joinPushes) {
+          ctrl.foreign.sink.add(frame);
+        }
       });
     }, onDone: () => localClosed = true);
     socket = PhoenixSocket(ctrl.local, heartbeatInterval: heartbeat);
@@ -46,6 +56,10 @@ class FakeSocket {
   }
 
   final JoinReply joinReply;
+
+  /// Raw frames this server pushes immediately behind its join reply.
+  final List<String> joinPushes;
+
   final StreamChannelController<dynamic> ctrl = StreamChannelController<dynamic>();
   final List<dynamic> sent = <dynamic>[];
   late final PhoenixSocket socket;
@@ -59,6 +73,16 @@ class FakeSocket {
 
   void push(String event, String jsonPayload) =>
       ctrl.foreign.sink.add('[null,null,"voice:henry","$event",$jsonPayload]');
+
+  /// A server→client BINARY push — kind 0 with no ref, which is how
+  /// VoiceChannel ships raw 24k PCM (no JSON envelope, no base64).
+  void pushBinary(String event, List<int> pcm) {
+    final jr = utf8.encode('1');
+    final tp = utf8.encode('voice:henry');
+    final ev = utf8.encode(event);
+    ctrl.foreign.sink.add(Uint8List.fromList(
+        [0, jr.length, tp.length, ev.length, ...jr, ...tp, ...ev, ...pcm]));
+  }
 
   Future<void> kill() => ctrl.foreign.sink.close();
 }
@@ -85,6 +109,105 @@ Future<PhoenixSocket> noSocket() async => throw StateError('no socket');
 }
 
 void main() {
+  // ---- the wire seam: a real frame, through PhoenixSocket and PhoenixChannel,
+  // into VoiceController._onMessage. Everything else here drives the router
+  // directly, which is exactly how the dropped-first-frame bug got through.
+
+  test('server frames drive the conversation end-to-end over a real socket',
+      () async {
+    // Nothing else in the suite pushes a frame all the way from the transport
+    // into the event router: stub the message handler out and the whole suite
+    // used to stay green while the device rendered nothing and played nothing.
+    final player = FakePlayer();
+    final fake = FakeSocket();
+    final b = build(connector: () async => fake.socket, player: player);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    fake.push('transcript', '{"text":"what is the weather"}');
+    fake.push('brain_delta', '{"delta":"it is "}');
+    fake.push('brain_delta', '{"delta":"sunny"}');
+    fake.push('speak_start', '{"source":"brain","text":"It is sunny."}');
+    fake.pushBinary('audio', const [1, 2, 3, 4]);
+    await settle();
+
+    expect(b.vc.transcript, contains('you: what is the weather'));
+    final lines = b.vc.thread.whereType<ThreadLine>().map((l) => l.text).toList();
+    expect(lines, contains('what is the weather'));
+    expect(lines, contains('It is sunny.'),
+        reason: 'the streamed deltas must snap to the full markdown render');
+    expect(player.writes, hasLength(1),
+        reason: 'a binary audio frame must reach the output track');
+    expect(player.writes.single, <int>[1, 2, 3, 4]);
+  });
+
+  test('the frames the server pushes behind its join reply are not lost',
+      () async {
+    // VoiceChannel pushes the `state` snapshot from `set_client` inside join/3
+    // and `history` from `:after_join`, both immediately behind the join reply.
+    // `PhoenixChannel.messages` is an unbuffered broadcast stream, so a
+    // consumer that took its channel from a "joined" signal — two microtask
+    // hops behind the reply, while the next transport frame is one — dropped
+    // BOTH, on every single connect.
+    final fake = FakeSocket(joinPushes: const [
+      '[null,null,"voice:henry","state",{"phase":"listening","locked":true}]',
+      '[null,null,"voice:henry","history",'
+          '{"turns":[{"you":"hi","assistant":"hello"}]}]',
+    ]);
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.wakeLocked, isTrue,
+        reason: 'the `state` snapshot rides directly behind the join reply');
+    expect(b.vc.thread.whereType<ThreadLine>().map((l) => l.text),
+        containsAll(<String>['hi', 'hello']),
+        reason: 'the history backfill is the very next frame after that');
+  });
+
+  test('a frame behind the join reply survives a RECONNECT too', () async {
+    // The reconnect is the case that actually bites a wall device: it rebinds
+    // to a live session and re-derives its state from the snapshot the server
+    // pushes behind the rejoin. Lose it and the UI is stranded on whatever it
+    // believed before the outage.
+    final sockets = <FakeSocket>[];
+    final b = build(
+      connector: () async {
+        final s = FakeSocket(
+          joinPushes: sockets.isEmpty
+              ? const <String>[]
+              : const ['[null,null,"voice:henry","locked",{"locked":true}]'],
+        );
+        sockets.add(s);
+        return s.socket;
+      },
+      backoff: const [Duration(milliseconds: 10)],
+    );
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(b.vc.wakeLocked, isFalse);
+
+    await sockets.first.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(b.conn.state, ConnState.joined);
+    expect(sockets, hasLength(2));
+    expect(b.vc.wakeLocked, isTrue,
+        reason: 'the rejoin must adopt its channel before the server pushes '
+            'behind the reply, not after');
+  });
+
   test('the state snapshot re-derives turnState from `phase`', () async {
     final b = build(connector: noSocket);
     addTearDown(b.vc.dispose);

@@ -54,7 +54,21 @@ class PhoenixSocket {
 
   /// Open (and immediately join) a topic. Returns the existing handle if the
   /// topic is already open, so two callers cannot double-join one topic.
-  PhoenixChannel channel(String topic, {Map<String, dynamic> joinPayload = const {}}) {
+  ///
+  /// [onCreate] runs synchronously on a FRESH channel, after it is registered
+  /// but *before* its phx_join reaches the wire. That ordering is the point:
+  /// Phoenix pushes frames immediately behind a join reply (VoiceChannel's
+  /// `state`, from `set_client` inside `join/3`, and `history`, from
+  /// `:after_join`), and [PhoenixChannel.messages] is an unbuffered broadcast
+  /// stream. Anything that attaches its listener after the join went out is
+  /// racing the transport for those frames — so the handover happens here,
+  /// where there is no race to lose. Not called for an already-open topic;
+  /// that caller already has the handle back.
+  PhoenixChannel channel(
+    String topic, {
+    Map<String, dynamic> joinPayload = const {},
+    void Function(PhoenixChannel)? onCreate,
+  }) {
     final existing = _channels[topic];
     if (existing != null) return existing;
 
@@ -66,6 +80,7 @@ class PhoenixSocket {
       onPushBinary: _sendPushBinary,
     );
     _channels[topic] = ch;
+    onCreate?.call(ch);
     _sendJoin(ch);
     return ch;
   }
