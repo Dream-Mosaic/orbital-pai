@@ -299,6 +299,21 @@ class AppConnection extends ChangeNotifier {
     unawaited(ch?.leave());
   }
 
+  /// Stop handing this topic's channels to [onChannel].
+  ///
+  /// The counterpart to openChannel's listener registration, for a consumer
+  /// that goes away while the topic stays open. [closeChannel] drops the whole
+  /// topic and its listeners with it, so a panel that simply closes needs
+  /// nothing here — this is for the consumer that outlives nothing, like
+  /// VoiceController, whose topic is permanent.
+  ///
+  /// Pass the same tear-off that was registered: Dart gives instance-method
+  /// tear-offs on the same receiver value equality, so `_adoptChannel` here
+  /// matches the `_adoptChannel` handed to openChannel.
+  void dropListener(String topic, ChannelListener onChannel) {
+    _wanted[topic]?.listeners.remove(onChannel);
+  }
+
   void _onSocketDown() {
     if (_disposed) return;
     _socket = null;

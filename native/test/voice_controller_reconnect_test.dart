@@ -826,6 +826,31 @@ void main() {
         reason: 'a platform audio failure must never drive the reconnect machine');
   });
 
+  test('a disposed controller is not handed the channels a reconnect makes',
+      () async {
+    // dispose() drops the channel handle, so if the controller is STILL on the
+    // connection's listener list the next reconnect silently gives it a new
+    // one — a live message subscription on a disposed object, once per
+    // reconnect, forever.
+    final fake = FakeSocket();
+    final b = build(
+      connector: () async => fake.socket,
+      backoff: const [Duration(milliseconds: 10)],
+    );
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(b.vc.debugHasChannel, isTrue);
+
+    b.vc.dispose();
+    await b.conn.rejoin();
+    await settle();
+
+    expect(b.vc.debugHasChannel, isFalse,
+        reason: 'a disposed consumer left registered adopts every later channel');
+  });
+
   test('_onMessage routes the literal event strings the server sends', () async {
     final b = build(connector: noSocket);
     addTearDown(b.vc.dispose);

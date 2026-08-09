@@ -603,6 +603,11 @@ class VoiceController extends ChangeNotifier {
   @visibleForTesting
   void debugHandleMessage(DecodedMessage m) => _onMessage(m);
 
+  /// Test seam: whether this controller currently holds a channel. Used to
+  /// prove a disposed controller stops being handed new ones.
+  @visibleForTesting
+  bool get debugHasChannel => _channel != null;
+
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
     // dispose() closes the socket fire-and-forget, so frames already in flight can
@@ -688,6 +693,9 @@ class VoiceController extends ChangeNotifier {
     // The socket belongs to AppConnection: drop our handles on it, never close
     // it. Its own dispose() is the app's job.
     _connection.removeListener(_onConnectionChanged);
+    // Registered in the constructor; without this the connection keeps handing
+    // us every channel a later reconnect creates.
+    _connection.dropListener(_topic, _adoptChannel);
     unawaited(_msgSub?.cancel());
     _channel = null;
     stopMic();

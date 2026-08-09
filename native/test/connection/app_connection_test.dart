@@ -1,70 +1,11 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/tokens.dart';
-import 'package:henry_wall/phoenix/phoenix_socket.dart';
-import 'package:stream_channel/stream_channel.dart';
+import 'package:henry_wall/phoenix/phoenix_channel.dart';
 
-/// One in-memory socket that answers joins, and can be killed to simulate a
-/// server bounce.
-class FakeSocket {
-  FakeSocket({
-    this.refuseJoins = false,
-    this.refuseTopics = const <String>{},
-    this.silentTopics = const <String>{},
-    this.joinPushes = const <String, String>{},
-  }) {
-    ctrl.foreign.stream.listen((f) {
-      sent.add(f);
-      final parts = jsonDecode(f as String) as List<dynamic>;
-      if (parts[3] != 'phx_join') return;
-      final topic = parts[2] as String;
-      if (silentTopics.contains(topic)) return;
-      final status = (refuseJoins || refuseTopics.contains(topic)) ? 'error' : 'ok';
-      scheduleMicrotask(() {
-        if (closed) return;
-        ctrl.foreign.sink.add(jsonEncode(
-            [null, parts[1], topic, 'phx_reply', {'status': status, 'response': {}}]));
-        // Straight behind the reply, in the SAME turn — exactly what
-        // VoiceChannel does (`set_client` inside join/3 pushes `state`,
-        // `send(self(), :after_join)` pushes `history`).
-        final behind = joinPushes[topic];
-        if (status == 'ok' && behind != null) ctrl.foreign.sink.add(behind);
-      });
-    });
-    socket = PhoenixSocket(ctrl.local, heartbeatInterval: const Duration(days: 1));
-    socket.start();
-  }
-
-  final bool refuseJoins;
-
-  /// Topics this server refuses; everything else joins normally.
-  final Set<String> refuseTopics;
-
-  /// Topics this server simply never answers.
-  final Set<String> silentTopics;
-
-  /// topic -> a raw frame pushed immediately behind that topic's join reply.
-  final Map<String, String> joinPushes;
-
-  final ctrl = StreamChannelController<dynamic>(sync: true);
-  final sent = <dynamic>[];
-  late final PhoenixSocket socket;
-  bool closed = false;
-
-  List<String> get joinedTopics => sent
-      .map((f) => jsonDecode(f as String) as List<dynamic>)
-      .where((p) => p[3] == 'phx_join')
-      .map((p) => p[2] as String)
-      .toList();
-
-  Future<void> kill() async {
-    closed = true;
-    await ctrl.foreign.sink.close();
-  }
-}
+import '../support/fake_socket.dart';
 
 void main() {
   test('connStatus maps the socket state onto the header dot', () async {
@@ -561,5 +502,35 @@ void main() {
 
     expect(fake.socket.debugHeartbeatActive, isFalse,
         reason: 'a dispose inside the await used to leak an open socket forever');
+  });
+
+  test('dropListener stops a consumer hearing about later channels', () async {
+    // A consumer that goes away while its topic stays open — VoiceController on
+    // dispose. Without this it keeps adopting every channel a reconnect makes,
+    // forever, and each adoption opens a fresh subscription on the new channel.
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+
+    final seen = <PhoenixChannel>[];
+    void listener(PhoenixChannel ch) => seen.add(ch);
+
+    conn.openChannel('voice:henry', essential: true, onChannel: listener);
+    await conn.connect();
+    expect(seen, hasLength(1));
+
+    conn.dropListener('voice:henry', listener);
+    await conn.rejoin();
+    await pumpEventQueue();
+
+    expect(seen, hasLength(1),
+        reason: 'a dropped listener must not be handed the reconnect’s channel');
   });
 }
