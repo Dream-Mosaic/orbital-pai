@@ -14,6 +14,7 @@ import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
 
+import '../support/fake_socket.dart';
 import '../support/fakes.dart';
 
 /// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
@@ -195,5 +196,51 @@ void main() {
     // invariant fails BEFORE the file's tearDown(conn.dispose) ever runs —
     // addTearDown/tearDown fire after binding.runTest's own invariant check.
     await conn.disconnect();
+  });
+
+  testWidgets('the bezel is NOT told the power is safe while the socket is down',
+      (tester) async {
+    // Task 6: the bezel's `powerEnabled` must be FED from the connection, not
+    // hardcoded true — a hardcoded true would silently reintroduce the
+    // pre-join power tap the task fixed. `conn` here never joins (its
+    // connector throws), so this is the "not connected" direction.
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.pump();
+
+    expect(conn.connStatus, ConnStatus.connecting);
+    expect(tester.widget<OrbBezel>(find.byType(OrbBezel)).powerEnabled, isFalse);
+  });
+
+  testWidgets('the bezel is told the power is safe once the socket has joined',
+      (tester) async {
+    // The other direction: a real join over a FakeSocket must flip
+    // powerEnabled to true. Testing only the "false" direction would pass
+    // vacuously against a hardcoded `powerEnabled: false` too.
+    phone(tester);
+    final conn2 = AppConnection(connector: () async => FakeSocket().socket);
+    addTearDown(conn2.dispose);
+    final vc = VoiceController(connection: conn2, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await conn2.connect();
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn2, userName: 'David'),
+    ));
+    await tester.pump();
+
+    expect(conn2.connStatus, ConnStatus.connected);
+    expect(tester.widget<OrbBezel>(find.byType(OrbBezel)).powerEnabled, isTrue);
+
+    // The socket's heartbeat is a 24h periodic Timer — still pending at this
+    // point. addTearDown runs AFTER the framework's pending-timer invariant
+    // check (see the "header dot" test above), so it must be torn down here,
+    // in-body, not left to addTearDown(conn2.dispose).
+    await conn2.disconnect();
   });
 }
