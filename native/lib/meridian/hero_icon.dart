@@ -11,18 +11,21 @@ import 'package:flutter_svg/flutter_svg.dart';
 enum HeroIcon {
   bell,
   bookOpen,
+  check,
   cog6Tooth,
   handRaised,
   link,
   magnifyingGlass,
   microphone,
   power,
-  trash;
+  trash,
+  xMark;
 
   /// The heroicons file name, which is also the web's `hero-<name>` class.
   String get asset => switch (this) {
         HeroIcon.bell => 'bell',
         HeroIcon.bookOpen => 'book-open',
+        HeroIcon.check => 'check',
         HeroIcon.cog6Tooth => 'cog-6-tooth',
         HeroIcon.handRaised => 'hand-raised',
         HeroIcon.link => 'link',
@@ -30,6 +33,7 @@ enum HeroIcon {
         HeroIcon.microphone => 'microphone',
         HeroIcon.power => 'power',
         HeroIcon.trash => 'trash',
+        HeroIcon.xMark => 'x-mark',
       };
 }
 
