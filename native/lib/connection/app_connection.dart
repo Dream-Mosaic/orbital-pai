@@ -314,6 +314,12 @@ class AppConnection extends ChangeNotifier {
     _wanted[topic]?.listeners.remove(onChannel);
   }
 
+  /// Test seam: how many listeners [topic] currently has registered. 0 for an
+  /// unknown topic. Used to prove a dropped listener is actually gone from the
+  /// registry, not merely masked by some consumer-side guard.
+  @visibleForTesting
+  int debugListenerCount(String topic) => _wanted[topic]?.listeners.length ?? 0;
+
   void _onSocketDown() {
     if (_disposed) return;
     _socket = null;

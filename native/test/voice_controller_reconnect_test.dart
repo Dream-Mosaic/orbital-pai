@@ -851,6 +851,28 @@ void main() {
         reason: 'a disposed consumer left registered adopts every later channel');
   });
 
+  test('dispose() removes the listener from the connection registry, not just '
+      'the local handle', () async {
+    // The reconnect-symptom test above can pass even with a broken
+    // dropListener call: _adoptChannel's own `_disposed` guard hides the leak
+    // from every downstream observation (debugHasChannel included). State the
+    // invariant directly — the closure itself must leave AppConnection's
+    // registry, or it sits there forever, growing by one every time a
+    // controller is rebuilt.
+    final fake = FakeSocket();
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(b.conn.debugListenerCount('voice:henry'), 1);
+
+    b.vc.dispose();
+
+    expect(b.conn.debugListenerCount('voice:henry'), 0,
+        reason: 'dispose() must deregister _adoptChannel, not merely guard it');
+  });
+
   test('_onMessage routes the literal event strings the server sends', () async {
     final b = build(connector: noSocket);
     addTearDown(b.vc.dispose);
