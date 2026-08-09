@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../connection/app_connection.dart';
+import '../panels/badges_client.dart';
 import '../voice/voice_controller.dart';
 import 'header.dart';
 import 'hold_to_talk.dart';
@@ -25,6 +26,7 @@ class MeridianVoiceScreen extends StatefulWidget {
     this.onOpenPanel,
     this.onDevEntry,
     this.appVersion = '0.0.0',
+    this.badges,
   });
 
   final VoiceController controller;
@@ -33,6 +35,10 @@ class MeridianVoiceScreen extends StatefulWidget {
   final void Function(MeridianTab tab)? onOpenPanel;
   final VoidCallback? onDevEntry;
   final String appVersion;
+
+  /// Optional so the widget tests that build a screen without a connection do
+  /// not all have to construct one. Null simply means no dots.
+  final BadgesClient? badges;
 
   @override
   State<MeridianVoiceScreen> createState() => _MeridianVoiceScreenState();
@@ -83,7 +89,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
     return AnimatedBuilder(
       // Two sources now: the conversation, and the connection under it. Merge
       // rather than nest, so a connection blip does not rebuild twice.
-      animation: Listenable.merge([vc, widget.connection]),
+      animation: Listenable.merge([vc, widget.connection, widget.badges]),
       builder: (context, _) {
         final orb = vc.orbState;
         final glow = paletteFor(orb).glow;
@@ -132,6 +138,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                         ),
                         const SizedBox(height: M.columnGap),
                         MeridianNav(
+                          hasDue: widget.badges?.hasDue ?? false,
                           onTap: (tab) => widget.onOpenPanel?.call(tab),
                         ),
                       ],

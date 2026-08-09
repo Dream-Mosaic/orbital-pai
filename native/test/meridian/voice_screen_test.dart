@@ -10,6 +10,7 @@ import 'package:henry_wall/meridian/orb_bezel.dart';
 import 'package:henry_wall/meridian/thread.dart';
 import 'package:henry_wall/meridian/tokens.dart';
 import 'package:henry_wall/meridian/voice_screen.dart';
+import 'package:henry_wall/panels/badges_client.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
@@ -242,5 +243,37 @@ void main() {
     // check (see the "header dot" test above), so it must be torn down here,
     // in-body, not left to addTearDown(conn2.dispose).
     await conn2.disconnect();
+  });
+
+  testWidgets('the nav dot follows the badges client', (tester) async {
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    final badges = BadgesClient(connection: conn);
+    addTearDown(() {
+      vc.dispose();
+      badges.dispose();
+    });
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(
+        controller: vc,
+        connection: conn,
+        badges: badges,
+        userName: 'David',
+      ),
+    ));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('due-dot')), findsNothing);
+
+    // The frame the server pushes when something fires.
+    badges.debugHandleMessage(const DecodedMessage(
+      topic: 'badges:henry',
+      event: 'badges',
+      json: {'reminders': 1},
+    ));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('due-dot')), findsOneWidget,
+        reason: 'the screen must be listening to the badges client, not snapshotting it');
   });
 }
