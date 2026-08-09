@@ -3,10 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
 import 'connection/app_connection.dart';
+import 'meridian/drawer.dart';
 import 'meridian/nav.dart';
 import 'meridian/panel_webview.dart';
+import 'meridian/reminders_panel.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
+import 'panels/badges_client.dart';
+import 'panels/reminders_client.dart';
 import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 import 'web_url.dart';
@@ -52,26 +56,50 @@ class _HenryHomeState extends State<HenryHome> {
   // runs AFTER connect() below — so the controller would adopt an
   // already-joined connection instead of joining alongside it.
   late final VoiceController _vc;
+  late final BadgesClient _badges;
+  late final RemindersClient _reminders;
 
   @override
   void initState() {
     super.initState();
     _vc = VoiceController(connection: _conn);
+    // Registered before connect() so the first sweep opens the badges topic
+    // alongside the conversation, rather than as a second round trip.
+    _badges = BadgesClient(connection: _conn);
+    // Registers nothing until the drawer opens.
+    _reminders = RemindersClient(connection: _conn);
     // The connection owns connect + rejoin; consumers just open channels.
     _conn.connect();
   }
 
   @override
   void dispose() {
+    _reminders.dispose();
+    _badges.dispose();
     _vc.dispose();
     _conn.dispose();
     super.dispose();
   }
 
-  /// Opening a panel is now a plain push: `/?panel=<name>` renders the drawer
-  /// with no voice shell, so the webview never joins the channel and the
-  /// conversation keeps running underneath — mic, orb and thread all untouched.
+  /// Reminders is native now; the other four still load `/?panel=<name>` in a
+  /// webview until their own specs retire it. The drawer is a transparent
+  /// route, so the conversation keeps running and rendering behind the scrim —
+  /// mic, orb and thread all untouched.
   void _openPanel(MeridianTab tab) {
+    if (tab == MeridianTab.reminders) {
+      _reminders.open();
+      Navigator.of(context)
+          .push(meridianDrawerRoute(
+            title: tab.label,
+            child: RemindersPanelView(client: _reminders),
+          ))
+          // whenComplete, not a then: a back gesture, a scrim tap and the ✕ all
+          // have to leave the topic, or the server keeps pushing state at a
+          // panel nobody is looking at.
+          .whenComplete(_reminders.close);
+      return;
+    }
+
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => PanelWebViewScreen(tab: tab, url: kPanelUrl(tab)),
     ));
@@ -90,6 +118,7 @@ class _HenryHomeState extends State<HenryHome> {
     return MeridianVoiceScreen(
       controller: _vc,
       connection: _conn,
+      badges: _badges,
       userName: 'David',
       appVersion: kAppVersion,
       onOpenPanel: _openPanel,
