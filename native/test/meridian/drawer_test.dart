@@ -59,4 +59,50 @@ void main() {
     expect(find.text('Reminders'), findsOneWidget);
     expect(find.text('panel body'), findsOneWidget);
   });
+
+  testWidgets('the scrim fades and the panel slides — not swapped',
+      (tester) async {
+    await pumpDrawer(tester, const Size(800, 800));
+
+    // `find.byType(FadeTransition)`/`SlideTransition` alone is not specific
+    // enough: MaterialApp's own Navigator wraps EVERYTHING (including this
+    // drawer) in its default page-transition Fade/SlideTransition too, so a
+    // bare type search matches those ambient ones as well as the drawer's
+    // own. Pin to the drawer's own keyed transitions instead, and assert
+    // their concrete type — that's what actually catches a Fade/Slide swap.
+    expect(tester.widget(find.byKey(MeridianDrawer.scrimFadeKey)),
+        isA<FadeTransition>());
+    expect(tester.widget(find.byKey(MeridianDrawer.panelSlideKey)),
+        isA<SlideTransition>());
+
+    // The scrim's BackdropFilter is a descendant of the drawer's own
+    // fade transition (also catches the BackdropFilter being deleted
+    // outright) ...
+    expect(
+      find.descendant(
+        of: find.byKey(MeridianDrawer.scrimFadeKey),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsOneWidget,
+    );
+
+    // ... the panel is a descendant of the drawer's own slide transition ...
+    expect(
+      find.descendant(
+        of: find.byKey(MeridianDrawer.panelSlideKey),
+        matching: find.byKey(MeridianDrawer.panelKey),
+      ),
+      findsOneWidget,
+    );
+
+    // ... and the negative that actually discriminates a swap: the panel is
+    // NOT inside the drawer's own fade transition.
+    expect(
+      find.descendant(
+        of: find.byKey(MeridianDrawer.scrimFadeKey),
+        matching: find.byKey(MeridianDrawer.panelKey),
+      ),
+      findsNothing,
+    );
+  });
 }
