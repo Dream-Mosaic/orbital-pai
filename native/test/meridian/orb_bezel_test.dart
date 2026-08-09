@@ -14,7 +14,12 @@ void main() {
   late OrbFrame frame;
   late List<String> taps;
 
-  Widget host({bool powerOn = false, bool pttOn = false, bool abiOn = false}) =>
+  Widget host({
+    bool powerOn = false,
+    bool pttOn = false,
+    bool abiOn = false,
+    bool powerEnabled = true,
+  }) =>
       MaterialApp(
         home: Scaffold(
           body: Center(
@@ -28,6 +33,7 @@ void main() {
                 powerOn: powerOn,
                 pttOn: pttOn,
                 abiOn: abiOn,
+                powerEnabled: powerEnabled,
                 onPower: () => taps.add('power'),
                 onClear: () => taps.add('clear'),
                 onPtt: (v) => taps.add('ptt:$v'),
@@ -124,6 +130,41 @@ void main() {
     expect(tester.widget<HeroIconView>(findHero(HeroIcon.microphone)).color!.a,
         closeTo(0.55, 0.02));
     expect(tester.widget<Text>(find.text('PTT')).style!.color!.a, closeTo(0.36, 0.02));
+  });
+
+  /// The disabled treatment is an Opacity(0.5) somewhere above the icon.
+  Finder dimmedPower() => find.ancestor(
+        of: findHero(HeroIcon.power),
+        matching: find.byWidgetPredicate((w) => w is Opacity && w.opacity == 0.5),
+      );
+
+  testWidgets('a power tap before the socket has joined is refused', (tester) async {
+    // The push guard drops anything written before the join reply lands, and
+    // power — unlike PTT and ABI — has no re-announce to heal it. So the
+    // button must not look live.
+    await tester.pumpWidget(host(powerEnabled: false));
+    await tester.tap(findHero(HeroIcon.power));
+    await tester.pump();
+    expect(taps, isEmpty);
+  });
+
+  testWidgets('the power detent is dimmed while the socket is down', (tester) async {
+    // powerOn: true so `dimmed` is false and the ONLY thing that can dim this
+    // is the disabled state.
+    await tester.pumpWidget(host(powerOn: true, powerEnabled: false));
+    expect(dimmedPower(), findsOneWidget,
+        reason: 'an inert control that looks live is worse than a missing one');
+
+    await tester.pumpWidget(host(powerOn: true));
+    expect(dimmedPower(), findsNothing);
+  });
+
+  testWidgets('an armed power detent still reports its tap', (tester) async {
+    // The gate must not disable the button it was meant to protect.
+    await tester.pumpWidget(host());
+    await tester.tap(findHero(HeroIcon.power));
+    await tester.pump();
+    expect(taps, ['power']);
   });
 
   testWidgets('the bezel paints without throwing at a degenerate size',

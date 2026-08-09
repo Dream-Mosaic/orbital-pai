@@ -28,6 +28,7 @@ class OrbBezel extends StatelessWidget {
     required this.onClear,
     required this.onPtt,
     required this.onAbi,
+    this.powerEnabled = true,
   });
 
   final OrbFrame frame;
@@ -40,6 +41,9 @@ class OrbBezel extends StatelessWidget {
   final VoidCallback onClear;
   final ValueChanged<bool> onPtt;
   final ValueChanged<bool> onAbi;
+
+  /// False until the socket has actually joined. See OrbDetent.enabled.
+  final bool powerEnabled;
 
   static const double _detent = 37.0;
 
@@ -88,6 +92,7 @@ class OrbBezel extends StatelessWidget {
                     icon: HeroIcon.power,
                     tooltip: 'Power on/off',
                     onTap: onPower,
+                    enabled: powerEnabled,
                     iconColor: powerOn ? M.success : null,
                     dimmed: !powerOn,
                   )),
@@ -251,6 +256,7 @@ class OrbDetent extends StatelessWidget {
     this.on = false,
     this.iconColor,
     this.dimmed = false,
+    this.enabled = true,
   });
 
   final HeroIcon icon;
@@ -261,10 +267,15 @@ class OrbDetent extends StatelessWidget {
   final Color? iconColor;
   final bool dimmed;
 
+  /// A detent whose action cannot land yet — the connection is not up. Inert
+  /// AND visibly dimmed: a live-looking control that does nothing reads as a
+  /// bug, which is exactly what the pre-join power tap did.
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) {
     final body = GestureDetector(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -332,7 +343,7 @@ class OrbDetent extends StatelessWidget {
     );
 
     final wrapped = Tooltip(message: tooltip, child: body);
-    return dimmed ? Opacity(opacity: 0.5, child: wrapped) : wrapped;
+    return (dimmed || !enabled) ? Opacity(opacity: 0.5, child: wrapped) : wrapped;
   }
 }
 
