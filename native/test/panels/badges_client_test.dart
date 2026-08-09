@@ -94,4 +94,55 @@ void main() {
     expect(sockets, hasLength(1), reason: 'a refused badge must not retry the socket');
     expect(conn.state, ConnState.joined);
   });
+
+  test('dispose() removes the listener from the connection registry, not just '
+      'the local handle', () async {
+    // A downstream symptom test (e.g. "no more counts after dispose") can pass
+    // even with a broken dropListener call: _onMessage's own `_disposed` guard
+    // hides the leak from every observation made through BadgesClient itself.
+    // State the invariant directly — the closure must leave AppConnection's
+    // registry, or it sits there forever, growing by one every time a
+    // BadgesClient is rebuilt (e.g. on every hot restart / screen rebuild).
+    final fake = FakeSocket();
+    final conn = AppConnection(connector: () async => fake.socket);
+    addTearDown(conn.dispose);
+    final badges = BadgesClient(connection: conn);
+
+    await conn.connect();
+    await pumpEventQueue();
+    expect(conn.debugListenerCount('badges:henry'), 1);
+
+    badges.dispose();
+
+    expect(conn.debugListenerCount('badges:henry'), 0,
+        reason: 'dispose() must deregister _adopt, not merely guard it');
+  });
+
+  test('an event other than "badges" on the topic is ignored', () async {
+    final fake = FakeSocket(joinPushes: const {
+      'badges:henry': '[null,null,"badges:henry","badges",{"reminders":2}]',
+    });
+    final conn = AppConnection(
+      connector: () async => fake.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final badges = BadgesClient(connection: conn);
+    addTearDown(() {
+      badges.dispose();
+      conn.dispose();
+    });
+
+    await conn.connect();
+    await pumpEventQueue();
+    expect(badges.count('reminders'), 2);
+
+    // Some other frame on the same topic (e.g. a phx presence/heartbeat-shaped
+    // event) must not be mistaken for a badges push.
+    fake.ctrl.foreign.sink
+        .add('[null,null,"badges:henry","presence_diff",{"reminders":99}]');
+    await pumpEventQueue();
+
+    expect(badges.count('reminders'), 2,
+        reason: 'a non-"badges" event must not overwrite the counts');
+  });
 }
