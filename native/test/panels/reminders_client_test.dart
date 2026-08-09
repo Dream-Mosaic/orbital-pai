@@ -28,6 +28,16 @@ const String _multiRowFrame =
     '{"id":8,"body":"fifth","due_label":"e","recurrence_label":null,'
     '"household":false,"kind":"reminder"}]}]';
 
+// One row with no "id" key at all (server bug / partial payload), one
+// well-formed row behind it in the same array.
+const String _malformedRowFrame =
+    '[null,null,"panel:reminders:henry","state",'
+    '{"due":[{"body":"no id here","due_label":"x","recurrence_label":null,'
+    '"household":false,"kind":"reminder"},'
+    '{"id":11,"body":"good row","due_label":"y","recurrence_label":null,'
+    '"household":false,"kind":"reminder"}],'
+    '"upcoming":[]}]';
+
 void main() {
   late FakeSocket fake;
   late AppConnection conn;
@@ -194,5 +204,63 @@ void main() {
         reason: 'the client must not re-sort the server\'s order');
     expect(rc.upcoming.map((r) => r.id), [3, 8],
         reason: 'the client must not re-sort the server\'s order');
+  });
+
+  test('a row with a missing id is skipped, not fatal to the whole update',
+      () async {
+    // id is the handle ack/dismiss push, so a row without a usable one cannot
+    // be rendered at all — but that must not throw inside the message
+    // listener and blank the rest of a perfectly good payload with it.
+    final fake2 =
+        FakeSocket(joinPushes: const {'panel:reminders:henry': _malformedRowFrame});
+    final c2 = AppConnection(
+      connector: () async => fake2.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final rc = RemindersClient(connection: c2);
+    addTearDown(() {
+      rc.dispose();
+      c2.dispose();
+    });
+
+    var notified = false;
+    rc.addListener(() => notified = true);
+
+    await c2.connect();
+    rc.open();
+    await pumpEventQueue();
+
+    expect(rc.due.map((r) => r.id), [11],
+        reason: 'the malformed row must be dropped, the well-formed one kept');
+    expect(rc.due.map((r) => r.body), ['good row']);
+    expect(notified, isTrue,
+        reason: 'the rest of the update must still land and notify');
+  });
+
+  test('dispose() while open removes the listener from the connection '
+      'registry, not just the local handle', () async {
+    // Same gap as close(): a downstream symptom (no more rows delivered) can
+    // pass even with a broken teardown, because a disposed client stops
+    // reading its own state regardless. State the invariant directly — the
+    // topic must leave AppConnection's registry, or a consumer that disposes
+    // while the drawer is open leaks the topic (and the server keeps
+    // computing state nobody can read) forever.
+    final fake2 = FakeSocket(joinPushes: const {'panel:reminders:henry': _stateFrame});
+    final c2 = AppConnection(
+      connector: () async => fake2.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final rc = RemindersClient(connection: c2);
+    addTearDown(c2.dispose);
+
+    await c2.connect();
+    rc.open();
+    await pumpEventQueue();
+    expect(c2.debugListenerCount('panel:reminders:henry'), 1);
+
+    rc.dispose();
+
+    expect(c2.debugListenerCount('panel:reminders:henry'), 0,
+        reason: 'dispose() must deregister the topic from AppConnection while open');
   });
 }

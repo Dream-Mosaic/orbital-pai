@@ -119,7 +119,13 @@ class RemindersClient extends ChangeNotifier {
   static List<ReminderRow> _rows(Object? raw) => raw is List
       ? raw
           .whereType<Map>()
-          .map((m) => ReminderRow.fromJson(m.cast<String, dynamic>()))
+          .map((m) => m.cast<String, dynamic>())
+          // id is the handle ack/dismiss push, so a row without a usable
+          // integer id cannot be rendered — drop just that row rather than
+          // inventing a sentinel id, or letting fromJson's cast throw and
+          // blank the rest of a perfectly good payload with it.
+          .where((m) => m['id'] is num)
+          .map(ReminderRow.fromJson)
           .toList(growable: false)
       : const [];
 
