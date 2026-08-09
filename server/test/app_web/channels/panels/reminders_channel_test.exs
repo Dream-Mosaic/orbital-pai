@@ -108,4 +108,111 @@ defmodule AppWeb.Panels.RemindersChannelTest do
     {:ok, _reply, _socket} = subscribe_and_join(socket, "panel:reminders:#{bob.id}", %{})
     assert_push "state", %{upcoming: [%{body: "alice's"}]}
   end
+
+  describe "writes" do
+    test "ack acknowledges a due reminder and a fresh state follows",
+         %{socket: socket, alice: alice} do
+      r = fired!(%{body: "bins out", user_id: alice.id})
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{due: [%{body: "bins out"}]}
+
+      ref = push(socket, "ack", %{"id" => r.id})
+      assert_reply ref, :ok
+      assert_push "state", %{due: []}
+      assert Reminders.list_unacknowledged(alice.id) == []
+    end
+
+    test "ack of a reminder that is NOT the user's changes nothing",
+         %{socket: socket, alice: alice, bob: bob} do
+      # Bob's private, fired reminder. Alice can neither see nor touch it.
+      theirs = fired!(%{body: "bob's own", user_id: bob.id})
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{due: []}
+
+      ref = push(socket, "ack", %{"id" => theirs.id})
+      assert_reply ref, :error, %{reason: "not_found"}
+      assert [%{body: "bob's own"}] = Reminders.list_unacknowledged(bob.id)
+    end
+
+    test "ack of an UPCOMING reminder is refused — it never fired",
+         %{socket: socket, alice: alice} do
+      {:ok, r} = Reminders.create(%{body: "call the vet", due_at: at(3600), user_id: alice.id})
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: [_]}
+
+      ref = push(socket, "ack", %{"id" => r.id})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "dismiss deletes an upcoming reminder", %{socket: socket, alice: alice} do
+      {:ok, r} = Reminders.create(%{body: "call the vet", due_at: at(3600), user_id: alice.id})
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: [_]}
+
+      ref = push(socket, "dismiss", %{"id" => r.id})
+      assert_reply ref, :ok
+      assert_push "state", %{upcoming: []}
+    end
+
+    test "dismiss on a recurring row cancels the whole series",
+         %{socket: socket, alice: alice} do
+      # The row IS the series on the web, and the ✕ cancels it. Same here.
+      {:ok, r} =
+        Reminders.create(%{
+          body: "bins out",
+          due_at: at(3600),
+          user_id: alice.id,
+          recurrence: %{"freq" => "weekly"}
+        })
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: [_]}
+
+      ref = push(socket, "dismiss", %{"id" => r.id})
+      assert_reply ref, :ok
+      assert Reminders.list_upcoming(alice.id) == []
+    end
+
+    test "dismiss of a reminder that is NOT the user's changes nothing",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, theirs} = Reminders.create(%{body: "bob's", due_at: at(3600), user_id: bob.id})
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: []}
+
+      ref = push(socket, "dismiss", %{"id" => theirs.id})
+      assert_reply ref, :error, %{reason: "not_found"}
+      assert [%{body: "bob's"}] = Reminders.list_upcoming(bob.id)
+    end
+
+    test "a HOUSEHOLD reminder owned by someone else can be dismissed",
+         %{socket: socket, alice: alice, bob: bob} do
+      # Scoping is "can the user see it", not "does the user own it" — both
+      # list queries already include household rows.
+      {:ok, shared} =
+        Reminders.create(%{
+          body: "shared bins",
+          due_at: at(3600),
+          user_id: bob.id,
+          household: true
+        })
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: [_]}
+
+      ref = push(socket, "dismiss", %{"id" => shared.id})
+      assert_reply ref, :ok
+      assert Reminders.list_upcoming(bob.id) == []
+    end
+
+    test "an off-shape payload is refused, not crashed on", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: []}
+
+      ref = push(socket, "ack", %{"id" => "42"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      ref = push(socket, "dismiss", %{})
+      assert_reply ref, :error, %{reason: "bad_request"}
+    end
+  end
 end
