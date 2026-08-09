@@ -176,6 +176,7 @@ defmodule AppWeb.Panels.RemindersChannelTest do
 
       ref = push(socket, "dismiss", %{"id" => r.id})
       assert_reply ref, :ok
+      assert_push "state", %{upcoming: []}
       assert Reminders.list_upcoming(alice.id) == []
     end
 
@@ -207,7 +208,38 @@ defmodule AppWeb.Panels.RemindersChannelTest do
 
       ref = push(socket, "dismiss", %{"id" => shared.id})
       assert_reply ref, :ok
+      # Alice is subscribed to reminders:household but NOT reminders:#{bob.id},
+      # so bob's own-topic broadcast half is invisible to her — exactly one
+      # push here, unlike the own-household case below.
+      assert_push "state", %{upcoming: []}
       assert Reminders.list_upcoming(bob.id) == []
+    end
+
+    test "a write on the user's OWN household reminder pushes state twice",
+         %{socket: socket, alice: alice} do
+      # Alice's row is household:true, so broadcast_changed/2 (App.Reminders)
+      # fans out on BOTH reminders:#{alice.id} and reminders:household — and
+      # Alice's channel is subscribed to both (join/3), so it receives two
+      # broadcasts for this one write and pushes `state` twice. Documented
+      # here rather than left as a surprise; see the comment above
+      # handle_in/3. Harmless at two users and NOT something this test (or
+      # the channel) should try to de-duplicate.
+      {:ok, r} =
+        Reminders.create(%{
+          body: "shared bins",
+          due_at: at(3600),
+          user_id: alice.id,
+          household: true
+        })
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: [_]}
+
+      ref = push(socket, "dismiss", %{"id" => r.id})
+      assert_reply ref, :ok
+      assert_push "state", %{upcoming: []}
+      assert_push "state", %{upcoming: []}
+      refute_push "state", _
     end
 
     test "an off-shape payload is refused, not crashed on", %{socket: socket, alice: alice} do
@@ -219,6 +251,20 @@ defmodule AppWeb.Panels.RemindersChannelTest do
 
       ref = push(socket, "dismiss", %{})
       assert_reply ref, :error, %{reason: "bad_request"}
+    end
+
+    test "an unmatched event is refused, not fatal to the channel",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{upcoming: []}
+
+      ref = push(socket, "nonsense", %{"whatever" => 1})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      # The channel process is still alive: a legitimate call right after
+      # still gets a reply rather than the join silently going dark.
+      ref2 = push(socket, "ack", %{"id" => "42"})
+      assert_reply ref2, :error, %{reason: "bad_request"}
     end
   end
 end

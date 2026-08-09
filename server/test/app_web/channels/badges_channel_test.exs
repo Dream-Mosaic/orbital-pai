@@ -74,4 +74,19 @@ defmodule AppWeb.BadgesChannelTest do
     {:ok, _reply, _socket} = subscribe_and_join(socket, "badges:#{bob.id}", %{})
     assert_push "badges", %{reminders: 1}
   end
+
+  test "an unmatched event is refused, not fatal to the channel",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = subscribe_and_join(socket, "badges:#{alice.id}", %{})
+    assert_push "badges", %{reminders: 0}
+
+    ref = push(socket, "nonsense", %{"whatever" => 1})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    # The channel process is still alive: a subsequent broadcast still lands
+    # rather than the badge silently going stale.
+    fired!(%{body: "bins out", user_id: alice.id})
+    Reminders.broadcast_changed(alice.id, false)
+    assert_push "badges", %{reminders: 1}
+  end
 end

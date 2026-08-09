@@ -33,9 +33,19 @@ defmodule AppWeb.Panels.RemindersChannel do
   #
   # Neither handler pushes `state`. acknowledge/1 and delete/1 already
   # broadcast_changed/2, and PubSub delivers a broadcast to its sender, so the
-  # subscription above does the re-push. One path for "the set changed",
-  # whoever changed it — this panel, the web LiveView, a voice ack, or the
-  # scheduler firing.
+  # subscription above does the re-push — one push per broadcast RECEIVED,
+  # whoever changed it (this panel, the web LiveView, a voice ack, or the
+  # scheduler firing).
+  #
+  # That is NOT the same as "exactly one push per write": a household row
+  # broadcasts on BOTH `reminders:<uid>` and `reminders:household`
+  # (App.Reminders.broadcast_changed/2), and join/3 above subscribes to both.
+  # A user acting on their OWN household reminder is subscribed to both
+  # topics the write broadcasts on, so their channel receives two broadcasts
+  # for one write and pushes `state` twice. Harmless at two users — the
+  # second push just repeats the same, now-current, state — and left
+  # un-deduplicated on purpose; see the "own household" test in
+  # reminders_channel_test.exs.
   #
   # The id comes from the client, so it is resolved against the user's OWN
   # lists — never Repo.get/2. Both list queries already include household rows,
@@ -69,8 +79,9 @@ defmodule AppWeb.Panels.RemindersChannel do
     end
   end
 
-  # A client bug must not crash the channel and drop the panel.
-  def handle_in(event, _payload, socket) when event in ~w(ack dismiss),
+  # A client bug (an off-shape payload, or an event we don't know at all) must
+  # not crash the channel and drop the panel.
+  def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
   @impl true

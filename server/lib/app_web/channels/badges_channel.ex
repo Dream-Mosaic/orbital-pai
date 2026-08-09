@@ -19,6 +19,11 @@ defmodule AppWeb.BadgesChannel do
   def join("badges:" <> _ignored, _payload, socket) do
     # The suffix is ignored; the user is whoever the token authenticated.
     uid = socket.assigns.user_id
+    # Subscribing to both topics means a write on the user's OWN household
+    # reminder broadcasts on both (App.Reminders.broadcast_changed/2) and this
+    # channel pushes `badges` twice for that one write — same doubling as
+    # AppWeb.Panels.RemindersChannel, and just as harmless here (the second
+    # push recomputes the same count). Not de-duplicated on purpose.
     Phoenix.PubSub.subscribe(App.PubSub, "reminders:#{uid}")
     Phoenix.PubSub.subscribe(App.PubSub, "reminders:household")
     # Pushed from handle_info, not inline, so join/3 returns fast — same shape
@@ -31,6 +36,12 @@ defmodule AppWeb.BadgesChannel do
   def handle_info(:push_badges, socket), do: {:noreply, push_badges(socket)}
   def handle_info({:reminders_changed}, socket), do: {:noreply, push_badges(socket)}
   def handle_info({:reminder_due, _reminder}, socket), do: {:noreply, push_badges(socket)}
+
+  # A client bug (an unexpected inbound event — this channel has none of its
+  # own) must not crash the channel and drop the badge dot.
+  @impl true
+  def handle_in(_event, _payload, socket),
+    do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
   defp push_badges(socket) do
     uid = socket.assigns.user_id
