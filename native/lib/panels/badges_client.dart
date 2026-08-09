@@ -54,7 +54,13 @@ class BadgesClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _connection.dropListener(_topic, _adopt);
+    // closeChannel, not dropListener: BadgesClient is the SOLE owner of this
+    // topic (unlike RemindersClient's topic, nobody else ever calls
+    // openChannel for it), so dropping just the listener would leave it
+    // registered in AppConnection's `_wanted` with zero listeners — every
+    // later reconnect would still re-join it and the server would keep
+    // computing counts nobody reads.
+    _connection.closeChannel(_topic);
     unawaited(_sub?.cancel());
     super.dispose();
   }

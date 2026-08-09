@@ -98,7 +98,7 @@ void main() {
   test('dispose() removes the listener from the connection registry, not just '
       'the local handle', () async {
     // A downstream symptom test (e.g. "no more counts after dispose") can pass
-    // even with a broken dropListener call: _onMessage's own `_disposed` guard
+    // even with a broken teardown call: _onMessage's own `_disposed` guard
     // hides the leak from every observation made through BadgesClient itself.
     // State the invariant directly — the closure must leave AppConnection's
     // registry, or it sits there forever, growing by one every time a
@@ -116,6 +116,46 @@ void main() {
 
     expect(conn.debugListenerCount('badges:henry'), 0,
         reason: 'dispose() must deregister _adopt, not merely guard it');
+  });
+
+  test('dispose() drops the WHOLE topic, not just its listener — a later '
+      'reconnect does not re-join it', () async {
+    // BadgesClient is the sole owner of badges:henry (unlike RemindersClient's
+    // topic, nobody else ever calls openChannel for it). A dropListener-only
+    // teardown would leave the topic registered in AppConnection's `_wanted`
+    // with zero listeners: invisible to debugListenerCount's downstream
+    // observers of THIS client, but every later reconnect still re-joins it
+    // and the server keeps computing counts nobody reads. Prove the topic
+    // itself is gone by forcing a reconnect through a brand new socket and
+    // checking that socket never sees a phx_join for it.
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+    );
+    addTearDown(conn.dispose);
+    final badges = BadgesClient(connection: conn);
+
+    await conn.connect();
+    await pumpEventQueue();
+    expect(sockets, hasLength(1));
+    expect(sockets.single.joinedTopics, contains('badges:henry'));
+
+    badges.dispose();
+    expect(conn.debugListenerCount('badges:henry'), 0);
+
+    await conn.rejoin();
+    await pumpEventQueue();
+
+    expect(sockets, hasLength(2), reason: 'rejoin() must open a fresh socket');
+    expect(sockets.last.joinedTopics, isNot(contains('badges:henry')),
+        reason: 'dispose() must deregister the topic entirely — a dangling '
+            'listener-only drop leaves it in _wanted and every later '
+            'reconnect still re-joins it for nobody to read');
   });
 
   test('an event other than "badges" on the topic is ignored', () async {

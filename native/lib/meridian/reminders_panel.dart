@@ -20,12 +20,13 @@ class RemindersPanelView extends StatelessWidget {
           children: [
             if (client.due.isNotEmpty) ...[
               const _SectionLabel('Needs your attention'),
-              for (final r in client.due)
+              for (var i = 0; i < client.due.length; i++)
                 _Row(
-                  row: r,
+                  row: client.due[i],
                   due: true,
-                  onAck: () => client.ack(r.id),
-                  onDismiss: () => client.dismiss(r.id),
+                  isFirst: i == 0,
+                  onAck: () => client.ack(client.due[i].id),
+                  onDismiss: () => client.dismiss(client.due[i].id),
                 ),
               const SizedBox(height: 12), // space-y-3 between the two sections
             ],
@@ -41,8 +42,12 @@ class RemindersPanelView extends StatelessWidget {
                   ),
                 ),
               ),
-            for (final r in client.upcoming)
-              _Row(row: r, onDismiss: () => client.dismiss(r.id)),
+            for (var i = 0; i < client.upcoming.length; i++)
+              _Row(
+                row: client.upcoming[i],
+                isFirst: i == 0,
+                onDismiss: () => client.dismiss(client.upcoming[i].id),
+              ),
           ],
         ),
       );
@@ -75,6 +80,7 @@ class _Row extends StatelessWidget {
     required this.onDismiss,
     this.due = false,
     this.onAck,
+    this.isFirst = false,
   });
 
   final ReminderRow row;
@@ -82,9 +88,18 @@ class _Row extends StatelessWidget {
   final VoidCallback? onAck;
   final VoidCallback onDismiss;
 
+  /// Whether this is the first row in its section. Mirrors the web's
+  /// `<ul class="space-y-1">`, which puts margin-top only BEFORE items after
+  /// the first — the first row's gap above it comes entirely from the
+  /// section label's own bottom padding (4px), so this row must add none of
+  /// its own or the two would stack to 8px where the web has 4px.
+  final bool isFirst;
+
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        // gap-y-1 = 0.25rem = 4px, applied only above non-first rows — see
+        // isFirst's doc.
+        padding: EdgeInsets.only(top: isFirst ? 0 : 4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -99,7 +114,7 @@ class _Row extends StatelessWidget {
                 style: const TextStyle(fontSize: 14, color: M.ink),
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8), // gap-2 = 0.5rem = 8px
             Text(
               row.dueLabel,
               style: TextStyle(
@@ -140,7 +155,7 @@ class _Badge extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = tint ?? M.chromeDim;
     return Padding(
-      padding: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.only(right: 8), // gap-2 = 0.5rem = 8px
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
         decoration: BoxDecoration(
