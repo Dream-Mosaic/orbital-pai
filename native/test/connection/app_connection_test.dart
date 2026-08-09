@@ -279,6 +279,166 @@ void main() {
     expect(conn.openChannel('voice:henry', essential: true)!.isJoined, isTrue);
   });
 
+  test('a listener that opens ANOTHER topic during the sweep does not abort it',
+      () async {
+    // connect() used to iterate `_wanted.entries` live while _createChannel
+    // synchronously hands each channel to its listeners — and that handover
+    // contract explicitly invites a listener to re-enter openChannel. Doing so
+    // with a NEW topic mutated the map mid-iteration; the
+    // ConcurrentModificationError was swallowed by connect()'s own catch, so
+    // the symptom was not a crash but a connection that silently closed its
+    // socket and dropped into the backoff.
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+
+    conn.openChannel('voice:henry', essential: true, onChannel: (_) {
+      // Exactly the shape the panels phase needs: the conversation comes up and
+      // opens the panel topics it discovers it wants.
+      conn.openChannel('panel:reminders:1');
+    });
+
+    await conn.connect();
+    await pumpEventQueue();
+
+    expect(conn.state, ConnState.joined);
+    expect(sockets.single.socket.debugHeartbeatActive, isTrue,
+        reason: 'the swallowed error tore down a perfectly healthy socket');
+    expect(sockets.single.joinedTopics,
+        containsAll(<String>['voice:henry', 'panel:reminders:1']));
+  });
+
+  // openChannel used to overwrite `essential` on every call, so a consumer
+  // asking for a handle to a topic somebody else owns silently reclassified the
+  // conversation as an optional panel: its refusal stopped escalating and
+  // connect() stopped gating on its join. Registration WIDENS instead — and it
+  // has to widen in both directions, because either party can arrive first: a
+  // panel client built before the conversation, or a widget rebuilt after it.
+  for (final ownerFirst in [true, false]) {
+    test('a bare openChannel cannot demote an ESSENTIAL topic '
+        '(owner ${ownerFirst ? 'first' : 'second'})', () async {
+      final sockets = <FakeSocket>[];
+      final conn = AppConnection(
+        connector: () async {
+          final s = FakeSocket(refuseJoins: true);
+          sockets.add(s);
+          return s.socket;
+        },
+        rejoinBackoff: const [Duration(milliseconds: 10)],
+      );
+      addTearDown(conn.dispose);
+
+      if (ownerFirst) {
+        conn.openChannel('voice:henry', essential: true);
+        conn.openChannel('voice:henry');
+      } else {
+        conn.openChannel('voice:henry');
+        conn.openChannel('voice:henry', essential: true);
+      }
+
+      await conn.connect();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(sockets.length, greaterThan(1),
+          reason: 'a refused CONVERSATION must still escalate to the backoff');
+    });
+  }
+
+  test('a bare openChannel does not wipe the join payload it was opened with',
+      () async {
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+
+    conn.openChannel('voice:henry',
+        essential: true, joinPayload: const {'since': 7});
+    conn.openChannel('voice:henry'); // a consumer, not the owner
+
+    await conn.connect();
+
+    final join = sockets.single.sent
+        .map((f) => jsonDecode(f as String) as List<dynamic>)
+        .firstWhere((p) => p[3] == 'phx_join');
+    expect(join[4], const {'since': 7},
+        reason: 'the owner registered how this topic joins; a consumer must not '
+            'silently rejoin it with nothing');
+  });
+
+  test('a refused PANEL is dropped from the registry, so re-opening it retries',
+      () async {
+    // The dead handle used to stay in BOTH registries for the life of the
+    // socket: openChannel handed it to every later caller, onCreate never ran
+    // again, and nothing reached the wire — so a panel refused once stayed
+    // broken until the next reconnect.
+    final refuse = <String>{'panel:reminders:1'};
+    final fake = FakeSocket(refuseTopics: refuse);
+    final conn = AppConnection(
+      connector: () async => fake.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+
+    await conn.connect();
+
+    final handed = <Object>[];
+    final first = conn.openChannel('panel:reminders:1', onChannel: handed.add);
+    await pumpEventQueue();
+
+    refuse.clear(); // whatever the server was unhappy about is resolved
+    final second = conn.openChannel('panel:reminders:1', onChannel: handed.add);
+    await pumpEventQueue();
+
+    expect(identical(first, second), isFalse,
+        reason: 'the corpse used to be handed back for the life of the socket');
+    expect(second!.isJoined, isTrue);
+    expect(fake.joinedTopics.where((t) => t == 'panel:reminders:1').length, 2,
+        reason: 'the retry must reach the wire');
+    expect(conn.state, ConnState.joined,
+        reason: 'none of this is the conversation’s business');
+  });
+
+  test('a closed channel does not evict the replacement that outlived it',
+      () async {
+    // Close a panel and reopen it straight away — plausible the moment panels
+    // have a back button. leave() fails the outgoing channel's still-pending
+    // join, and its de-registration lands a microtask LATER, by which time the
+    // fresh channel is the one in the registry. Keyed on presence rather than
+    // identity, the corpse evicts its own replacement; the socket still has it,
+    // so nothing looks broken until a consumer asks for the topic and
+    // openChannel silently hands it nothing.
+    final conn = AppConnection(
+      connector: () async =>
+          FakeSocket(silentTopics: const {'panel:reminders:1'}).socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    addTearDown(conn.dispose);
+    await conn.connect();
+
+    conn.openChannel('panel:reminders:1'); // join still in flight
+    conn.closeChannel('panel:reminders:1'); // ...which leave() now fails
+    conn.openChannel('panel:reminders:1');
+    await pumpEventQueue();
+
+    Object? handedOver;
+    conn.openChannel('panel:reminders:1', onChannel: (ch) => handedOver = ch);
+    expect(handedOver, isNotNull,
+        reason: 'a consumer that asks for a topic is always handed its channel');
+  });
+
   test('a panel that never answers does not hold the conversation behind the '
       'join timeout', () async {
     // Spec §5.2: each join resolves independently. With a one-day join timeout

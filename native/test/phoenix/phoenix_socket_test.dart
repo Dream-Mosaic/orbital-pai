@@ -160,6 +160,30 @@ void main() {
         reason: 'the socket is still healthy — only one channel was refused');
   });
 
+  test('a refused channel is de-registered, so the topic can be retried', () async {
+    // channel() hands back the existing handle for an open topic, so a refused
+    // channel left in the registry is handed to every later caller for the life
+    // of the socket: dead, un-rejoinable, and with nothing on the wire to show
+    // for the retry. Only matters once a topic CAN be refused without taking
+    // the socket with it — i.e. now that panels exist.
+    final panel = socket.channel('panel:reminders:1');
+    var done = false;
+    panel.messages.listen((_) {}, onDone: () => done = true);
+
+    ctrl.foreign.sink.add(errReply(refOf(wire.single), 'panel:reminders:1'));
+    await pumpEventQueue();
+
+    expect(done, isTrue,
+        reason: 'a channel nothing will ever route to again must say so');
+
+    wire.clear();
+    final retry = socket.channel('panel:reminders:1');
+    expect(identical(retry, panel), isFalse,
+        reason: 'the corpse used to be handed back instead of a fresh channel');
+    expect(wire.map((f) => eventOf(f as Object)), ['phx_join'],
+        reason: 'a retry has to reach the wire, not stop at a stale registry entry');
+  });
+
   test('transport death fails every pending join', () async {
     final voice = socket.channel('voice:henry');
     final panel = socket.channel('panel:reminders:1');

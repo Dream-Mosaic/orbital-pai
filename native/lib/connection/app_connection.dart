@@ -136,7 +136,14 @@ class AppConnection extends ChangeNotifier {
       // join that never resolves would park this method and latch _connecting.
       _channels.clear();
       final joins = <Future<void>>[];
-      for (final entry in _wanted.entries) {
+      // toList(): _createChannel hands each channel to its listeners
+      // synchronously, and a listener is free to re-enter openChannel — see its
+      // doc. Re-entering with a NEW topic registers it in _wanted, and
+      // iterating the live map would then throw ConcurrentModificationError
+      // into the catch below, closing a healthy socket. The snapshot is enough:
+      // a topic registered from inside the sweep opens itself against the
+      // socket, which is already set.
+      for (final entry in _wanted.entries.toList()) {
         final ch = _createChannel(socket, entry.key, entry.value);
         // Spec §5.2: each join resolves independently, so a panel that fails to
         // come back does not hold up the conversation. Only the essential
@@ -190,9 +197,16 @@ class AppConnection extends ChangeNotifier {
     ChannelListener? onChannel,
   }) {
     if (_disposed) return null;
-    final want = _wanted.putIfAbsent(topic, () => _WantedTopic(joinPayload, essential))
-      ..joinPayload = joinPayload
-      ..essential = essential;
+    // Registration WIDENS, never narrows. Two callers legitimately open the
+    // same topic — one owns it, the rest are consumers taking delivery — and
+    // this used to overwrite both fields from whoever called last. A bare
+    // `openChannel('voice:henry')` would then demote the conversation to a
+    // panel (its refusal stops escalating, connect() stops gating on its join)
+    // and rejoin it with an empty payload. So: essential latches true, and an
+    // empty payload means "I am not the owner" and leaves the real one alone.
+    final want = _wanted.putIfAbsent(topic, () => _WantedTopic(joinPayload, essential));
+    want.essential |= essential;
+    if (joinPayload.isNotEmpty) want.joinPayload = joinPayload;
     if (onChannel != null && !want.listeners.contains(onChannel)) {
       want.listeners.add(onChannel);
     }
@@ -245,6 +259,23 @@ class AppConnection extends ChangeNotifier {
       },
     );
     _channels[topic] = ch;
+    // One rule: a channel de-registers itself the moment its join fails, for
+    // whatever reason. Without it a refused PANEL stayed here for the life of
+    // the socket — openChannel handed the dead handle to every later caller,
+    // onCreate never ran again, and no phx_join ever reached the wire, so the
+    // topic was un-retryable until the next reconnect. Both entry points build
+    // channels through here, so both are covered. Escalating an ESSENTIAL
+    // refusal is somebody else's job (connect()'s Future.wait for the sweep,
+    // openChannel's watcher for a live socket); this only de-registers.
+    //
+    // Identity, not presence: leave() fails a still-pending join, so closing a
+    // panel and immediately reopening it queues THIS callback behind a fresh
+    // channel already sitting in the registry. Keyed on presence, the corpse
+    // evicts its own replacement and the next consumer to ask for the topic is
+    // never handed anything.
+    unawaited(ch.onJoin.then((_) {}, onError: (Object _, StackTrace __) {
+      if (identical(_channels[topic], ch)) _channels.remove(topic);
+    }));
     return ch;
   }
 

@@ -145,7 +145,17 @@ class PhoenixSocket {
           // one channel per socket that was correct (a refused voice:henry means
           // a dead token), but here it would let a refused panel tear down the
           // conversation.
+          //
+          // De-register it, though. There is no channel process on the server,
+          // so nothing will ever route to this handle again — and since
+          // channel() returns the existing handle for an open topic, leaving it
+          // here would hand the corpse to every later caller for the life of
+          // the socket, with no phx_join ever reaching the wire. Dropping it
+          // makes the topic retryable; closing it tells anyone already
+          // listening that it is over. No phx_leave: there is nothing to leave.
+          _channels.remove(waiting.topic);
           waiting.internalFailJoin(StateError('join refused: ${msg.json}'));
+          unawaited(waiting.internalClose());
         }
         return;
       }
