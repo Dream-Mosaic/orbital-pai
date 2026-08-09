@@ -119,6 +119,9 @@ defmodule AppWeb.Panels.RemindersChannelTest do
       ref = push(socket, "ack", %{"id" => r.id})
       assert_reply ref, :ok
       assert_push "state", %{due: []}
+      # Exactly one re-push — the handler itself must NOT also call push_state;
+      # broadcast_changed/2 is the only path, or a second "state" would sit here.
+      refute_push "state", _
       assert Reminders.list_unacknowledged(alice.id) == []
     end
 
@@ -152,6 +155,9 @@ defmodule AppWeb.Panels.RemindersChannelTest do
       ref = push(socket, "dismiss", %{"id" => r.id})
       assert_reply ref, :ok
       assert_push "state", %{upcoming: []}
+      # Exactly one re-push — same invariant as ack: broadcast_changed/2 is the
+      # only path, so a second "state" here would mean the handler double-pushed.
+      refute_push "state", _
     end
 
     test "dismiss on a recurring row cancels the whole series",
