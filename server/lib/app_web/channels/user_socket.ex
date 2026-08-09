@@ -4,6 +4,7 @@ defmodule AppWeb.UserSocket do
 
   channel "voice:*", AppWeb.VoiceChannel
   channel "enroll:*", AppWeb.EnrollChannel
+  channel "badges:*", AppWeb.BadgesChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) do
