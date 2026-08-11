@@ -106,63 +106,72 @@ class MeridianDrawer extends StatelessWidget {
             ),
           ],
         ),
-        child: Stack(
-          children: [
-            // linear-gradient(160deg, rgba(255,255,255,.035),
-            // rgba(255,255,255,0) 40%): the faint sheen layered over the fill
-            // above. 160deg -> unit direction (sin160°, -cos160°) ==
-            // (0.342, 0.940); begin/end are +/- that vector.
-            const Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment(-0.342, -0.940),
-                    end: Alignment(0.342, 0.940),
-                    colors: [Color(0x09FFFFFF), Color(0x00FFFFFF)],
-                    stops: [0.0, 0.4],
-                  ),
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _header(),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: child,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // The decorative amber tab on the left edge (`.bg-base-300`):
-            // w-1.5 h-12 = 6 x 48 (Tailwind's spacing scale: 0.375rem = 6px,
-            // NOT the raw digit 1.5), rounded on its right, ml-0.5, vertically
-            // centred.
-            Positioned(
-              left: 2,
-              top: 0,
-              bottom: 0,
-              child: Center(
-                child: Container(
-                  width: 6,
-                  height: 48,
-                  decoration: const BoxDecoration(
+        // The drawer is its own ROUTE, pushed with no Scaffold, so it does NOT
+        // inherit the transparent Material that MeridianVoiceScreen wraps
+        // itself in. Without a Material ancestor, WidgetsApp's fallback
+        // DefaultTextStyle applies; our styles override its colour, size and
+        // family but NOT its `decoration`, so every label in here wore a yellow
+        // double underline. Transparent, so the frosted fill above still shows.
+        child: Material(
+          type: MaterialType.transparency,
+          child: Stack(
+            children: [
+              // linear-gradient(160deg, rgba(255,255,255,.035),
+              // rgba(255,255,255,0) 40%): the faint sheen layered over the fill
+              // above. 160deg -> unit direction (sin160°, -cos160°) ==
+              // (0.342, 0.940); begin/end are +/- that vector.
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [M.youSoft, M.you],
+                      begin: Alignment(-0.342, -0.940),
+                      end: Alignment(0.342, 0.940),
+                      colors: [Color(0x09FFFFFF), Color(0x00FFFFFF)],
+                      stops: [0.0, 0.4],
                     ),
-                    borderRadius:
-                        BorderRadius.horizontal(right: Radius.circular(2)),
                   ),
                 ),
               ),
-            ),
-          ],
+              SafeArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _header(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: child,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // The decorative amber tab on the left edge (`.bg-base-300`):
+              // w-1.5 h-12 = 6 x 48 (Tailwind's spacing scale: 0.375rem = 6px,
+              // NOT the raw digit 1.5), rounded on its right, ml-0.5, vertically
+              // centred.
+              Positioned(
+                left: 2,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: Container(
+                    width: 6,
+                    height: 48,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [M.youSoft, M.you],
+                      ),
+                      borderRadius:
+                          BorderRadius.horizontal(right: Radius.circular(2)),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       );
 

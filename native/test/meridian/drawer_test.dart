@@ -18,6 +18,26 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('no text inherits the missing-Material underline', (tester) async {
+    // Shipped twice now. The voice screen hit it and was fixed with a
+    // transparent Material — but the drawer is its own ROUTE, pushed with no
+    // Scaffold, so it never inherited that one and the bug came straight back
+    // on the first panel. With no Material ancestor, WidgetsApp's fallback
+    // DefaultTextStyle applies, and our styles override its colour/size/family
+    // but NOT its `decoration`, so every label wears a yellow double underline.
+    // The DECLARED style is clean either way, so this has to assert the MERGED
+    // style RichText actually paints.
+    await pumpDrawer(tester, const Size(360, 800));
+
+    final painted = tester.widgetList<RichText>(find.byType(RichText));
+    expect(painted, isNotEmpty);
+    for (final rich in painted) {
+      final style = (rich.text as TextSpan).style;
+      expect(style?.decoration ?? TextDecoration.none, TextDecoration.none,
+          reason: 'decoration leaked into "${rich.text.toPlainText()}"');
+    }
+  });
+
   testWidgets('full-bleed on a phone', (tester) async {
     await pumpDrawer(tester, const Size(360, 800));
     expect(tester.getSize(find.byKey(MeridianDrawer.panelKey)).width, 360,
