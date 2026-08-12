@@ -113,8 +113,16 @@ defmodule AppWeb.Panels.SettingsChannelTest do
       {:ok, _reply, socket} = join!(socket, alice)
       assert_push "state", _
 
-      ref = push(socket, "set_pref", %{"pref" => "default_abi", "value" => "yes"})
-      assert_reply ref, :error, %{reason: "bad_request"}
+      # "1" and "0" are deliberately included: Ecto's own :boolean cast
+      # coerces those strings to true/false (verified via
+      # Ecto.Type.cast(:boolean, "1") == {:ok, true}), so prefs_changeset
+      # alone would accept them — only the is_boolean/1 guard in handle_in
+      # catches them. "yes" is caught by the changeset regardless, so it
+      # alone would not prove the guard is doing anything.
+      for bad <- ["yes", "1", "0"] do
+        ref = push(socket, "set_pref", %{"pref" => "default_abi", "value" => bad})
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
     end
   end
 

@@ -37,17 +37,17 @@ defmodule AppWeb.Panels.SettingsChannel do
   def handle_in("set_pref", %{"pref" => pref, "value" => value}, socket)
       when is_binary(pref) and is_boolean(value) do
     case Map.fetch(@settable, pref) do
-      {:ok, key} -> {:reply, :ok, write(socket, %{key => value})}
+      {:ok, key} -> reply_write(write(socket, %{key => value}))
       :error -> {:reply, {:error, %{reason: "bad_request"}}, socket}
     end
   end
 
   def handle_in("set_briefing", %{"time" => nil}, socket),
-    do: {:reply, :ok, write(socket, %{briefing_time: nil})}
+    do: reply_write(write(socket, %{briefing_time: nil}))
 
   def handle_in("set_briefing", %{"time" => time}, socket) when is_binary(time) do
     if time =~ ~r/^([01]\d|2[0-3]):[0-5]\d$/ do
-      {:reply, :ok, write(socket, %{briefing_time: time})}
+      reply_write(write(socket, %{briefing_time: time}))
     else
       {:reply, {:error, %{reason: "bad_request"}}, socket}
     end
@@ -60,14 +60,25 @@ defmodule AppWeb.Panels.SettingsChannel do
   @impl true
   def handle_info(:push_state, socket), do: {:noreply, push_state(socket)}
 
-  # Persist, then push the fresh state. See the moduledoc for why the handler
-  # pushes rather than riding a broadcast.
-  defp write(socket, attrs) do
-    socket.assigns.user_id
-    |> Users.get()
-    |> Users.update_prefs(attrs)
+  defp reply_write({:ok, socket}), do: {:reply, :ok, socket}
 
-    push_state(socket)
+  # Unreachable with today's @settable: is_boolean(value) plus the set_briefing
+  # regex (a strict subset of the schema's own HH:MM validate_format) mean every
+  # attrs map that reaches write/2 casts cleanly, so update_prefs/2 never fails
+  # here. Kept so the NEXT @settable addition (e.g. voice_lock_threshold, which
+  # prefs_changeset/2 validates as a cosine in (-1, 1)) can't silently reply :ok
+  # and push stale state on a write the changeset actually rejected.
+  defp reply_write({:error, socket}), do: {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+  # Persist, then push the fresh state — but only on a successful write. See the
+  # moduledoc for why the handler pushes rather than riding a broadcast.
+  defp write(socket, attrs) do
+    user = Users.get(socket.assigns.user_id)
+
+    case Users.update_prefs(user, attrs) do
+      {:ok, _user} -> {:ok, push_state(socket)}
+      {:error, _changeset} -> {:error, socket}
+    end
   end
 
   defp push_state(socket) do
