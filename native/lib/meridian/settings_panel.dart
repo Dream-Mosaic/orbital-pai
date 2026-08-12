@@ -149,7 +149,8 @@ class SettingsPanelView extends StatelessWidget {
             },
             child: Text(
               state.briefingTime ?? '',
-              style: TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.7)),
+              style:
+                  TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.7)),
             ),
           ),
         ],
@@ -165,8 +166,8 @@ class SettingsPanelView extends StatelessWidget {
                     style: TextStyle(fontSize: 14, color: M.ink)),
               ),
               Text('${state.relockSeconds}s',
-                  style:
-                      TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.7))),
+                  style: TextStyle(
+                      fontSize: 14, color: M.ink.withValues(alpha: 0.7))),
             ],
           ),
           Slider(

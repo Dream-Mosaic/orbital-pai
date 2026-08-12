@@ -9,13 +9,11 @@ import 'package:henry_wall/voice/voice_controller.dart';
 
 import '../support/fake_socket.dart';
 
-const String _stateFrame =
-    '[null,null,"panel:settings:henry","state",'
+const String _stateFrame = '[null,null,"panel:settings:henry","state",'
     '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
     '"briefing_time":null,"relock_seconds":15,"app_version":"0.4.19"}]';
 
-const String _briefingOnFrame =
-    '[null,null,"panel:settings:henry","state",'
+const String _briefingOnFrame = '[null,null,"panel:settings:henry","state",'
     '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
     '"briefing_time":"07:00","relock_seconds":15,"app_version":"0.4.19"}]';
 
@@ -80,10 +78,10 @@ void main() {
     final (client, conn, _) = await openedClient(tester, _stateFrame);
     await pumpPanel(tester, client);
 
-    final abi = tester
-        .widget<Switch>(find.byKey(const ValueKey('toggle-default_abi')));
-    final ptt = tester
-        .widget<Switch>(find.byKey(const ValueKey('toggle-default_ptt')));
+    final abi =
+        tester.widget<Switch>(find.byKey(const ValueKey('toggle-default_abi')));
+    final ptt =
+        tester.widget<Switch>(find.byKey(const ValueKey('toggle-default_ptt')));
     expect(abi.value, isTrue);
     expect(ptt.value, isFalse);
 
@@ -192,6 +190,55 @@ void main() {
 
     expect(anyPushOf(fake, 'forget_me'), isFalse,
         reason: 'dismissing the confirm dialog must push nothing');
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
+      'turning the briefing toggle on pushes set_briefing with the web\'s '
+      '07:00 default', (tester) async {
+    final (client, conn, fake) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+
+    await tester.tap(find.byKey(const ValueKey('toggle-briefing')));
+    await tester.pump();
+
+    expect(lastPush(fake), [
+      'panel:settings:henry',
+      'set_briefing',
+      {'time': '07:00'},
+    ]);
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
+      'turning the briefing toggle off pushes set_briefing with a null time',
+      (tester) async {
+    final (client, conn, fake) = await openedClient(tester, _briefingOnFrame);
+    await pumpPanel(tester, client);
+
+    await tester.tap(find.byKey(const ValueKey('toggle-briefing')));
+    await tester.pump();
+
+    expect(lastPush(fake), [
+      'panel:settings:henry',
+      'set_briefing',
+      {'time': null},
+    ]);
+
+    await conn.disconnect();
+  });
+
+  testWidgets('the lockdown slider cannot offer a value outside 10..30',
+      (tester) async {
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    expect(slider.min, 10);
+    expect(slider.max, 30);
+    expect(slider.divisions, 20);
 
     await conn.disconnect();
   });
