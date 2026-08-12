@@ -163,6 +163,23 @@ defmodule AppWeb.Panels.SettingsChannelTest do
       # stored integer would pass with the `* 1000` missing.
       Process.sleep(50)
       assert :sys.get_state(pid) |> elem(1) |> Map.get(:relock_ms) == 20_000
+
+      # 20 is inside [10, 30], so it can't tell a clamped relay from an
+      # unclamped one. Push out-of-range at both ends and assert the FSM
+      # receives the CLAMPED value, not the raw one — otherwise a future edit
+      # that relays `seconds * 1000` instead of `clamped * 1000` would ship
+      # silently: the stored pref would be right and the live timer wrong.
+      ref = push(socket, "set_relock", %{"seconds" => 900})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 30}
+      Process.sleep(50)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:relock_ms) == 30_000
+
+      ref = push(socket, "set_relock", %{"seconds" => 3})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 10}
+      Process.sleep(50)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:relock_ms) == 10_000
     end
 
     test "with no live session it still stores and replies ok",
