@@ -112,12 +112,21 @@ defmodule AppWeb.Panels.SettingsChannel do
 
   # Persist, then push the fresh state — but only on a successful write. See the
   # moduledoc for why the handler pushes rather than riding a broadcast.
+  #
+  # Users.get/1 can return nil (no user-deletion path exists today, so this is
+  # defence-in-depth, not a live bug) — Users.update_prefs/2 has no clause for
+  # a nil user, so guard it here rather than let a bad :user_id crash the
+  # channel on what should just be a refused write.
   defp write(socket, attrs) do
-    user = Users.get(socket.assigns.user_id)
+    case Users.get(socket.assigns.user_id) do
+      nil ->
+        {:error, socket}
 
-    case Users.update_prefs(user, attrs) do
-      {:ok, _user} -> {:ok, push_state(socket)}
-      {:error, _changeset} -> {:error, socket}
+      user ->
+        case Users.update_prefs(user, attrs) do
+          {:ok, _user} -> {:ok, push_state(socket)}
+          {:error, _changeset} -> {:error, socket}
+        end
     end
   end
 
@@ -130,18 +139,27 @@ defmodule AppWeb.Panels.SettingsChannel do
     end
   end
 
+  # Same nil guard as write/2: reached from join -> :push_state, so a missing
+  # user must not crash the channel — that would take the join reply's
+  # `{:ok, socket}` down with it after the fact (the client already sees a
+  # successful join), leaving a drawer that looks joined but never gets its
+  # `state`. Pushing nothing here is that same outcome minus the crash.
   defp push_state(socket) do
-    user = Users.get(socket.assigns.user_id)
+    case Users.get(socket.assigns.user_id) do
+      nil ->
+        socket
 
-    push(socket, "state", %{
-      default_abi: user.default_abi,
-      default_ptt: user.default_ptt,
-      voice_activation: user.voice_activation,
-      briefing_time: user.briefing_time,
-      relock_seconds: user.relock_seconds,
-      app_version: App.version()
-    })
+      user ->
+        push(socket, "state", %{
+          default_abi: user.default_abi,
+          default_ptt: user.default_ptt,
+          voice_activation: user.voice_activation,
+          briefing_time: user.briefing_time,
+          relock_seconds: user.relock_seconds,
+          app_version: App.version()
+        })
 
-    socket
+        socket
+    end
   end
 end
