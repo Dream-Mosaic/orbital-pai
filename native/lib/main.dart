@@ -7,10 +7,13 @@ import 'meridian/drawer.dart';
 import 'meridian/nav.dart';
 import 'meridian/panel_webview.dart';
 import 'meridian/reminders_panel.dart';
+import 'meridian/search_panel.dart';
+import 'meridian/settings_panel.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
 import 'panels/badges_client.dart';
 import 'panels/reminders_client.dart';
+import 'panels/settings_client.dart';
 import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 import 'web_url.dart';
@@ -58,6 +61,7 @@ class _HenryHomeState extends State<HenryHome> {
   late final VoiceController _vc;
   late final BadgesClient _badges;
   late final RemindersClient _reminders;
+  late final SettingsClient _settings;
 
   @override
   void initState() {
@@ -68,12 +72,19 @@ class _HenryHomeState extends State<HenryHome> {
     _badges = BadgesClient(connection: _conn);
     // Registers nothing until the drawer opens.
     _reminders = RemindersClient(connection: _conn);
+    _settings = SettingsClient(
+      connection: _conn,
+      // The web pushes "clear_log" to wipe the browser's transcript; this is
+      // the same thing for the native thread.
+      onLocalClear: _vc.clearThread,
+    );
     // The connection owns connect + rejoin; consumers just open channels.
     _conn.connect();
   }
 
   @override
   void dispose() {
+    _settings.dispose();
     _reminders.dispose();
     _badges.dispose();
     _vc.dispose();
@@ -97,6 +108,26 @@ class _HenryHomeState extends State<HenryHome> {
           // have to leave the topic, or the server keeps pushing state at a
           // panel nobody is looking at.
           .whenComplete(_reminders.close);
+      return;
+    }
+
+    if (tab == MeridianTab.settings) {
+      _settings.open();
+      Navigator.of(context)
+          .push(meridianDrawerRoute(
+            title: tab.label,
+            child: SettingsPanelView(client: _settings),
+          ))
+          .whenComplete(_settings.close);
+      return;
+    }
+
+    if (tab == MeridianTab.search) {
+      // No channel: nothing to open or close.
+      Navigator.of(context).push(meridianDrawerRoute(
+        title: tab.label,
+        child: const SearchPanelView(),
+      ));
       return;
     }
 
