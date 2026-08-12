@@ -126,6 +126,64 @@ defmodule AppWeb.Panels.SettingsChannelTest do
     end
   end
 
+  describe "set_relock" do
+    test "stores the seconds and clamps both ends", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "set_relock", %{"seconds" => 22})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 22}
+
+      ref = push(socket, "set_relock", %{"seconds" => 3})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 10}
+
+      ref = push(socket, "set_relock", %{"seconds" => 900})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 30}
+
+      assert Users.get(alice.id).relock_seconds == 30
+    end
+
+    test "reaches a LIVE conversation in milliseconds", %{socket: socket, alice: alice} do
+      sid = to_string(alice.id)
+      {:ok, pid} = App.Conversations.Sessions.start(sid, self())
+      on_exit(fn -> App.Conversations.Sessions.stop(sid) end)
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "set_relock", %{"seconds" => 20})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 20}
+
+      # set_relock_ms/2 is a cast; let it land, then read the FSM's own state.
+      # 20 SECONDS must arrive as 20_000 ms — a test that only checked the
+      # stored integer would pass with the `* 1000` missing.
+      Process.sleep(50)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:relock_ms) == 20_000
+    end
+
+    test "with no live session it still stores and replies ok",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "set_relock", %{"seconds" => 17})
+      assert_reply ref, :ok
+      assert_push "state", %{relock_seconds: 17}
+    end
+
+    test "a non-integer is refused", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "set_relock", %{"seconds" => "20"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+    end
+  end
+
   describe "set_briefing" do
     test "a time turns the briefing on; nil turns it off",
          %{socket: socket, alice: alice} do

@@ -14,6 +14,7 @@ defmodule AppWeb.Panels.SettingsChannel do
   """
   use AppWeb, :channel
 
+  alias App.Conversations.{Conversation, Sessions}
   alias App.Users
 
   @impl true
@@ -50,6 +51,27 @@ defmodule AppWeb.Panels.SettingsChannel do
       reply_write(write(socket, %{briefing_time: time}))
     else
       {:reply, {:error, %{reason: "bad_request"}}, socket}
+    end
+  end
+
+  def handle_in("set_relock", %{"seconds" => seconds}, socket) when is_integer(seconds) do
+    clamped = seconds |> max(10) |> min(30)
+
+    case write(socket, %{relock_seconds: clamped}) do
+      {:ok, _socket} = result ->
+        # Relock is both a stored default AND a value the running FSM holds, so
+        # the write has to reach both. The web relays this through the browser
+        # (push_event -> JS hook -> voice channel); server-side it is one call.
+        # set_relock_ms/2 takes MILLISECONDS.
+        case Sessions.lookup(to_string(socket.assigns.user_id)) do
+          {:ok, pid} -> Conversation.set_relock_ms(pid, clamped * 1000)
+          :error -> :ok
+        end
+
+        reply_write(result)
+
+      error ->
+        reply_write(error)
     end
   end
 
