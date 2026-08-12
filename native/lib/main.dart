@@ -92,10 +92,11 @@ class _HenryHomeState extends State<HenryHome> {
     super.dispose();
   }
 
-  /// Reminders is native now; the other four still load `/?panel=<name>` in a
-  /// webview until their own specs retire it. The drawer is a transparent
-  /// route, so the conversation keeps running and rendering behind the scrim —
-  /// mic, orb and thread all untouched.
+  /// Reminders, Settings and Search are native now; Books and Connectors
+  /// still load `/?panel=<name>` in a webview until their own specs retire
+  /// it. The drawer is a transparent route, so the conversation keeps
+  /// running and rendering behind the scrim — mic, orb and thread all
+  /// untouched.
   void _openPanel(MeridianTab tab) {
     if (tab == MeridianTab.reminders) {
       _reminders.open();

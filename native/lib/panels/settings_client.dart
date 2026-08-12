@@ -91,21 +91,24 @@ class SettingsClient extends ChangeNotifier {
   void setRelock(int seconds) => _push('set_relock', {'seconds': seconds});
 
   void clearTurns() {
-    _push('clear_turns', const {});
-    onLocalClear?.call();
+    // Gated: a socket drop closes every channel (_isJoined -> false) without
+    // clearing this client's cached _state, so an unguarded call would wipe
+    // the on-screen transcript while the server (and its memory) never hears
+    // about it. Only count it as cleared if the write actually went out.
+    if (_push('clear_turns', const {})) onLocalClear?.call();
   }
 
   void forgetMe() {
-    _push('forget_me', const {});
-    onLocalClear?.call();
+    if (_push('forget_me', const {})) onLocalClear?.call();
   }
 
-  void _push(String event, Map<String, dynamic> payload) {
+  bool _push(String event, Map<String, dynamic> payload) {
     final ch = _channel;
     // Phoenix answers a frame on a topic it has not joined with "unmatched
     // topic", so a write between open() and the join reply is silently lost.
-    if (ch == null || !ch.isJoined) return;
+    if (ch == null || !ch.isJoined) return false;
     ch.push(event, payload);
+    return true;
   }
 
   /// Delivery is at channel CREATION, not join: the server pushes `state`

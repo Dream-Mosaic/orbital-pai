@@ -213,6 +213,71 @@ void main() {
     expect(clears, 2);
   });
 
+  test(
+      'clearTurns()/forgetMe() do not invoke onLocalClear when the channel '
+      'is not joined (open but pre-join-reply)', () async {
+    var clears = 0;
+    final fake2 =
+        FakeSocket(joinPushes: const {'panel:settings:henry': _stateFrame});
+    final c2 = AppConnection(
+      connector: () async => fake2.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final sc = SettingsClient(connection: c2, onLocalClear: () => clears++);
+    addTearDown(() {
+      sc.dispose();
+      c2.dispose();
+    });
+
+    await c2.connect();
+    sc.open();
+    // No pump: the join reply (and the state push behind it) has not landed,
+    // so the channel exists but is not yet joined.
+
+    sc.clearTurns();
+    sc.forgetMe();
+
+    expect(clears, 0,
+        reason: 'a write that never reached the server must not wipe the '
+            'on-screen transcript');
+    expect(fake2.sent.map((f) => jsonDecode(f as String)[3]),
+        isNot(contains('clear_turns')));
+    expect(fake2.sent.map((f) => jsonDecode(f as String)[3]),
+        isNot(contains('forget_me')));
+  });
+
+  test(
+      'clearTurns()/forgetMe() do not invoke onLocalClear after the socket '
+      'dies mid-session', () async {
+    var clears = 0;
+    final fake2 =
+        FakeSocket(joinPushes: const {'panel:settings:henry': _stateFrame});
+    final c2 = AppConnection(
+      connector: () async => fake2.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final sc = SettingsClient(connection: c2, onLocalClear: () => clears++);
+    addTearDown(() {
+      sc.dispose();
+      c2.dispose();
+    });
+
+    await c2.connect();
+    sc.open();
+    await pumpEventQueue();
+    expect(sc.state, isNotNull, reason: 'sanity: the panel is fully joined');
+
+    await fake2.kill();
+    await pumpEventQueue();
+
+    sc.clearTurns();
+    sc.forgetMe();
+
+    expect(clears, 0,
+        reason: 'the drawer stays on screen with cached state after a '
+            'socket drop, but a dead channel must not fire the local wipe');
+  });
+
   test('a refused panel leaves the conversation joined', () async {
     final refusing = FakeSocket(refuseTopics: const {'panel:settings:henry'});
     final c2 = AppConnection(

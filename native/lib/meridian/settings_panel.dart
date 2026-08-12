@@ -14,9 +14,17 @@ import 'tokens.dart';
 const Color _dangerRed = Color(0xFFEA003E);
 
 /// The Settings drawer's Voice / Danger-zone / About sections — the port of
-/// `settings_panel/1` in `voice_modals.ex:559-661`. The Account, Active-now
-/// and Switch-user sections and the Memory/Voice-Lock nav rows are out of
-/// scope for this view; Task 7 assembles the full drawer.
+/// `settings_panel/1` in `lib/app_web/components/voice_modals.ex` (the
+/// function itself runs ~541-682). The Account, Active-now and Switch-user
+/// sections, and the Memory/Voice-Lock nav rows, are OUT of scope — for this
+/// *phase*, not merely deferred to a later task in this same phase; see the
+/// design's §2 Scope (`docs/superpowers/specs/2026-08-11-settings-panel-
+/// design.md`): Switch-user is blocked on native session support (roadmap
+/// phase 7), Active-now is a "who else is online" strip not worth a
+/// subscription yet, and Memory is roadmap phase 2 — it needs the
+/// layered-drawer mechanic this phase deliberately does not build. There is
+/// no "Task 7 assembles the full drawer" — this view is the whole of what
+/// this phase ships.
 class SettingsPanelView extends StatelessWidget {
   const SettingsPanelView({super.key, required this.client});
 
@@ -156,30 +164,8 @@ class SettingsPanelView extends StatelessWidget {
         ],
       );
 
-  Widget _lockdownRow(SettingsState state) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text('Lockdown timeout (wall)',
-                    style: TextStyle(fontSize: 14, color: M.ink)),
-              ),
-              Text('${state.relockSeconds}s',
-                  style: TextStyle(
-                      fontSize: 14, color: M.ink.withValues(alpha: 0.7))),
-            ],
-          ),
-          Slider(
-            value: state.relockSeconds.toDouble().clamp(10, 30),
-            min: 10,
-            max: 30,
-            divisions: 20,
-            activeColor: M.you,
-            onChanged: (v) => client.setRelock(v.round()),
-          ),
-        ],
-      );
+  Widget _lockdownRow(SettingsState state) =>
+      _LockdownSlider(client: client, relockSeconds: state.relockSeconds);
 
   Widget _dangerZone(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -242,6 +228,70 @@ TimeOfDay? _parseHHmm(String? hhmm) {
   final m = int.tryParse(parts[1]);
   if (h == null || m == null) return null;
   return TimeOfDay(hour: h, minute: m);
+}
+
+/// The lockdown-timeout slider, isolated into its own StatefulWidget so a
+/// drag holds its value locally instead of round-tripping every frame
+/// through the server. Mirrors the web's `phx-debounce="200"`
+/// (`voice_modals.ex`'s `settings_panel/1`, the `#lockdown-form` range input)
+/// but goes one step further: rather than a trailing timer, this pushes only
+/// on `onChangeEnd` (the drag's release). That is strictly cheaper — one
+/// `set_relock` per drag no matter how long it runs — and it also cures the
+/// rubber-banding a debounce timer alone would not: the row is
+/// server-authoritative (`value: state.relockSeconds`), so without a local
+/// value the thumb would keep snapping back to the last-acked value while a
+/// slow `state` round-trip is in flight. `_dragging` holds the in-progress
+/// value so the thumb and the "Ns" label track the finger immediately, and
+/// only clears back to the server's value once the drag ends and the push
+/// has gone out.
+class _LockdownSlider extends StatefulWidget {
+  const _LockdownSlider({required this.client, required this.relockSeconds});
+
+  final SettingsClient client;
+  final int relockSeconds;
+
+  @override
+  State<_LockdownSlider> createState() => _LockdownSliderState();
+}
+
+class _LockdownSliderState extends State<_LockdownSlider> {
+  double? _dragging;
+
+  @override
+  Widget build(BuildContext context) {
+    final display = _dragging ?? widget.relockSeconds.toDouble();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Lockdown timeout (wall)',
+                  style: TextStyle(fontSize: 14, color: M.ink)),
+            ),
+            Text('${display.round()}s',
+                style: TextStyle(
+                    fontSize: 14, color: M.ink.withValues(alpha: 0.7))),
+          ],
+        ),
+        Slider(
+          value: display.clamp(10, 30),
+          min: 10,
+          max: 30,
+          divisions: 20,
+          activeColor: M.you,
+          // Local-only: keeps the thumb and label tracking the finger
+          // without pushing a frame per pixel.
+          onChanged: (v) => setState(() => _dragging = v),
+          // The one and only write for the whole gesture.
+          onChangeEnd: (v) {
+            widget.client.setRelock(v.round());
+            setState(() => _dragging = null);
+          },
+        ),
+      ],
+    );
+  }
 }
 
 /// The same 12px / `M.ink` @ 60% recipe as reminders_panel.dart's

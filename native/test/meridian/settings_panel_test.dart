@@ -243,6 +243,30 @@ void main() {
     await conn.disconnect();
   });
 
+  testWidgets('dragging the lockdown slider pushes set_relock exactly once',
+      (tester) async {
+    final (client, conn, fake) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+    fake.sent.clear();
+
+    // A single continuous drag: WidgetTester.drag() simulates a full
+    // down/move/up gesture, so the Slider fires onChanged many times along
+    // the way and onChangeEnd exactly once on release — that release is the
+    // only moment this view is expected to push.
+    await tester.drag(find.byType(Slider), const Offset(150, 0));
+    await tester.pump();
+
+    final relockPushes = fake.sent
+        .map((f) => jsonDecode(f as String) as List<dynamic>)
+        .where((p) => p[3] == 'set_relock')
+        .toList();
+    expect(relockPushes.length, 1,
+        reason: 'a drag must debounce to a single write on release, not one '
+            'push per pixel of travel');
+
+    await conn.disconnect();
+  });
+
   testWidgets('confirming Wipe memory pushes forget_me', (tester) async {
     final (client, conn, fake) = await openedClient(tester, _stateFrame);
     await pumpPanel(tester, client);
