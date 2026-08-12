@@ -75,6 +75,24 @@ defmodule AppWeb.Panels.SettingsChannel do
     end
   end
 
+  # Danger zone: the DB is only half of it — the running FSM is still holding
+  # turn state the DB no longer has (brain_buffer, pending_request, etc. — see
+  # Conversation.reset_turn_fields/1), so a live conversation needs its own
+  # reset alongside the delete. Mirrors conversation_live.ex's
+  # clear_conversation/forget_me handlers. Neither pushes `state` — no pref
+  # changed.
+  def handle_in("clear_turns", _payload, socket) do
+    App.Memory.clear_turns(socket.assigns.user_id)
+    clear_live_fsm(socket)
+    {:reply, :ok, socket}
+  end
+
+  def handle_in("forget_me", _payload, socket) do
+    App.Memory.forget(socket.assigns.user_id)
+    clear_live_fsm(socket)
+    {:reply, :ok, socket}
+  end
+
   # A client bug must not crash the channel and drop the panel.
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
@@ -100,6 +118,15 @@ defmodule AppWeb.Panels.SettingsChannel do
     case Users.update_prefs(user, attrs) do
       {:ok, _user} -> {:ok, push_state(socket)}
       {:error, _changeset} -> {:error, socket}
+    end
+  end
+
+  # The DB is only half of it: the running FSM is still holding the turn state
+  # that was just deleted. Mirrors conversation_live.ex's clear_live_fsm/1.
+  defp clear_live_fsm(socket) do
+    case Sessions.lookup(to_string(socket.assigns.user_id)) do
+      {:ok, pid} -> Conversation.clear_memory(pid)
+      :error -> :ok
     end
   end
 

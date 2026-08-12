@@ -229,4 +229,120 @@ defmodule AppWeb.Panels.SettingsChannelTest do
       refute Users.get(alice.id).briefing_time == "seven"
     end
   end
+
+  describe "danger zone" do
+    test "clear_turns wipes this user's turns and nobody else's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _} =
+        App.Memory.persist_turn(%{user_id: alice.id, user_text: "hi", brain_text: "hello"})
+
+      {:ok, _} = App.Memory.persist_turn(%{user_id: bob.id, user_text: "hi", brain_text: "hello"})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+
+      assert App.Memory.recent_turns(alice.id, 10) == []
+      assert length(App.Memory.recent_turns(bob.id, 10)) == 1
+    end
+
+    test "clear_turns resets a LIVE conversation too", %{socket: socket, alice: alice} do
+      sid = to_string(alice.id)
+      {:ok, pid} = App.Conversations.Sessions.start(sid, self())
+      on_exit(fn -> App.Conversations.Sessions.stop(sid) end)
+
+      # Give the FSM turn state that ONLY clear_memory's reset_turn_fields/1
+      # touches, so we can tell "the cast landed" from "it was never sent" —
+      # Process.alive?/1 alone can't: the process stays up either way.
+      :sys.replace_state(pid, fn {state, data} ->
+        {state, %{data | pending_request: "leftover"}}
+      end)
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+      # clear_memory/1 is a cast; let it land, then read the FSM's own state.
+      Process.sleep(50)
+      assert Process.alive?(pid)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:pending_request) == nil
+    end
+
+    test "forget_me resets a LIVE conversation too", %{socket: socket, alice: alice} do
+      sid = to_string(alice.id)
+      {:ok, pid} = App.Conversations.Sessions.start(sid, self())
+      on_exit(fn -> App.Conversations.Sessions.stop(sid) end)
+
+      :sys.replace_state(pid, fn {state, data} ->
+        {state, %{data | pending_request: "leftover"}}
+      end)
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      Process.sleep(50)
+      assert Process.alive?(pid)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:pending_request) == nil
+    end
+
+    test "both replies are ok with no live session", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+    end
+
+    test "forget_me wipes facts and turns for this user only",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _} =
+        App.Memory.create_fact(%{content: "likes tea", source: "user", user_id: alice.id})
+
+      {:ok, _} =
+        App.Memory.create_fact(%{content: "likes coffee", source: "user", user_id: bob.id})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+
+      assert App.Memory.list_facts(alice.id) == []
+      assert length(App.Memory.list_facts(bob.id)) == 1
+    end
+
+    test "an unknown event still hits the catch-all and the channel survives",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "explode", %{})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      # The channel is still alive and answers a real event afterward.
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+    end
+
+    test "neither handler pushes state — no pref changed",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+      refute_push "state", _
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      refute_push "state", _
+    end
+  end
 end
