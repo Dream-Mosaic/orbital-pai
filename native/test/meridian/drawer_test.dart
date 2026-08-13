@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/meridian/drawer.dart';
+import 'package:henry_wall/meridian/hero_icon.dart';
+
+/// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
+Finder findHero(HeroIcon icon) =>
+    find.byWidgetPredicate((w) => w is HeroIconView && w.icon == icon);
 
 void main() {
   Future<void> pumpDrawer(WidgetTester tester, Size surface,
-      {VoidCallback? onClose}) async {
+      {VoidCallback? onClose, VoidCallback? onBack}) async {
     await tester.binding.setSurfaceSize(surface);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(MaterialApp(
@@ -12,6 +17,7 @@ void main() {
         title: 'Reminders',
         animation: const AlwaysStoppedAnimation<double>(1),
         onClose: onClose ?? () {},
+        onBack: onBack,
         child: const Text('panel body'),
       ),
     ));
@@ -124,5 +130,30 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('no chevron at the root layer', (tester) async {
+    await pumpDrawer(tester, const Size(360, 800));
+    expect(findHero(HeroIcon.chevronLeft), findsNothing);
+  });
+
+  testWidgets('a sub-layer shows a back chevron that reports its tap',
+      (tester) async {
+    var backs = 0;
+    await pumpDrawer(tester, const Size(360, 800), onBack: () => backs++);
+    expect(findHero(HeroIcon.chevronLeft), findsOneWidget);
+    await tester.tap(findHero(HeroIcon.chevronLeft));
+    await tester.pump();
+    expect(backs, 1);
+  });
+
+  testWidgets('the back chevron is not the close control', (tester) async {
+    var backs = 0, closes = 0;
+    await pumpDrawer(tester, const Size(360, 800),
+        onClose: () => closes++, onBack: () => backs++);
+    await tester.tap(findHero(HeroIcon.chevronLeft));
+    await tester.pump();
+    expect(backs, 1);
+    expect(closes, 0, reason: 'back pops the layer; only ✕ and the scrim close');
   });
 }

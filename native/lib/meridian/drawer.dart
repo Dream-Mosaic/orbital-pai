@@ -27,6 +27,7 @@ class MeridianDrawer extends StatelessWidget {
     required this.animation,
     required this.onClose,
     required this.child,
+    this.onBack,
   });
 
   /// `max-w-[24rem]`.
@@ -48,6 +49,10 @@ class MeridianDrawer extends StatelessWidget {
   final Animation<double> animation;
   final VoidCallback onClose;
   final Widget child;
+
+  /// Non-null when this drawer is showing a sub-layer: renders a leading
+  /// chevron that pops back to the layer above. Null at the root.
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -182,6 +187,15 @@ class MeridianDrawer extends StatelessWidget {
         ),
         child: Row(
           children: [
+            if (onBack != null)
+              GestureDetector(
+                onTap: onBack,
+                behavior: HitTestBehavior.opaque,
+                child: const Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: HeroIconView(HeroIcon.chevronLeft, size: 20, color: M.inkDim),
+                ),
+              ),
             Expanded(
               child: Text(
                 title,
@@ -206,12 +220,8 @@ class MeridianDrawer extends StatelessWidget {
       );
 }
 
-/// Pushes [MeridianDrawer] as a transparent route so the conversation keeps
-/// rendering (and running) behind the scrim.
-Route<void> meridianDrawerRoute({
-  required String title,
-  required Widget child,
-}) =>
+Route<void> _drawerRoute(
+        Widget Function(BuildContext, Animation<double>) page) =>
     PageRouteBuilder<void>(
       opaque: false,
       // The scrim inside the drawer is the tap target; the route's own barrier
@@ -219,10 +229,31 @@ Route<void> meridianDrawerRoute({
       barrierDismissible: false,
       transitionDuration: MeridianDrawer.slide,
       reverseTransitionDuration: MeridianDrawer.slide,
-      pageBuilder: (context, animation, _) => MeridianDrawer(
-        title: title,
-        animation: animation,
-        onClose: () => Navigator.of(context).maybePop(),
-        child: child,
-      ),
+      pageBuilder: (context, animation, _) => page(context, animation),
     );
+
+/// Pushes [MeridianDrawer] as a transparent route so the conversation keeps
+/// rendering (and running) behind the scrim.
+///
+/// A single-layer drawer: the panel has nowhere to navigate to.
+Route<void> meridianDrawerRoute({
+  required String title,
+  required Widget child,
+}) =>
+    _drawerRoute((context, animation) => MeridianDrawer(
+          title: title,
+          animation: animation,
+          onClose: () => Navigator.of(context).maybePop(),
+          child: child,
+        ));
+
+/// A drawer whose content navigates in place. The builder owns the layer state
+/// and builds its own MeridianDrawer, so `title`, `onBack` and `child` can all
+/// change without pushing a second route — one scrim, one slide, and system
+/// back can pop a layer instead of the whole drawer.
+Route<void> meridianHostedDrawerRoute({
+  required Widget Function(BuildContext, Animation<double>, VoidCallback onClose)
+      builder,
+}) =>
+    _drawerRoute((context, animation) =>
+        builder(context, animation, () => Navigator.of(context).maybePop()));
