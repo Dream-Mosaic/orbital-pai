@@ -13,22 +13,26 @@ import 'tokens.dart';
 /// comment in tokens.dart.
 const Color _dangerRed = Color(0xFFEA003E);
 
-/// The Settings drawer's Voice / Danger-zone / About sections — the port of
-/// `settings_panel/1` in `lib/app_web/components/voice_modals.ex` (the
-/// function itself runs ~541-682). The Account, Active-now and Switch-user
-/// sections, and the Memory/Voice-Lock nav rows, are OUT of scope — for this
-/// *phase*, not merely deferred to a later task in this same phase; see the
-/// design's §2 Scope (`docs/superpowers/specs/2026-08-11-settings-panel-
-/// design.md`): Switch-user is blocked on native session support (roadmap
-/// phase 7), Active-now is a "who else is online" strip not worth a
-/// subscription yet, and Memory is roadmap phase 2 — it needs the
-/// layered-drawer mechanic this phase deliberately does not build. There is
-/// no "Task 7 assembles the full drawer" — this view is the whole of what
-/// this phase ships.
+/// The Settings drawer's Voice / Danger-zone / About sections, plus the
+/// Memory nav row — the port of `settings_panel/1` in
+/// `lib/app_web/components/voice_modals.ex` (the function itself runs
+/// ~541-682). The Account, Active-now and Switch-user sections, and the
+/// Voice-Lock nav row, are still OUT of scope; see the design's §2 Scope
+/// (`docs/superpowers/specs/2026-08-11-settings-panel-design.md`):
+/// Switch-user is blocked on native session support (roadmap phase 7),
+/// Active-now is a "who else is online" strip not worth a subscription yet.
+/// Memory used to be out of scope too — it needed the layered-drawer
+/// mechanic this view deliberately does not build — but that mechanic now
+/// exists (`settings_drawer_host.dart`), so [onOpenMemory] is this view's
+/// half of the wiring: a bare callback, with no navigation of its own.
 class SettingsPanelView extends StatelessWidget {
-  const SettingsPanelView({super.key, required this.client});
+  const SettingsPanelView({super.key, required this.client, this.onOpenMemory});
 
   final SettingsClient client;
+
+  /// Null hides the Memory row entirely (e.g. a caller with nowhere to send
+  /// the tap). settings_drawer_host.dart is the only caller that supplies it.
+  final VoidCallback? onOpenMemory;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -45,9 +49,32 @@ class SettingsPanelView extends StatelessWidget {
               _dangerZone(context),
               const SizedBox(height: 24),
               _about(state),
+              if (onOpenMemory != null) ...[
+                const SizedBox(height: 24),
+                _memoryRow(),
+              ],
             ],
           );
         },
+      );
+
+  /// `voice_modals.ex:662-670` — full-width ghost row, label left, a
+  /// 60%-opacity `→` right.
+  Widget _memoryRow() => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onOpenMemory,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween, // justify-between
+            children: [
+              const Text('Memory', style: TextStyle(fontSize: 14, color: M.ink)),
+              Text('→',
+                  style:
+                      TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.6))),
+            ],
+          ),
+        ),
       );
 
   Widget _voice(BuildContext context, SettingsState state) => Column(

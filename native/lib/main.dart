@@ -8,10 +8,11 @@ import 'meridian/nav.dart';
 import 'meridian/panel_webview.dart';
 import 'meridian/reminders_panel.dart';
 import 'meridian/search_panel.dart';
-import 'meridian/settings_panel.dart';
+import 'meridian/settings_drawer_host.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
 import 'panels/badges_client.dart';
+import 'panels/memory_client.dart';
 import 'panels/reminders_client.dart';
 import 'panels/settings_client.dart';
 import 'spike/porcupine_spike_screen.dart';
@@ -62,6 +63,7 @@ class _HenryHomeState extends State<HenryHome> {
   late final BadgesClient _badges;
   late final RemindersClient _reminders;
   late final SettingsClient _settings;
+  late final MemoryClient _memory;
 
   @override
   void initState() {
@@ -78,12 +80,18 @@ class _HenryHomeState extends State<HenryHome> {
       // the same thing for the native thread.
       onLocalClear: _vc.clearThread,
     );
+    // Registers nothing until the drawer's Memory layer opens.
+    _memory = MemoryClient(
+      connection: _conn,
+      onLocalClear: _vc.clearThread,
+    );
     // The connection owns connect + rejoin; consumers just open channels.
     _conn.connect();
   }
 
   @override
   void dispose() {
+    _memory.dispose();
     _settings.dispose();
     _reminders.dispose();
     _badges.dispose();
@@ -115,11 +123,22 @@ class _HenryHomeState extends State<HenryHome> {
     if (tab == MeridianTab.settings) {
       _settings.open();
       Navigator.of(context)
-          .push(meridianDrawerRoute(
-            title: tab.label,
-            child: SettingsPanelView(client: _settings),
+          .push(meridianHostedDrawerRoute(
+            builder: (context, animation, onClose) => SettingsDrawerHost(
+              animation: animation,
+              onClose: onClose,
+              settings: _settings,
+              memory: _memory,
+            ),
           ))
-          .whenComplete(_settings.close);
+          // The drawer can be dismissed from EITHER layer (✕, scrim, or
+          // back), so both clients have to close here rather than each
+          // owning its own whenComplete — whichever one was NOT visible at
+          // dismissal time is still open and would otherwise leak its topic.
+          .whenComplete(() {
+        _memory.close();
+        _settings.close();
+      });
       return;
     }
 
