@@ -75,16 +75,12 @@ defmodule AppWeb.Panels.MemoryChannelTest do
     assert_push "state", %{facts: [%{content: "alice's fact"}]}
   end
 
-  # NOTE: App.Memory.create_fact/1 does NOT itself call broadcast_updated/0
-  # (verified by reading server/lib/app/memory.ex: only reset/1, clear_turns/1,
-  # forget/1, and replace_auto_facts/2 do — create_fact/1, delete_fact/1, and
-  # put_summary/2 do not, contradicting this channel's own moduledoc and the
-  # design spec). App.Memory is out of scope for this task, so rather than
-  # write a test against brief-described behavior that does not exist, this
-  # exercises the channel's actual re-push wiring (join/2's Memory.subscribe()
-  # + handle_info(:memory_updated, _)) via the real broadcast API, with a
-  # create_fact beforehand to prove the re-push carries FRESH data, not a
-  # cached copy.
+  # `create_fact/1` does NOT broadcast on its own — see the moduledoc: only
+  # reset/1, clear_turns/1, forget/1 and replace_auto_facts/2 do, and every
+  # other caller broadcasts once its own unit of work is done. So this drives
+  # the real broadcast API, which is what the Updater does after a turn, and
+  # writes a fact first to prove the re-push carries FRESH data rather than a
+  # cached copy. The write handlers get their own coverage from Task 3 on.
   test "a Memory.broadcast_updated/0 following a create_fact re-pushes fresh state",
        %{socket: socket, alice: alice} do
     {:ok, _reply, _socket} = join!(socket, alice)
