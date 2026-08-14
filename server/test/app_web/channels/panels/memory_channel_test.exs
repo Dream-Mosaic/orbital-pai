@@ -91,4 +91,76 @@ defmodule AppWeb.Panels.MemoryChannelTest do
 
     assert_push "state", %{facts: [%{content: "likes tea"}]}
   end
+
+  # This test deliberately never calls Memory.broadcast_updated/0 itself — the
+  # only way the second "state" push can arrive is the handler's own
+  # broadcast. If that call were missing, the write would still persist and
+  # the reply would still be :ok, but this assert_push would time out.
+  test "save_summary persists and the handler's own broadcast re-pushes state",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{summary: ""}
+
+    ref = push(socket, "save_summary", %{"summary" => "loves hiking"})
+    assert_reply ref, :ok
+
+    assert Memory.get_summary(alice.id).content == "loves hiking"
+    assert_push "state", %{summary: "loves hiking"}
+  end
+
+  test "an empty summary is allowed (clearing it is legitimate)", %{socket: socket, alice: alice} do
+    {:ok, _} = Memory.put_summary(alice.id, "old summary")
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{summary: "old summary"}
+
+    ref = push(socket, "save_summary", %{"summary" => ""})
+    assert_reply ref, :ok
+
+    assert Memory.get_summary(alice.id).content == ""
+    assert_push "state", %{summary: ""}
+  end
+
+  test "save_summary triggers exactly one state push, not two", %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", _
+
+    ref = push(socket, "save_summary", %{"summary" => "one push only"})
+    assert_reply ref, :ok
+    assert_push "state", %{summary: "one push only"}
+    refute_push "state", _
+  end
+
+  test "add_fact creates a user fact that appears in the next state",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{facts: []}
+
+    ref = push(socket, "add_fact", %{"content" => "likes tea"})
+    assert_reply ref, :ok
+
+    assert_push "state", %{facts: [%{content: "likes tea", source: "user"}]}
+  end
+
+  test "blank or whitespace-only add_fact content is bad_request and creates nothing",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{facts: []}
+
+    for content <- ["", "   ", "\n"] do
+      ref = push(socket, "add_fact", %{"content" => content})
+      assert_reply ref, :error, %{reason: "bad_request"}
+    end
+
+    assert Memory.list_facts(alice.id) == []
+  end
+
+  test "a non-string add_fact payload is bad_request", %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{facts: []}
+
+    ref = push(socket, "add_fact", %{"content" => 123})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    assert Memory.list_facts(alice.id) == []
+  end
 end

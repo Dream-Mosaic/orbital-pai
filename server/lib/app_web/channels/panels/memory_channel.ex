@@ -46,6 +46,42 @@ defmodule AppWeb.Panels.MemoryChannel do
     {:ok, socket}
   end
 
+  # ---- inbound ----
+  #
+  # No handler calls push_state. Each broadcasts instead, and the subscription
+  # in join/2 re-pushes to us AND to any open LiveView. put_summary/2 and
+  # create_fact/1 do NOT broadcast on their own — the caller does it once its
+  # unit of work is done (see the moduledoc). This is the opposite of
+  # SettingsChannel, deliberately.
+  @impl true
+  def handle_in("save_summary", %{"summary" => summary}, socket)
+      when is_binary(summary) do
+    Memory.put_summary(socket.assigns.user_id, summary)
+    Memory.broadcast_updated()
+    {:reply, :ok, socket}
+  end
+
+  def handle_in("add_fact", %{"content" => content}, socket) when is_binary(content) do
+    case String.trim(content) do
+      "" ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      trimmed ->
+        Memory.create_fact(%{
+          content: trimmed,
+          source: "user",
+          user_id: socket.assigns.user_id
+        })
+
+        Memory.broadcast_updated()
+        {:reply, :ok, socket}
+    end
+  end
+
+  # A client bug must not crash the channel and drop the panel.
+  def handle_in(_event, _payload, socket),
+    do: {:reply, {:error, %{reason: "bad_request"}}, socket}
+
   @impl true
   def handle_info(:push_state, socket), do: {:noreply, push_state(socket)}
   def handle_info(:memory_updated, socket), do: {:noreply, push_state(socket)}
