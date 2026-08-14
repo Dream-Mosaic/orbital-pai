@@ -9,10 +9,11 @@ import 'tokens.dart';
 /// `lib/app_web/components/voice_modals.ex` (~783-835): the rolling summary
 /// textarea, the profile-facts list with its add-fact field, and a
 /// destructive wipe control. The web's own two entry points to the same
-/// `forget_me` action disagree on their label ("Wipe memory" on the Settings
-/// panel, voice_modals.ex:654; "Forget me" on this one, voice_modals.ex:835)
-/// — this port uses "Wipe memory" for both, per the design brief, so the one
-/// destructive action reads identically everywhere in the native app.
+/// `forget_me` action disagree on their label — "Wipe memory" on the
+/// Settings panel (voice_modals.ex:654), "Forget me" here (voice_modals.ex:
+/// 835) — and copy is ported verbatim per panel, so this one says "Forget
+/// me" to match ITS web counterpart, even though the native Settings panel
+/// (settings_panel.dart) says "Wipe memory" to match its own.
 ///
 /// Server-authoritative: every write pushes and the UI re-renders from the
 /// next `state`. The summary field is the one place that needs to resist
@@ -261,7 +262,7 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
             foregroundColor: _dangerRed,
             side: BorderSide(color: _dangerRed.withValues(alpha: 0.4)),
           ),
-          child: const Text('Wipe memory'),
+          child: const Text('Forget me'),
         ),
       );
 

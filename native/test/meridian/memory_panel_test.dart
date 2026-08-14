@@ -77,7 +77,7 @@ void main() {
     expect(find.text('Rolling summary'), findsOneWidget);
     expect(find.text('Profile facts'), findsOneWidget);
     expect(find.text('No facts yet.'), findsOneWidget);
-    expect(find.text('Wipe memory'), findsOneWidget);
+    expect(find.text('Forget me'), findsOneWidget);
 
     // The two placeholders carry a typographic apostrophe and an ellipsis
     // character — read straight off the live decoration rather than via
@@ -100,7 +100,7 @@ void main() {
     final (client, conn, fake) = await openedClient(tester, _emptyFactsFrame);
     await pumpPanel(tester, client);
 
-    await tester.tap(find.text('Wipe memory'));
+    await tester.tap(find.text('Forget me'));
     await tester.pumpAndSettle();
     expect(
         find.text(
@@ -115,11 +115,11 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('confirming Wipe memory pushes forget_me', (tester) async {
+  testWidgets('confirming Forget me pushes forget_me', (tester) async {
     final (client, conn, fake) = await openedClient(tester, _emptyFactsFrame);
     await pumpPanel(tester, client);
 
-    await tester.tap(find.text('Wipe memory'));
+    await tester.tap(find.text('Forget me'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
