@@ -380,6 +380,16 @@ void main() {
     expect(box.bottom, lessThanOrEqualTo(800 - 300),
         reason: 'the field must scroll clear of the keyboard, not sit '
             'behind it');
+    // The drawer's fixed header sits directly above its SingleChildScrollView
+    // (drawer.dart's own Column), so that scroll view's top edge IS the
+    // header's bottom edge — measuring it this way tracks the real layout
+    // instead of a hardcoded header-height guess. An over-eager correction
+    // that scrolls too FAR would satisfy the bottom assertion above while
+    // clipping the field's top underneath the header; this catches that.
+    final headerBottom = tester.getRect(find.byType(SingleChildScrollView)).top;
+    expect(box.top, greaterThanOrEqualTo(headerBottom),
+        reason: 'the field must not be scrolled so far that its top ends up '
+            'clipped under the drawer header');
 
     await conn.disconnect();
   });
@@ -399,17 +409,27 @@ void main() {
     // field gets is a SHORT viewport — landscape phone orientation, which
     // this app supports (no orientation lock; CLAUDE.md lists Android
     // phone+tablet as a target) — where the keyboard covers a much larger
-    // fraction of a much shorter screen. Verified empirically: an 800x360
+    // fraction of a much shorter screen. Verified empirically: an 800x380
     // landscape screen with a 220-tall keyboard (both realistic — many
-    // Android phones are ~360 logical px wide, i.e. that tall in landscape;
-    // 220 is an ordinary landscape keyboard-with-suggestions height) leaves
-    // only the top 140px clear, and the field's OWN unscrolled bottom (181)
-    // already sits below that — so this is not a manufactured fixture, it
-    // is the field's real, unmodified position in a real supported
-    // orientation.
+    // Android phones are 360-400 logical px wide, i.e. that tall in
+    // landscape; 220 is an ordinary landscape keyboard-with-suggestions
+    // height) leaves only the top 160px clear, and the field's OWN
+    // unscrolled bottom (181) already sits below that — so this is not a
+    // manufactured fixture, it is the field's real, unmodified position in a
+    // real supported orientation.
+    //
+    // The height is 380, not the narrower 360 first tried: at 360 the
+    // field's own height (79) exactly equals the visible window (140..61,
+    // also 79) — a coincidence of those two numbers, not a deliberate edge
+    // case, that leaves EXACTLY ONE valid scroll position with zero room for
+    // any implementation (built-in or hand-rolled) to land on via an
+    // animated, curve-settled scroll. 380 keeps every other number equally
+    // realistic while giving 20px of legitimate slack, which is what
+    // actually distinguishes "clears the keyboard" from "over-scrolls under
+    // the header" as a real bug rather than a rounding artifact.
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetDevicePixelRatio);
-    tester.view.physicalSize = const Size(800, 360);
+    tester.view.physicalSize = const Size(800, 380);
     addTearDown(tester.view.resetPhysicalSize);
 
     final (client, conn, _) = await openedClient(tester, _stateFrame);
@@ -431,7 +451,7 @@ void main() {
     // act, i.e. the field's own natural position is already past the fold.
     final unfocused =
         tester.getRect(find.byKey(MemoryPanelView.summaryFieldKey));
-    expect(unfocused.bottom, greaterThan(360 - 220),
+    expect(unfocused.bottom, greaterThan(380 - 220),
         reason: 'sanity: the field must start out behind the keyboard line, '
             'or this test could pass without the fix ever running');
 
@@ -439,9 +459,16 @@ void main() {
     await tester.pumpAndSettle();
 
     final box = tester.getRect(find.byKey(MemoryPanelView.summaryFieldKey));
-    expect(box.bottom, lessThanOrEqualTo(360 - 220),
+    expect(box.bottom, lessThanOrEqualTo(380 - 220),
         reason: 'the summary field must scroll clear of the keyboard too, '
             'not sit behind it');
+    // Same over-scroll guard as the add-fact test: the bottom assertion
+    // alone would also pass for a correction that scrolls too far and clips
+    // the field's top under the header.
+    final headerBottom = tester.getRect(find.byType(SingleChildScrollView)).top;
+    expect(box.top, greaterThanOrEqualTo(headerBottom),
+        reason: 'the summary field must not be scrolled so far that its top '
+            'ends up clipped under the drawer header');
 
     await conn.disconnect();
   });

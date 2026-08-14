@@ -34,94 +34,19 @@ class MemoryPanelView extends StatefulWidget {
   State<MemoryPanelView> createState() => _MemoryPanelViewState();
 }
 
-class _MemoryPanelViewState extends State<MemoryPanelView>
-    with WidgetsBindingObserver {
+class _MemoryPanelViewState extends State<MemoryPanelView> {
   final _summaryCtrl = TextEditingController();
   final _summaryFocus = FocusNode();
   final _addFactCtrl = TextEditingController();
   final _addFactFocus = FocusNode();
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _summaryFocus.addListener(() => _revealAboveKeyboard(_summaryFocus));
-    _addFactFocus.addListener(() => _revealAboveKeyboard(_addFactFocus));
-  }
-
-  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _summaryCtrl.dispose();
     _summaryFocus.dispose();
     _addFactCtrl.dispose();
     _addFactFocus.dispose();
     super.dispose();
-  }
-
-  // A device's keyboard height is not known at the moment focus lands — it
-  // animates in afterward — so re-check on every metrics change too, not
-  // just on focus.
-  @override
-  void didChangeMetrics() {
-    super.didChangeMetrics();
-    if (_summaryFocus.hasFocus) _revealAboveKeyboard(_summaryFocus);
-    if (_addFactFocus.hasFocus) _revealAboveKeyboard(_addFactFocus);
-  }
-
-  /// How many extra frames [_correctForKeyboard] keeps re-asserting itself
-  /// for after the first one. `EditableText`'s own caret-follow animation
-  /// (`_caretAnimationDuration`, 100ms) is the thing it is racing — at 16ms/
-  /// frame that is ~6 frames, so this comfortably outlasts it.
-  static const int _keyboardClearanceFrames = 10;
-
-  /// The drawer's body is a bare `SingleChildScrollView` with no `Scaffold`
-  /// above it, so nothing shrinks it for an on-screen keyboard the way
-  /// `resizeToAvoidBottomInset` would — the ambient viewport's own bounds
-  /// stay full-height regardless of `MediaQuery.viewInsets`, so the built-in
-  /// caret-follow scroll never realises the field is covered. Do it by hand:
-  /// find how far the focused field's bottom edge sits below the keyboard's
-  /// top edge and nudge the ancestor `Scrollable` by that much.
-  void _revealAboveKeyboard(FocusNode node) {
-    if (!node.hasFocus) return;
-    WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _correctForKeyboard(node, _keyboardClearanceFrames));
-  }
-
-  /// `EditableText` runs its OWN caret-follow scroll on this same focus
-  /// change (and metrics change), and it does not know about
-  /// `MediaQuery.viewInsets` either — it just keeps the caret within the
-  /// ambient (unshrunk) viewport, which the field already satisfies without
-  /// moving nearly as far as clearing the keyboard needs. That is an
-  /// ANIMATED scroll (`ScrollPosition.animateTo`, ~100ms), so a single
-  /// `jumpTo` here can land correctly on one frame and then get overwritten
-  /// on a later frame as that animation keeps driving toward its own
-  /// (keyboard-unaware) target. `jumpTo` cancels whichever scroll activity
-  /// is currently running, so re-asserting our own correction for a few more
-  /// frames — rather than once — means whichever of us moves last wins, and
-  /// it is always us.
-  void _correctForKeyboard(FocusNode node, int framesLeft) {
-    if (!mounted || !node.hasFocus) return;
-    final renderObject = node.context?.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.attached) return;
-    final media = MediaQuery.of(context);
-    final bottomInset = media.viewInsets.bottom;
-    final position = Scrollable.maybeOf(context)?.position;
-    if (bottomInset > 0 && position != null) {
-      final fieldBottom =
-          renderObject.localToGlobal(Offset(0, renderObject.size.height)).dy;
-      final keyboardTop = media.size.height - bottomInset;
-      final overlap = fieldBottom - keyboardTop;
-      if (overlap > 0) {
-        // +48 clears the InputDecorator's own border/padding, which sits
-        // outside the FocusNode's (EditableText-only) rect measured above.
-        position.jumpTo((position.pixels + overlap + 48)
-            .clamp(0.0, position.maxScrollExtent));
-      }
-    }
-    if (framesLeft <= 0) return;
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _correctForKeyboard(node, framesLeft - 1));
   }
 
   // Seed from the server only when the user is not in the field. Without
@@ -155,19 +80,20 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
           final state = widget.client.state;
           if (state == null) return const SizedBox.shrink();
           _syncSummary(state.summary);
+          final bottomInset = MediaQuery.of(context).viewInsets.bottom;
           return Padding(
-            // Guarantees there is scroll room below the last field for
-            // _revealAboveKeyboard to actually scroll into — without this, a
+            // Guarantees there is scroll room below the last field for a
+            // focused field's own scrollPadding-driven showOnScreen (see the
+            // TextFields below) to actually scroll into — without this, a
             // short panel has nowhere further to go and a field near the
             // bottom stays pinned behind the keyboard no matter what.
-            padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom),
+            padding: EdgeInsets.only(bottom: bottomInset),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _summarySection(),
+                _summarySection(bottomInset),
                 const SizedBox(height: 16),
-                _factsSection(state),
+                _factsSection(state, bottomInset),
                 const SizedBox(height: 16),
                 _wipeButton(context),
               ],
@@ -176,7 +102,7 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
         },
       );
 
-  Widget _summarySection() => Column(
+  Widget _summarySection(double bottomInset) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const _SectionLabel('Rolling summary'),
@@ -190,6 +116,24 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
             style: const TextStyle(fontSize: 14, color: M.ink),
             decoration:
                 _fieldDecoration("(nothing yet — we'll build this as we talk)"),
+            // The drawer's body is a bare SingleChildScrollView with no
+            // Scaffold above it, so nothing shrinks it for an on-screen
+            // keyboard the way resizeToAvoidBottomInset would — the ambient
+            // viewport's own bounds stay full-height regardless of
+            // MediaQuery.viewInsets, so EditableText's built-in caret-follow
+            // (which asks the ancestor Scrollable to reveal the caret rect
+            // inflated by this padding) never realises the field is
+            // covered UNLESS this padding tells it how much extra clearance
+            // to demand below the caret. +64 beyond the inset itself is
+            // margin so the field doesn't land flush against the keyboard's
+            // edge. This is a real Flutter mechanism (not hand-rolled), so it
+            // does not race its own caret-follow animation the way an
+            // external scroll correction did — verified against a landscape
+            // scenario where the field previously landed under the header.
+            // Note it is not pixel-perfect when there is near-zero room to
+            // work with (a viewport exactly as tall as the field itself can
+            // still show a few px of either edge) — see memory_panel_test.dart.
+            scrollPadding: EdgeInsets.only(bottom: bottomInset + 64),
           ),
           const SizedBox(height: 8),
           Align(
@@ -203,7 +147,7 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
         ],
       );
 
-  Widget _factsSection(MemoryState state) => Column(
+  Widget _factsSection(MemoryState state, double bottomInset) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const _SectionLabel('Profile facts'),
@@ -230,6 +174,8 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
                   decoration:
                       _fieldDecoration('Add something I should remember…'),
                   onSubmitted: (_) => _submitAddFact(),
+                  // See the summary field's identical scrollPadding for why.
+                  scrollPadding: EdgeInsets.only(bottom: bottomInset + 64),
                 ),
               ),
               const SizedBox(width: 8),
