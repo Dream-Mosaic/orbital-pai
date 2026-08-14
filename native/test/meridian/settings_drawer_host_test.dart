@@ -58,7 +58,10 @@ void main() {
 
   // Pushes the host through the real meridianHostedDrawerRoute (not a bare
   // pumpWidget of the widget alone) so system-back tests exercise the actual
-  // Navigator/PopScope integration main.dart relies on.
+  // Navigator/PopScope integration main.dart relies on. The whenComplete
+  // mirrors main.dart's _openPanel wiring EXACTLY: the drawer can be
+  // dismissed from either layer (✕, scrim, or back), so both clients must
+  // end closed regardless of which layer was visible at dismissal.
   Future<void> pumpHost(
     WidgetTester tester,
     GlobalKey<NavigatorState> navKey,
@@ -69,14 +72,28 @@ void main() {
       navigatorKey: navKey,
       home: const Scaffold(body: SizedBox()),
     ));
-    unawaited(navKey.currentState!.push(meridianHostedDrawerRoute(
-      builder: (context, animation, onClose) => SettingsDrawerHost(
-        animation: animation,
-        onClose: onClose,
-        settings: settings,
-        memory: memory,
-      ),
-    )));
+    unawaited(navKey.currentState!
+        .push(meridianHostedDrawerRoute(
+          builder: (context, animation, onClose) => SettingsDrawerHost(
+            animation: animation,
+            onClose: onClose,
+            settings: settings,
+            memory: memory,
+          ),
+        ))
+        .whenComplete(() {
+      memory.close();
+      settings.close();
+    }));
+    await tester.pumpAndSettle();
+  }
+
+  // Scrolls to and taps the Settings panel's "Memory" nav row.
+  Future<void> openMemoryLayer(WidgetTester tester) async {
+    await tester.ensureVisible(find.text('Memory'));
+    await tester.tap(find.text('Memory'));
+    await tester.pump();
+    await tester.pump(Duration.zero); // let the join reply land
     await tester.pumpAndSettle();
   }
 
@@ -105,13 +122,9 @@ void main() {
 
     // The Memory row sits below the fold on the default test surface — it is
     // inside the drawer's own SingleChildScrollView (drawer.dart), unlike the
-    // fixed header. Scroll it into view before tapping, exactly as a real
-    // finger would have to.
-    await tester.ensureVisible(find.text('Memory'));
-    await tester.tap(find.text('Memory'));
-    await tester.pump();
-    await tester.pump(Duration.zero); // let the join reply land
-    await tester.pumpAndSettle();
+    // fixed header. openMemoryLayer scrolls it into view before tapping,
+    // exactly as a real finger would have to.
+    await openMemoryLayer(tester);
 
     expect(find.text('Memory'), findsOneWidget,
         reason: 'the header title; SettingsPanelView (with its own "Memory" '
@@ -135,11 +148,7 @@ void main() {
     final navKey = GlobalKey<NavigatorState>();
     await pumpHost(tester, navKey, settings, memory);
 
-    await tester.ensureVisible(find.text('Memory'));
-    await tester.tap(find.text('Memory'));
-    await tester.pump();
-    await tester.pump(Duration.zero);
-    await tester.pumpAndSettle();
+    await openMemoryLayer(tester);
     fake.sent.clear(); // isolate the assertions below to the chevron tap
 
     await tester.tap(findHero(HeroIcon.chevronLeft));
@@ -166,11 +175,7 @@ void main() {
     final navKey = GlobalKey<NavigatorState>();
     await pumpHost(tester, navKey, settings, memory);
 
-    await tester.ensureVisible(find.text('Memory'));
-    await tester.tap(find.text('Memory'));
-    await tester.pump();
-    await tester.pump(Duration.zero);
-    await tester.pumpAndSettle();
+    await openMemoryLayer(tester);
     expect(find.text('Memory'), findsOneWidget, reason: 'sanity: on Memory');
 
     // The framework's own PopScope tests drive a simulated system back via
@@ -211,6 +216,64 @@ void main() {
   });
 
   testWidgets(
+      'the X button closes the whole drawer from the Memory layer in one tap',
+      (tester) async {
+    // Regression: MeridianDrawer's X and scrim both call onClose ->
+    // Navigator.maybePop(), which used to route through this host's own
+    // PopScope and get swallowed at the Memory layer (canPop: false), so a
+    // first tap silently returned to Settings instead of closing. Fixed by
+    // handing onClose Navigator.pop() (drawer.dart), which does not consult
+    // PopScope at all — this pins that X closes in ONE tap regardless of
+    // layer, and that BOTH clients end closed (mirroring main.dart's shared
+    // whenComplete).
+    final (settings, memory, conn, _) = await openedClients(tester);
+    final navKey = GlobalKey<NavigatorState>();
+    await pumpHost(tester, navKey, settings, memory);
+
+    await openMemoryLayer(tester);
+    expect(find.text('Memory'), findsOneWidget, reason: 'sanity: on Memory');
+
+    await tester.tap(findHero(HeroIcon.xMark));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SettingsDrawerHost), findsNothing,
+        reason: 'X from the Memory layer must close the whole drawer, not '
+            'just pop back to Settings');
+    expect(settings.isOpen, isFalse);
+    expect(memory.isOpen, isFalse);
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
+      'tapping the scrim closes the whole drawer from the Memory layer in '
+      'one tap', (tester) async {
+    // Same regression as the X test above, via the scrim's GestureDetector
+    // instead of the header's X icon — both call the same onClose.
+    final (settings, memory, conn, _) = await openedClients(tester);
+    final navKey = GlobalKey<NavigatorState>();
+    await pumpHost(tester, navKey, settings, memory);
+
+    await openMemoryLayer(tester);
+    expect(find.text('Memory'), findsOneWidget, reason: 'sanity: on Memory');
+
+    // Well clear of the 384px panel on the right, same offset drawer_test.dart
+    // uses for its own scrim test.
+    await tester.tapAt(const Offset(100, 400));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SettingsDrawerHost), findsNothing,
+        reason: 'the scrim from the Memory layer must close the whole '
+            'drawer, not just pop back to Settings');
+    expect(settings.isOpen, isFalse);
+    expect(memory.isOpen, isFalse);
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
       'the pushed drawer route is not barrier-dismissible', (tester) async {
     // The deferred finding from Task 1: meridianHostedDrawerRoute existed
     // but had no caller, so nothing pinned its barrierDismissible: false.
@@ -233,22 +296,32 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('no text inherits the missing-Material underline',
+  testWidgets('no text inherits the missing-Material underline, on either layer',
       (tester) async {
     // The same bug drawer_test.dart guards against, ported here because this
     // host is a NEW composition on top of MeridianDrawer/PopScope — worth
     // pinning directly rather than trusting the sibling test transitively.
+    // Checked on BOTH layers: this bug has shipped twice in this codebase,
+    // and a check that only ever ran against Settings would not prove
+    // anything about MemoryPanelView's own text.
     final (settings, memory, conn, _) = await openedClients(tester);
     final navKey = GlobalKey<NavigatorState>();
     await pumpHost(tester, navKey, settings, memory);
 
-    final painted = tester.widgetList<RichText>(find.byType(RichText));
-    expect(painted, isNotEmpty);
-    for (final rich in painted) {
-      final style = (rich.text as TextSpan).style;
-      expect(style?.decoration ?? TextDecoration.none, TextDecoration.none,
-          reason: 'decoration leaked into "${rich.text.toPlainText()}"');
+    void expectNoUnderline() {
+      final painted = tester.widgetList<RichText>(find.byType(RichText));
+      expect(painted, isNotEmpty);
+      for (final rich in painted) {
+        final style = (rich.text as TextSpan).style;
+        expect(style?.decoration ?? TextDecoration.none, TextDecoration.none,
+            reason: 'decoration leaked into "${rich.text.toPlainText()}"');
+      }
     }
+
+    expectNoUnderline(); // Settings layer
+
+    await openMemoryLayer(tester);
+    expectNoUnderline(); // Memory layer
 
     await conn.disconnect();
   });

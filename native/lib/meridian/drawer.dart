@@ -251,9 +251,18 @@ Route<void> meridianDrawerRoute({
 /// and builds its own MeridianDrawer, so `title`, `onBack` and `child` can all
 /// change without pushing a second route — one scrim, one slide, and system
 /// back can pop a layer instead of the whole drawer.
+///
+/// [onClose] is handed `Navigator.pop`, not `maybePop`: a builder that wants
+/// system back to pop a sub-layer instead of the route (e.g. via `PopScope`)
+/// still needs its own close controls (✕, scrim) to close the WHOLE drawer in
+/// one tap regardless of which layer is showing. `maybePop` would route
+/// through that same `PopScope` and get swallowed by it — `pop` does not
+/// consult `Route.popDisposition`/`PopScope.canPop` at all, so it bypasses
+/// the builder's own layer interception the same way an explicit dialog
+/// button bypasses a `PopScope` guarding the hardware back gesture.
 Route<void> meridianHostedDrawerRoute({
   required Widget Function(BuildContext, Animation<double>, VoidCallback onClose)
       builder,
 }) =>
     _drawerRoute((context, animation) =>
-        builder(context, animation, () => Navigator.of(context).maybePop()));
+        builder(context, animation, () => Navigator.of(context).pop()));
