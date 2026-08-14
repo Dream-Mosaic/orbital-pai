@@ -154,6 +154,23 @@ defmodule AppWeb.Panels.MemoryChannelTest do
     assert Memory.list_facts(alice.id) == []
   end
 
+  # A rejected write must not broadcast. Without this, a stray
+  # Memory.broadcast_updated/0 on the rejection branch wouldn't fail this test
+  # in isolation the way the "exactly one push" test catches an extra push on
+  # a SUCCESSFUL write — there'd be no baseline push to compare against, so it
+  # has to assert an explicit absence instead.
+  test "a rejected add_fact (blank or whitespace) produces no state push",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, socket} = join!(socket, alice)
+    assert_push "state", %{facts: []}
+
+    for content <- ["", "   "] do
+      ref = push(socket, "add_fact", %{"content" => content})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute_push "state", _, 200
+    end
+  end
+
   test "a non-string add_fact payload is bad_request", %{socket: socket, alice: alice} do
     {:ok, _reply, socket} = join!(socket, alice)
     assert_push "state", %{facts: []}
