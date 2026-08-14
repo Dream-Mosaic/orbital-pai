@@ -314,4 +314,80 @@ defmodule AppWeb.Panels.MemoryChannelTest do
       refute_push "state", _, 200
     end
   end
+
+  # Every handler above resolves the user from socket.assigns.user_id (the
+  # TOKEN), never from the topic suffix — mirroring "the state is the TOKEN's
+  # user, not the topic's" on the read path. These join ALICE's socket on
+  # BOB's topic and prove each write still lands on Alice's rows. Without
+  # this, a "derive uid once in join/2 from the topic, it's right there"
+  # tidy-up would make every write cross-tenant while every OTHER test stays
+  # green, because every other test happens to join a user's own topic from
+  # their own socket, so the assigns and the topic suffix are the same value.
+  describe "writes use the TOKEN's user, not the topic's" do
+    test "add_fact writes to the token's user, not the topic's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _reply, socket} = subscribe_and_join(socket, "panel:memory:#{bob.id}", %{})
+      assert_push "state", %{facts: []}
+
+      ref = push(socket, "add_fact", %{"content" => "alice via bob's topic"})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: [%{content: "alice via bob's topic"}]}
+
+      assert [%{content: "alice via bob's topic"}] = Memory.list_facts(alice.id)
+      assert Memory.list_facts(bob.id) == []
+    end
+
+    test "delete_fact deletes the token's user's fact, not the topic's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, fact} =
+        Memory.create_fact(%{content: "alice's fact", source: "user", user_id: alice.id})
+
+      {:ok, _reply, socket} = subscribe_and_join(socket, "panel:memory:#{bob.id}", %{})
+      assert_push "state", %{facts: [%{content: "alice's fact"}]}
+
+      ref = push(socket, "delete_fact", %{"id" => fact.id})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: []}
+
+      assert Memory.list_facts(alice.id) == []
+    end
+
+    test "save_summary writes to the token's user, not the topic's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _reply, socket} = subscribe_and_join(socket, "panel:memory:#{bob.id}", %{})
+      assert_push "state", %{summary: ""}
+
+      ref = push(socket, "save_summary", %{"summary" => "alice via bob's topic"})
+      assert_reply ref, :ok
+      assert_push "state", %{summary: "alice via bob's topic"}
+
+      assert Memory.get_summary(alice.id).content == "alice via bob's topic"
+      assert Memory.get_summary(bob.id).content == ""
+    end
+
+    test "forget_me wipes the token's user, not the topic's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _} =
+        Memory.create_fact(%{content: "alice's fact", source: "user", user_id: alice.id})
+
+      {:ok, _} = Memory.put_summary(alice.id, "alice's summary")
+
+      {:ok, _} =
+        Memory.create_fact(%{content: "bob's fact", source: "user", user_id: bob.id})
+
+      {:ok, _} = Memory.put_summary(bob.id, "bob's summary")
+
+      {:ok, _reply, socket} = subscribe_and_join(socket, "panel:memory:#{bob.id}", %{})
+      assert_push "state", %{facts: [%{content: "alice's fact"}]}
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: [], summary: ""}
+
+      assert Memory.list_facts(alice.id) == []
+      assert Memory.get_summary(alice.id).content == ""
+      assert length(Memory.list_facts(bob.id)) == 1
+      assert Memory.get_summary(bob.id).content == "bob's summary"
+    end
+  end
 end
