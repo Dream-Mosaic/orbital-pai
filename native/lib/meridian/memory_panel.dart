@@ -69,6 +69,12 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
     if (_addFactFocus.hasFocus) _revealAboveKeyboard(_addFactFocus);
   }
 
+  /// How many extra frames [_correctForKeyboard] keeps re-asserting itself
+  /// for after the first one. `EditableText`'s own caret-follow animation
+  /// (`_caretAnimationDuration`, 100ms) is the thing it is racing — at 16ms/
+  /// frame that is ~6 frames, so this comfortably outlasts it.
+  static const int _keyboardClearanceFrames = 10;
+
   /// The drawer's body is a bare `SingleChildScrollView` with no `Scaffold`
   /// above it, so nothing shrinks it for an on-screen keyboard the way
   /// `resizeToAvoidBottomInset` would — the ambient viewport's own bounds
@@ -78,33 +84,44 @@ class _MemoryPanelViewState extends State<MemoryPanelView>
   /// top edge and nudge the ancestor `Scrollable` by that much.
   void _revealAboveKeyboard(FocusNode node) {
     if (!node.hasFocus) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !node.hasFocus) return;
-      final renderObject = node.context?.findRenderObject();
-      if (renderObject is! RenderBox || !renderObject.attached) return;
-      final media = MediaQuery.of(context);
-      final bottomInset = media.viewInsets.bottom;
-      if (bottomInset <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _correctForKeyboard(node, _keyboardClearanceFrames));
+  }
+
+  /// `EditableText` runs its OWN caret-follow scroll on this same focus
+  /// change (and metrics change), and it does not know about
+  /// `MediaQuery.viewInsets` either — it just keeps the caret within the
+  /// ambient (unshrunk) viewport, which the field already satisfies without
+  /// moving nearly as far as clearing the keyboard needs. That is an
+  /// ANIMATED scroll (`ScrollPosition.animateTo`, ~100ms), so a single
+  /// `jumpTo` here can land correctly on one frame and then get overwritten
+  /// on a later frame as that animation keeps driving toward its own
+  /// (keyboard-unaware) target. `jumpTo` cancels whichever scroll activity
+  /// is currently running, so re-asserting our own correction for a few more
+  /// frames — rather than once — means whichever of us moves last wins, and
+  /// it is always us.
+  void _correctForKeyboard(FocusNode node, int framesLeft) {
+    if (!mounted || !node.hasFocus) return;
+    final renderObject = node.context?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.attached) return;
+    final media = MediaQuery.of(context);
+    final bottomInset = media.viewInsets.bottom;
+    final position = Scrollable.maybeOf(context)?.position;
+    if (bottomInset > 0 && position != null) {
       final fieldBottom =
           renderObject.localToGlobal(Offset(0, renderObject.size.height)).dy;
       final keyboardTop = media.size.height - bottomInset;
       final overlap = fieldBottom - keyboardTop;
-      if (overlap <= 0) return;
-      final position = Scrollable.maybeOf(context)?.position;
-      if (position == null) return;
-      // +48 clears the InputDecorator's own border/padding, which sits
-      // outside the FocusNode's (EditableText-only) rect measured above.
-      //
-      // A jump, not animateTo: focus and the metrics change the keyboard
-      // itself causes both re-fire this callback, and a second animateTo
-      // arriving before the first one finishes lets its TickerFuture resolve
-      // early at whatever offset it had reached — sometimes still the start
-      // — so the field would never reliably land clear of the keyboard. A
-      // jump commits to the correct position in one step instead of racing
-      // an animation against its own re-entry.
-      position.jumpTo((position.pixels + overlap + 48)
-          .clamp(0.0, position.maxScrollExtent));
-    });
+      if (overlap > 0) {
+        // +48 clears the InputDecorator's own border/padding, which sits
+        // outside the FocusNode's (EditableText-only) rect measured above.
+        position.jumpTo((position.pixels + overlap + 48)
+            .clamp(0.0, position.maxScrollExtent));
+      }
+    }
+    if (framesLeft <= 0) return;
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _correctForKeyboard(node, framesLeft - 1));
   }
 
   // Seed from the server only when the user is not in the field. Without

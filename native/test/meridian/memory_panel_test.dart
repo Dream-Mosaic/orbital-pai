@@ -383,4 +383,66 @@ void main() {
 
     await conn.disconnect();
   });
+
+  testWidgets(
+      'the summary field also stays on screen under a keyboard inset '
+      '(landscape)', (tester) async {
+    // The summary field is the very FIRST thing in the panel (right behind
+    // the drawer's fixed header), so on a portrait phone — tall screen,
+    // proportionally short keyboard — its unscrolled position never reaches
+    // anywhere close to the keyboard-covered zone: nothing sits above it
+    // that could push it down there, and no realistic keyboard covers
+    // enough of an 800-tall screen to reach a field sitting at y ~= 180.
+    // Piling on content (facts, a huge summary) does not change that; it
+    // only pushes fields BELOW the summary section down. The scenario where
+    // this field genuinely needs the same keyboard-avoidance the add-fact
+    // field gets is a SHORT viewport — landscape phone orientation, which
+    // this app supports (no orientation lock; CLAUDE.md lists Android
+    // phone+tablet as a target) — where the keyboard covers a much larger
+    // fraction of a much shorter screen. Verified empirically: an 800x360
+    // landscape screen with a 220-tall keyboard (both realistic — many
+    // Android phones are ~360 logical px wide, i.e. that tall in landscape;
+    // 220 is an ordinary landscape keyboard-with-suggestions height) leaves
+    // only the top 140px clear, and the field's OWN unscrolled bottom (181)
+    // already sits below that — so this is not a manufactured fixture, it
+    // is the field's real, unmodified position in a real supported
+    // orientation.
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.physicalSize = const Size(800, 360);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 220);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianDrawer(
+        title: 'Memory',
+        animation: const AlwaysStoppedAnimation<double>(1),
+        onClose: () {},
+        child: MemoryPanelView(client: client),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Sanity: confirm the hazard is real BEFORE the fix gets a chance to
+    // act, i.e. the field's own natural position is already past the fold.
+    final unfocused =
+        tester.getRect(find.byKey(MemoryPanelView.summaryFieldKey));
+    expect(unfocused.bottom, greaterThan(360 - 220),
+        reason: 'sanity: the field must start out behind the keyboard line, '
+            'or this test could pass without the fix ever running');
+
+    await tester.showKeyboard(find.byKey(MemoryPanelView.summaryFieldKey));
+    await tester.pumpAndSettle();
+
+    final box = tester.getRect(find.byKey(MemoryPanelView.summaryFieldKey));
+    expect(box.bottom, lessThanOrEqualTo(360 - 220),
+        reason: 'the summary field must scroll clear of the keyboard too, '
+            'not sit behind it');
+
+    await conn.disconnect();
+  });
 }
