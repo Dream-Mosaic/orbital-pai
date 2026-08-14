@@ -180,4 +180,138 @@ defmodule AppWeb.Panels.MemoryChannelTest do
 
     assert Memory.list_facts(alice.id) == []
   end
+
+  describe "delete_fact" do
+    test "deletes the user's own fact and a fresh state follows",
+         %{socket: socket, alice: alice} do
+      {:ok, fact} =
+        Memory.create_fact(%{content: "likes tea", source: "user", user_id: alice.id})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: [%{content: "likes tea"}]}
+
+      ref = push(socket, "delete_fact", %{"id" => fact.id})
+      assert_reply ref, :ok
+
+      assert Memory.list_facts(alice.id) == []
+      assert_push "state", %{facts: []}
+    end
+
+    # The id is client-supplied. Resolving it against Memory.list_facts/1
+    # (this user's own rows) rather than the blind Memory.get_fact/1 is the
+    # entire authorisation story for this handler.
+    test "another user's fact id is bad_request and deletes nothing",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, bobs_fact} =
+        Memory.create_fact(%{content: "bob's fact", source: "user", user_id: bob.id})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: []}
+
+      ref = push(socket, "delete_fact", %{"id" => bobs_fact.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute_push "state", _, 200
+
+      assert length(Memory.list_facts(bob.id)) == 1
+    end
+
+    # A string id would fail to match any fact by equality regardless of the
+    # is_integer/1 guard, so it can't tell us the guard is doing anything. A
+    # float that is numerically EQUAL to a real id is the discriminating
+    # case: Elixir's `==` treats `1 == 1.0` as true, so without the guard
+    # Enum.find/2 would match this fact (and delete it) even though the id
+    # sent was not an integer.
+    test "a non-integer id is bad_request and deletes nothing",
+         %{socket: socket, alice: alice} do
+      {:ok, fact} =
+        Memory.create_fact(%{content: "likes tea", source: "user", user_id: alice.id})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: [%{content: "likes tea"}]}
+
+      for id <- [fact.id * 1.0, "#{fact.id}", nil] do
+        ref = push(socket, "delete_fact", %{"id" => id})
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      refute_push "state", _, 200
+      assert Enum.map(Memory.list_facts(alice.id), & &1.id) == [fact.id]
+    end
+  end
+
+  describe "forget_me" do
+    test "wipes this user's facts and summary and nobody else's",
+         %{socket: socket, alice: alice, bob: bob} do
+      {:ok, _} =
+        Memory.create_fact(%{content: "likes tea", source: "user", user_id: alice.id})
+
+      {:ok, _} = Memory.put_summary(alice.id, "alice's summary")
+
+      {:ok, _} =
+        Memory.create_fact(%{content: "likes coffee", source: "user", user_id: bob.id})
+
+      {:ok, _} = Memory.put_summary(bob.id, "bob's summary")
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: [%{content: "likes tea"}]}
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: [], summary: ""}
+
+      assert Memory.list_facts(alice.id) == []
+      assert Memory.get_summary(alice.id).content == ""
+      assert length(Memory.list_facts(bob.id)) == 1
+      assert Memory.get_summary(bob.id).content == "bob's summary"
+    end
+
+    test "resets a LIVE conversation too", %{socket: socket, alice: alice} do
+      sid = to_string(alice.id)
+      {:ok, pid} = App.Conversations.Sessions.start(sid, self())
+      on_exit(fn -> App.Conversations.Sessions.stop(sid) end)
+
+      # Give the FSM turn state that ONLY clear_memory's reset_turn_fields/1
+      # touches, so we can tell "the cast landed" from "it was never sent" —
+      # Process.alive?/1 alone can't: the process stays up either way.
+      :sys.replace_state(pid, fn {state, data} ->
+        {state, %{data | pending_request: "leftover"}}
+      end)
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: []}
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: []}
+
+      # clear_memory/1 is a cast; let it land, then read the FSM's own state.
+      Process.sleep(50)
+      assert Process.alive?(pid)
+      assert :sys.get_state(pid) |> elem(1) |> Map.get(:pending_request) == nil
+    end
+
+    test "replies :ok with no live session", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: []}
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: []}
+    end
+
+    # Memory.forget/1 already broadcasts internally, so the handler must NOT
+    # call Memory.broadcast_updated/0 again — that would push "state" twice
+    # for one wipe.
+    test "triggers exactly one state push, not two", %{socket: socket, alice: alice} do
+      {:ok, _} = Memory.create_fact(%{content: "likes tea", source: "user", user_id: alice.id})
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{facts: [%{content: "likes tea"}]}
+
+      ref = push(socket, "forget_me", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{facts: []}
+      refute_push "state", _, 200
+    end
+  end
 end

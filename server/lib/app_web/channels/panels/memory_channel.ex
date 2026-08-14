@@ -37,6 +37,7 @@ defmodule AppWeb.Panels.MemoryChannel do
   """
   use AppWeb, :channel
 
+  alias App.Conversations.{Conversation, Sessions}
   alias App.Memory
 
   @impl true
@@ -78,6 +79,27 @@ defmodule AppWeb.Panels.MemoryChannel do
     end
   end
 
+  def handle_in("delete_fact", %{"id" => id}, socket) when is_integer(id) do
+    # The id is client-supplied, so it is resolved against THIS user's own
+    # facts. Memory.get_fact/1 exists and is a blind Repo.get — not that.
+    case Enum.find(Memory.list_facts(socket.assigns.user_id), &(&1.id == id)) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      fact ->
+        Memory.delete_fact(fact)
+        # delete_fact/1 does not broadcast; forget/1 below already does.
+        Memory.broadcast_updated()
+        {:reply, :ok, socket}
+    end
+  end
+
+  def handle_in("forget_me", _payload, socket) do
+    Memory.forget(socket.assigns.user_id)
+    clear_live_fsm(socket)
+    {:reply, :ok, socket}
+  end
+
   # A client bug must not crash the channel and drop the panel.
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
@@ -85,6 +107,15 @@ defmodule AppWeb.Panels.MemoryChannel do
   @impl true
   def handle_info(:push_state, socket), do: {:noreply, push_state(socket)}
   def handle_info(:memory_updated, socket), do: {:noreply, push_state(socket)}
+
+  # The DB is only half of it: the running FSM still holds turn state that was
+  # just deleted. Mirrors conversation_live.ex's clear_live_fsm/1.
+  defp clear_live_fsm(socket) do
+    case Sessions.lookup(to_string(socket.assigns.user_id)) do
+      {:ok, pid} -> Conversation.clear_memory(pid)
+      :error -> :ok
+    end
+  end
 
   defp push_state(socket) do
     uid = socket.assigns.user_id
