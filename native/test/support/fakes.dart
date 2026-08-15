@@ -7,20 +7,28 @@ import 'package:henry_wall/audio/mic_capture.dart';
 /// Headless MicCapture. `implements` (not `extends`) so no AudioRecorder — and
 /// therefore no platform channel — is ever constructed.
 class FakeMic implements MicCapture {
-  FakeMic({this.startDelay = Duration.zero}) {
-    _chunks = StreamController<Uint8List>(
-      onListen: () => listening = true,
-      onCancel: () => cancelled = true,
-    );
-  }
+  FakeMic({this.startDelay = Duration.zero});
 
   final Duration startDelay;
-  late final StreamController<Uint8List> _chunks;
+
+  /// ONE controller per start(). The real MicCapture opens a new recording
+  /// session each time; a single-subscription StreamController cannot be
+  /// listened to twice, so a shared one made every SECOND mic session throw
+  /// "Stream has already been listened to" inside startMic's try/catch —
+  /// silently, with micOn still true. Measured 2026-08-15.
+  final List<StreamController<Uint8List>> sessions = <StreamController<Uint8List>>[];
+
   int startCalls = 0;
   int stopCalls = 0;
   bool listening = false;
   bool cancelled = false;
   bool _recording = false;
+
+  /// The stream handed out by the most recent start().
+  StreamController<Uint8List> get current => sessions.last;
+
+  /// Feed one PCM frame to the current session.
+  void emit(Uint8List chunk) => current.add(chunk);
 
   @override
   bool get isRecording => _recording;
@@ -29,8 +37,13 @@ class FakeMic implements MicCapture {
   Future<Stream<Uint8List>> start() async {
     startCalls++;
     if (startDelay > Duration.zero) await Future<void>.delayed(startDelay);
+    final c = StreamController<Uint8List>(
+      onListen: () => listening = true,
+      onCancel: () => cancelled = true,
+    );
+    sessions.add(c);
     _recording = true;
-    return _chunks.stream;
+    return c.stream;
   }
 
   @override

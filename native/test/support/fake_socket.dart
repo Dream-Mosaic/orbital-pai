@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:henry_wall/phoenix/phoenix_socket.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -15,7 +16,12 @@ class FakeSocket {
   }) {
     ctrl.foreign.stream.listen((f) {
       sent.add(f);
-      final parts = jsonDecode(f as String) as List<dynamic>;
+      // Binary pushes (mic PCM, enrollment PCM) are not JSON and take part in
+      // no join handshake. Without this, `f as String` throws INSIDE this
+      // listener and takes the whole fake socket down the first time a test
+      // streams audio.
+      if (f is! String) return;
+      final parts = jsonDecode(f) as List<dynamic>;
       if (parts[3] != 'phx_join') return;
       final topic = parts[2] as String;
       if (silentTopics.contains(topic)) return;
@@ -51,8 +57,17 @@ class FakeSocket {
   late final PhoenixSocket socket;
   bool closed = false;
 
-  List<String> get joinedTopics => sent
-      .map((f) => jsonDecode(f as String) as List<dynamic>)
+  /// The text frames the client sent, decoded. Binary pushes are excluded —
+  /// they are not JSON.
+  List<List<dynamic>> get textFrames => sent
+      .whereType<String>()
+      .map((f) => jsonDecode(f) as List<dynamic>)
+      .toList();
+
+  /// The Phoenix V2 binary pushes the client sent.
+  List<Uint8List> get binaryFrames => sent.whereType<Uint8List>().toList();
+
+  List<String> get joinedTopics => textFrames
       .where((p) => p[3] == 'phx_join')
       .map((p) => p[2] as String)
       .toList();

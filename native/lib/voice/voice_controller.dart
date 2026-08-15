@@ -645,11 +645,12 @@ class VoiceController extends ChangeNotifier {
         unawaited(_mic.stop());
         return;
       }
-      _micOn = true;
-      _talking = true;
-      _turnState = TurnState.idle;
-      _syncOrb();
-      _log('mic started (16k PCM16)');
+      // Subscribe BEFORE flipping the flags. `stream.listen` can throw, and
+      // with the flags set first that throw landed in the catch below with
+      // `_micOn` still true — the controller reported a live microphone while
+      // `_micSub` was null and not one frame was flowing. Streams never
+      // deliver synchronously on listen, so nothing can arrive before the
+      // flags below are set.
       _micSub = stream.listen((chunk) {
         // Same race as _handleAudio: cancelling the subscription is async, so a
         // chunk can still arrive after orbFrame.dispose() ran synchronously.
@@ -662,6 +663,11 @@ class VoiceController extends ChangeNotifier {
           orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
       }, onError: (Object e) => _log('mic error: $e'));
+      _micOn = true;
+      _talking = true;
+      _turnState = TurnState.idle;
+      _syncOrb();
+      _log('mic started (16k PCM16)');
       _safeNotify();
     } catch (e) {
       _micWanted = false;

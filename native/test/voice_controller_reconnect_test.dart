@@ -71,6 +71,9 @@ class FakeSocket {
       .map((f) => (jsonDecode(f) as List<dynamic>)[3] as String)
       .toList();
 
+  /// The Phoenix V2 binary pushes this client sent (mic PCM, enrollment PCM).
+  List<Uint8List> get binaryFrames => sent.whereType<Uint8List>().toList();
+
   void push(String event, String jsonPayload) =>
       ctrl.foreign.sink.add('[null,null,"voice:henry","$event",$jsonPayload]');
 
@@ -94,18 +97,27 @@ Future<PhoenixSocket> noSocket() async => throw StateError('no socket');
 /// Builds the pair under test. Every reconnect assertion below is about the
 /// CONNECTION; the controller is along for the ride, which is the point of the
 /// refactor.
-({AppConnection conn, VoiceController vc}) build({
-  required Future<PhoenixSocket> Function() connector,
+///
+/// [connector] is optional: tests that don't care about the transport (mic-only
+/// tests) get a default in-memory [FakeSocket], exposed as [fake] on the
+/// returned record. Tests that DO care about reconnect behaviour still pass
+/// their own `connector` and capture their own `FakeSocket`(s) exactly as
+/// before — the default one built here is simply unused in that case.
+({AppConnection conn, VoiceController vc, FakeSocket fake}) build({
+  Future<PhoenixSocket> Function()? connector,
   List<Duration> backoff = const [Duration(days: 1)],
   Duration joinTimeout = const Duration(seconds: 15),
   MicCapture? mic,
   AudioTrackPlayer? player,
 }) {
+  final fake = FakeSocket();
   final conn = AppConnection(
-      connector: connector, rejoinBackoff: backoff, joinTimeout: joinTimeout);
+      connector: connector ?? (() async => fake.socket),
+      rejoinBackoff: backoff,
+      joinTimeout: joinTimeout);
   final vc = VoiceController(
       connection: conn, mic: mic ?? FakeMic(), player: player ?? FakePlayer());
-  return (conn: conn, vc: vc);
+  return (conn: conn, vc: vc, fake: fake);
 }
 
 void main() {
@@ -901,4 +913,102 @@ void main() {
     ));
     expect(vc.wakeLocked, isTrue);
   });
+
+  test('a second mic session gets a live stream, not a swallowed error',
+      () async {
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    await b.vc.startMic();
+    await b.vc.stopMic();
+    await b.vc.startMic();
+    await settle();
+
+    expect(mic.startCalls, 2);
+    expect(b.vc.micOn, isTrue);
+    expect(b.vc.eventLog.where((l) => l.startsWith('mic start failed')), isEmpty,
+        reason: 'the second start must actually subscribe, not throw into the '
+            'catch with _micOn already set true');
+  });
+
+  test('a mic frame from the live session reaches the voice channel',
+      () async {
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+    b.fake.sent.clear();
+
+    mic.emit(Uint8List.fromList(const [1, 2, 3, 4]));
+    await settle();
+
+    expect(b.fake.binaryFrames, hasLength(1),
+        reason: 'the frame must be pushed as a Phoenix binary frame, and '
+            'FakeSocket must survive receiving one');
+  });
+
+  test('a mic frame after a second session reaches the CURRENT session, not '
+      'a dead first one', () async {
+    // FakeMic.emit must target the live (most recent) controller. Writing to
+    // sessions.first instead would silently drop every frame once a test has
+    // gone through a second start() — exactly the shape Task 2/5's
+    // suspend/resume cycles exercise, and the two tests above (each with only
+    // ONE session open when they emit) cannot tell `current` from `first`.
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    await b.vc.startMic();
+    await b.vc.stopMic();
+    await b.vc.startMic();
+    await settle();
+    b.fake.sent.clear();
+
+    mic.emit(Uint8List.fromList(const [5, 6, 7, 8]));
+    await settle();
+
+    expect(b.fake.binaryFrames, hasLength(1),
+        reason: 'emit() must feed the CURRENT (second) session, not the dead '
+            'first one left over from the earlier stopMic()');
+  });
+
+  test('a start whose subscribe throws leaves micOn false', () async {
+    final mic = _RelistenMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    await b.vc.startMic();
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'a controller that reports a live mic with no subscription is '
+            'the "silently deaf" failure this whole phase is about');
+  });
+}
+
+/// A mic whose second start() hands back a stream that has already been
+/// listened to — the exact shape of the failure the old FakeMic hid.
+class _RelistenMic implements MicCapture {
+  final _c = StreamController<Uint8List>();
+  late final Stream<Uint8List> _dead = _c.stream..listen((_) {});
+  @override
+  bool get isRecording => true;
+  @override
+  Future<Stream<Uint8List>> start() async => _dead;
+  @override
+  Future<void> stop() async {}
 }
