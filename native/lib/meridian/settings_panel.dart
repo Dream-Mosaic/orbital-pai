@@ -14,25 +14,31 @@ import 'tokens.dart';
 const Color _dangerRed = Color(0xFFEA003E);
 
 /// The Settings drawer's Voice / Danger-zone / About sections, plus the
-/// Memory nav row — the port of `settings_panel/1` in
+/// Memory and Voice Lock nav rows — the port of `settings_panel/1` in
 /// `lib/app_web/components/voice_modals.ex` (the function itself runs
-/// ~541-682). The Account, Active-now and Switch-user sections, and the
-/// Voice-Lock nav row, are still OUT of scope; see the design's §2 Scope
+/// ~541-682). The Account, Active-now and Switch-user sections are still OUT
+/// of scope; see the design's §2 Scope
 /// (`docs/superpowers/specs/2026-08-11-settings-panel-design.md`):
 /// Switch-user is blocked on native session support (roadmap phase 7),
 /// Active-now is a "who else is online" strip not worth a subscription yet.
-/// Memory used to be out of scope too — it needed the layered-drawer
-/// mechanic this view deliberately does not build — but that mechanic now
-/// exists (`settings_drawer_host.dart`), so [onOpenMemory] is this view's
-/// half of the wiring: a bare callback, with no navigation of its own.
+/// Memory and Voice Lock used to be out of scope too — they needed the
+/// layered-drawer mechanic this view deliberately does not build — but that
+/// mechanic now exists (`settings_drawer_host.dart`), so [onOpenMemory] and
+/// [onOpenVoiceLock] are this view's half of the wiring: bare callbacks, with
+/// no navigation of its own.
 class SettingsPanelView extends StatelessWidget {
-  const SettingsPanelView({super.key, required this.client, this.onOpenMemory});
+  const SettingsPanelView(
+      {super.key, required this.client, this.onOpenMemory, this.onOpenVoiceLock});
 
   final SettingsClient client;
 
   /// Null hides the Memory row entirely (e.g. a caller with nowhere to send
   /// the tap). settings_drawer_host.dart is the only caller that supplies it.
   final VoidCallback? onOpenMemory;
+
+  /// Null hides the Voice Lock row entirely. settings_drawer_host.dart is the
+  /// only caller that supplies it.
+  final VoidCallback? onOpenVoiceLock;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -49,26 +55,30 @@ class SettingsPanelView extends StatelessWidget {
               _dangerZone(context),
               const SizedBox(height: 24),
               _about(state),
-              if (onOpenMemory != null) ...[
+              if (onOpenMemory != null || onOpenVoiceLock != null) ...[
                 const SizedBox(height: 24),
-                _memoryRow(),
+                if (onOpenMemory != null) _navRow('Memory', onOpenMemory!),
+                if (onOpenMemory != null && onOpenVoiceLock != null)
+                  const SizedBox(height: 4), // space-y-1 = 0.25rem
+                if (onOpenVoiceLock != null)
+                  _navRow('Voice Lock', onOpenVoiceLock!),
               ],
             ],
           );
         },
       );
 
-  /// `voice_modals.ex:662-670` — full-width ghost row, label left, a
-  /// 60%-opacity `→` right.
-  Widget _memoryRow() => GestureDetector(
+  /// `voice_modals.ex:662-679` — full-width ghost row, label left, a
+  /// 60%-opacity `→` right. Memory and Voice Lock are the same markup.
+  Widget _navRow(String label, VoidCallback onTap) => GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onOpenMemory,
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween, // justify-between
             children: [
-              const Text('Memory', style: TextStyle(fontSize: 14, color: M.ink)),
+              Text(label, style: const TextStyle(fontSize: 14, color: M.ink)),
               Text('→',
                   style:
                       TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.6))),

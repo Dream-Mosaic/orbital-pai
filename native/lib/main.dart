@@ -15,6 +15,7 @@ import 'panels/badges_client.dart';
 import 'panels/memory_client.dart';
 import 'panels/reminders_client.dart';
 import 'panels/settings_client.dart';
+import 'panels/voice_lock_client.dart';
 import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 import 'web_url.dart';
@@ -64,6 +65,7 @@ class _HenryHomeState extends State<HenryHome> {
   late final RemindersClient _reminders;
   late final SettingsClient _settings;
   late final MemoryClient _memory;
+  late final VoiceLockClient _voiceLock;
 
   @override
   void initState() {
@@ -85,12 +87,21 @@ class _HenryHomeState extends State<HenryHome> {
       connection: _conn,
       onLocalClear: _vc.clearThread,
     );
+    // Registers nothing until the drawer's Voice Lock layer opens. The mic
+    // callbacks are the whole reason this client is constructed here: the
+    // conversation owns the one microphone, and enrollment borrows it.
+    _voiceLock = VoiceLockClient(
+      connection: _conn,
+      acquireMic: _vc.suspendMic,
+      releaseMic: _vc.resumeMic,
+    );
     // The connection owns connect + rejoin; consumers just open channels.
     _conn.connect();
   }
 
   @override
   void dispose() {
+    _voiceLock.dispose();
     _memory.dispose();
     _settings.dispose();
     _reminders.dispose();
@@ -129,13 +140,16 @@ class _HenryHomeState extends State<HenryHome> {
               onClose: onClose,
               settings: _settings,
               memory: _memory,
+              voiceLock: _voiceLock,
             ),
           ))
-          // The drawer can be dismissed from EITHER layer (✕, scrim, or
-          // back), so both clients have to close here rather than each
-          // owning its own whenComplete — whichever one was NOT visible at
-          // dismissal time is still open and would otherwise leak its topic.
+          // The drawer can be dismissed from ANY layer (✕, scrim, or back),
+          // so all three clients have to close here rather than each owning
+          // its own whenComplete — whichever ones were NOT visible at
+          // dismissal time are still open and would otherwise leak their
+          // topic.
           .whenComplete(() {
+        _voiceLock.close();
         _memory.close();
         _settings.close();
       });
