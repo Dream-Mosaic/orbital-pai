@@ -77,6 +77,18 @@ class VoiceController extends ChangeNotifier {
   // never resurrected by a later reconnect.
   bool _micWasOn = false;
 
+  // ---- the microphone loan (Voice Lock enrollment) ----
+
+  /// True between suspendMic() and resumeMic(): the conversation is not
+  /// holding the recorder, somebody else is.
+  bool _micLoaned = false;
+
+  /// Whether resumeMic() should switch the conversation's mic back on.
+  /// Captured at suspend time and kept current by start/stopMic DURING the
+  /// loan, so a power tap made while enrolling is honoured when the mic
+  /// comes back rather than silently lost.
+  bool _resumeMicWanted = false;
+
   // Mirrors index.js's `this.pttHeld`: read by the `state` snapshot merge and
   // written by pttPress/pttRelease.
   bool _pttHeld = false;
@@ -608,6 +620,10 @@ class VoiceController extends ChangeNotifier {
   @visibleForTesting
   bool get debugHasChannel => _channel != null;
 
+  /// Test seam: whether the microphone is currently on loan.
+  @visibleForTesting
+  bool get debugMicLoaned => _micLoaned;
+
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
     // dispose() closes the socket fire-and-forget, so frames already in flight can
@@ -633,8 +649,80 @@ class VoiceController extends ChangeNotifier {
     if (_playerReady) _player.setVolume(on ? 0.35 : 1.0);
   }
 
+  /// Hand the microphone to Voice Lock enrollment and get a fresh 16 kHz
+  /// PCM16 stream for it.
+  ///
+  /// One [MicCapture] wraps one AudioRecorder and most platforms permit one
+  /// recording session, so enrollment cannot open a second — the conversation
+  /// stops first. It also MUST stop for a reason better than plumbing: with
+  /// the conversation's mic live, reading an enrollment prompt aloud is a
+  /// perfectly good utterance and Henry answers it. The web has that bug
+  /// (assets/js/voice/enroll.js opens a SECOND getUserMedia); we are not
+  /// porting it.
+  ///
+  /// [resumeMic] is the only thing that gives the microphone back. Call it
+  /// from a `finally` — a miss leaves the assistant deaf with no visible
+  /// cause. If `_mic.start()` below throws, the loan flag stays set on
+  /// purpose: the caller's `finally` still runs resumeMic(), which clears it.
+  Future<Stream<Uint8List>> suspendMic() async {
+    if (_micLoaned) throw StateError('the microphone is already on loan');
+    _micLoaned = true;
+    _resumeMicWanted = _micOn || _micWanted;
+    _micWanted = false;
+    await _micSub?.cancel();
+    _micSub = null;
+    await _mic.stop();
+    _micOn = false;
+    _talking = false;
+    _turnState = TurnState.idle;
+    orbFrame.audioTarget = 0.0;
+    _syncOrb();
+    _log('mic loaned out (enrollment)');
+    return _mic.start();
+  }
+
+  /// Give the microphone back. Idempotent, and safe to call when [suspendMic]
+  /// itself threw — which is exactly why a caller's `finally` can call it
+  /// unconditionally.
+  ///
+  /// If the conversation had the mic before the loan it is switched back on.
+  /// When the channel is DOWN at that moment, startMic() would no-op on its
+  /// `_live == null` guard, so the restore is handed to the same re-arm flag
+  /// a socket death uses (`_micWasOn`, consumed by `_reArmMic` on the next
+  /// successful join). Without that, an outage during enrollment would leave
+  /// the device deaf until somebody tapped power.
+  Future<void> resumeMic() async {
+    if (!_micLoaned) return;
+    _micLoaned = false;
+    // Stop whatever session suspendMic() opened for the borrower. Harmless if
+    // start() threw and there is none: MicCapture.stop() short-circuits on
+    // !_recording.
+    await _mic.stop();
+    final restore = _resumeMicWanted;
+    _resumeMicWanted = false;
+    _log('mic returned');
+    if (!restore || _disposed) {
+      _safeNotify();
+      return;
+    }
+    if (_live == null) {
+      _micWasOn = _connection.wantConnected;
+      _safeNotify();
+      return;
+    }
+    await startMic();
+  }
+
   Future<void> startMic() async {
-    if (_disposed || _micOn || _micWanted || _live == null) return;
+    if (_disposed) return;
+    // The recorder is on loan to enrollment. Record the intent and let
+    // resumeMic() act on it, rather than opening a second recording session
+    // the platform will refuse.
+    if (_micLoaned) {
+      _resumeMicWanted = true;
+      return;
+    }
+    if (_micOn || _micWanted || _live == null) return;
     _micWanted = true;
     try {
       final stream = await _mic.start();
@@ -681,6 +769,14 @@ class VoiceController extends ChangeNotifier {
     // A deliberate stop must never be resurrected by a later reconnect, even
     // if a socket death upstream had already armed the restore flag.
     _micWasOn = false;
+    // On loan there is no conversation recording to stop, only the intent to
+    // restore one. Clearing it is what makes a power-off during enrollment
+    // stick once the microphone comes back.
+    if (_micLoaned) {
+      _resumeMicWanted = false;
+      _safeNotify();
+      return;
+    }
     await _micSub?.cancel();
     _micSub = null;
     await _mic.stop();
@@ -704,6 +800,10 @@ class VoiceController extends ChangeNotifier {
     _connection.dropListener(_topic, _adoptChannel);
     unawaited(_msgSub?.cancel());
     _channel = null;
+    // A dispose mid-enrollment still has to stop the recorder the loan
+    // opened; clearing the flag routes stopMic() down its real path.
+    _micLoaned = false;
+    _resumeMicWanted = false;
     stopMic();
     if (_playerReady) {
       _player.dispose();
