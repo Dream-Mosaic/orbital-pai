@@ -758,5 +758,164 @@ void main() {
 
       expect(order, ['mic_cancelled', 'released']);
     });
+
+    // Critical #1 from code review: micSub?.cancel() runs before
+    // releaseMic() in the finally and, before this fix, was unguarded — a
+    // throwing cancel() (realistic: this is the `record` plugin's stream,
+    // and a platform channel can throw on teardown) skipped releaseMic()
+    // entirely, leaving the mic suspended and recordingSlot stuck forever.
+    test(
+        '13: a mic subscription whose cancel() throws still releases and '
+        'clears recordingSlot', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>(
+        onCancel: () => throw StateError('platform cancel failed'),
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () async => releases++,
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      await fut.timeout(const Duration(milliseconds: 200));
+
+      expect(releases, 1,
+          reason: 'a throwing cancel() must not skip releaseMic()');
+      expect(client.recordingSlot, isNull);
+    });
+
+    // Critical #2 from code review: a throwing releaseMic() (realistic per
+    // review: VoiceController.resumeMic() awaits _mic.stop() unguarded and
+    // clears _micLoaned first, so a caller can't just retry) must not skip
+    // the rest of the finally — recordingSlot staying stuck would dead-button
+    // all three Record buttons forever, and a channel never left would sit
+    // in AppConnection._wanted and get silently rejoined on every reconnect
+    // (brief mutation #6's exact hazard, arriving by a different door).
+    test(
+        '14: a releaseMic() that throws still clears recordingSlot and '
+        'leaves enroll:7', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () async {
+          releases++;
+          throw StateError('resumeMic failed');
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      await fut.timeout(const Duration(milliseconds: 200));
+
+      expect(client.recordingSlot, isNull,
+          reason: 'a throwing releaseMic() must not leave the Record '
+              'buttons permanently disabled');
+      expect(
+        fake.textFrames.any((p) => p[3] == 'phx_leave' && p[2] == 'enroll:7'),
+        isTrue,
+        reason: 'a throwing releaseMic() must not leave enroll:7 wanted '
+            'forever — a topic left in _wanted is silently rejoined on '
+            'every reconnect',
+      );
+    });
+
+    // Not one of code review's two required tests, but the review named a
+    // hanging cancel() as the worse failure mode ("no exception, no
+    // recovery, silence") and asked for a bounded wait, not just a
+    // try/catch — this proves the bound actually fires. teardownTimeout is
+    // overridden short so the test doesn't have to wait out a real hang.
+    test(
+        '15: a mic subscription whose cancel() hangs does not block release '
+        'forever', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final neverDone = Completer<void>();
+      final localMic = StreamController<Uint8List>(
+        onCancel: () => neverDone.future,
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () async => releases++,
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+        teardownTimeout: const Duration(milliseconds: 30),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(releases, 1,
+          reason: 'a hanging cancel() must not block releaseMic() forever');
+      expect(client.recordingSlot, isNull);
+    });
   });
 }

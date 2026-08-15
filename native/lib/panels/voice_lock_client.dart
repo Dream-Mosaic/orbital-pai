@@ -99,6 +99,7 @@ class VoiceLockClient extends ChangeNotifier {
     required this.releaseMic,
     this.clipLimit = const Duration(seconds: 12),
     this.replyTimeout = const Duration(seconds: 10),
+    this.teardownTimeout = const Duration(seconds: 2),
   }) : _connection = connection;
 
   static const String topic = 'panel:voice_lock:henry';
@@ -119,6 +120,13 @@ class VoiceLockClient extends ChangeNotifier {
 
   /// How long to wait for the `clip_done` reply before giving up on it.
   final Duration replyTimeout;
+
+  /// How long the mic subscription's cancel() is allowed to hang before the
+  /// teardown gives up waiting on it and moves on anyway. A cancel() that
+  /// never completes must not be able to trap the finally forever — that is
+  /// silent, permanent deafness, worse than a thrown exception because there
+  /// is nothing to catch.
+  final Duration teardownTimeout;
 
   PhoenixChannel? _channel;
   StreamSubscription<DecodedMessage>? _sub;
@@ -173,10 +181,21 @@ class VoiceLockClient extends ChangeNotifier {
   /// EVERY exit from here runs the `finally`, and the `finally` is the ONE
   /// place that releases the microphone: success, a server rejection, a reply
   /// that never comes, the clip cap, close()/dispose() mid-record, a socket
-  /// death mid-record, and an acquireMic() that throws. A path that skips it
-  /// leaves the assistant deaf with no visible cause. Do not add a second
-  /// release site to shave the reply latency — two sites is how one gets
-  /// missed.
+  /// death mid-record, and an acquireMic() that throws — with one exception,
+  /// `not_connected` (openChannel found no live socket), where acquireMic()
+  /// was never even called and there is nothing to give back. A path that
+  /// skips the release it OWES leaves the assistant deaf with no visible
+  /// cause. Do not add a second release site to shave the reply latency —
+  /// two sites is how one gets missed.
+  ///
+  /// The `finally` itself must not be a single point of failure: no one
+  /// cleanup step (cancelling the mic, releasing it, leaving the channel) may
+  /// stop the others from running just because it threw or hung. A
+  /// `micSub.cancel()` that throws must not skip `releaseMic()`; a
+  /// `releaseMic()` that throws must not skip clearing `recordingSlot` or
+  /// leaving `enroll:<uid>` — either failure mode reproduces this task's
+  /// worst case (a stuck mic, or Record buttons dead forever) by a different
+  /// door. See [_guardStep].
   ///
   /// `enroll:<uid>` is joined PER RECORDING, not per panel: it accumulates PCM
   /// in channel state, so holding it open across a panel session would hold a
@@ -211,15 +230,21 @@ class VoiceLockClient extends ChangeNotifier {
 
     _abortRecording = () => end(_Ending.aborted);
 
-    PhoenixChannel? ch;
     try {
-      ch = _connection.openChannel(enrollTopic, onChannel: (c) => ch = c);
-      if (ch == null) {
-        // openChannel returns null when there is no socket up.
-        _enrollError = (slot, 'failed: not_connected');
+      // No onChannel listener: the socket is already up by the time a
+      // recording can start (open() joined the panel topic first), so
+      // openChannel's return value already IS the channel — a listener would
+      // just be handed the same instance a second time, for a topic we tear
+      // down ourselves before any reconnect could recreate it.
+      final enroll = _connection.openChannel(enrollTopic);
+      if (enroll == null) {
+        // openChannel returns null when there is no socket up. Guarded on
+        // _open: if the panel was closed while this was resolving, close()
+        // already cleared enrollError, and a stale write here would
+        // reappear on the next open().
+        if (_open) _enrollError = (slot, 'failed: not_connected');
         return;
       }
-      final enroll = ch!;
 
       // The enroll channel replies to exactly ONE event, `clip_done`: binary
       // `audio` frames carry no ref, `clip_reset` returns {:noreply, socket}
@@ -252,7 +277,7 @@ class VoiceLockClient extends ChangeNotifier {
       } catch (_) {
         // Matches the web hook's own reason string for a refused mic
         // (assets/js/voice/enroll.js:37).
-        _enrollError = (slot, 'failed: mic_blocked');
+        if (_open) _enrollError = (slot, 'failed: mic_blocked');
         return;
       }
       micSub = stream.listen((chunk) {
@@ -261,8 +286,12 @@ class VoiceLockClient extends ChangeNotifier {
 
       capTimer = Timer(clipLimit, () {
         // Stop feeding BEFORE closing the clip, so nothing lands after it.
+        // Left non-null on purpose (not micSub = null): the finally
+        // re-cancels the same subscription, which is what actually
+        // guarantees release waits for the teardown to finish — cancel() is
+        // idempotent, but an unawaited fire-and-forget call here on its own
+        // gives no such guarantee.
         unawaited(micSub?.cancel());
-        micSub = null;
         if (!enroll.isJoined) {
           end(_Ending.aborted);
           return;
@@ -278,7 +307,7 @@ class VoiceLockClient extends ChangeNotifier {
         case _Ending.ok:
           break;
         case _Ending.rejected:
-          _enrollError = (slot, 'failed: $rejectReason');
+          if (_open) _enrollError = (slot, 'failed: $rejectReason');
         case _Ending.aborted:
           // Discard the partial clip: without this, the next clip on this
           // topic would be prefixed with the stale audio.
@@ -287,16 +316,47 @@ class VoiceLockClient extends ChangeNotifier {
     } finally {
       capTimer?.cancel();
       replyTimer?.cancel();
-      await micSub?.cancel();
+
+      // Each step is independently fault-tolerant: cancel, release, leave —
+      // none may stop the others from running, whether it throws or (for the
+      // mic, which is real hardware behind a plugin) simply never completes.
+      await _guardStep(() =>
+          micSub?.cancel().timeout(teardownTimeout, onTimeout: () {}) ??
+          Future<void>.value());
       // THE one and only release site. Guarded on micAttempted: a bail-out
       // before acquireMic() was ever called (not_connected) took nothing, so
       // there is nothing to give back.
-      if (micAttempted) await releaseMic();
-      await chSub?.cancel();
-      _connection.closeChannel(enrollTopic);
+      if (micAttempted) await _guardStep(releaseMic);
+      await _guardStep(() => chSub?.cancel() ?? Future<void>.value());
+      _guardSync(() => _connection.closeChannel(enrollTopic));
+
       _abortRecording = null;
       _recordingSlot = null;
       _notify();
+    }
+  }
+
+  /// Runs one `finally` cleanup step, swallowing anything it throws —
+  /// synchronously or via its Future. No single cleanup step may stop the
+  /// ones after it: see [startRecording]'s own doc for why silently losing
+  /// track of "did the mic actually come back" is the failure this whole
+  /// task exists to prevent.
+  Future<void> _guardStep(Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (_) {
+      // Deliberately swallowed — there is no user-facing surface for a
+      // cleanup-step failure, and the next step still has to run.
+    }
+  }
+
+  /// Synchronous counterpart to [_guardStep], for a cleanup step (like
+  /// closeChannel) that isn't async.
+  void _guardSync(void Function() action) {
+    try {
+      action();
+    } catch (_) {
+      // See _guardStep.
     }
   }
 
