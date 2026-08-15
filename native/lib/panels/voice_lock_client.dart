@@ -77,6 +77,10 @@ class VoiceLockState {
       : const [];
 }
 
+/// How a recording ended. `rejected` carries its reason out through
+/// `_rejectReason`, kept beside the completer so the enum stays a plain enum.
+enum _Ending { ok, rejected, aborted }
+
 /// Joined only while the Voice Lock drawer layer is on screen.
 /// Server-authoritative for everything the server owns: a mode tap pushes and
 /// the UI re-renders from the next `state`.
@@ -125,6 +129,10 @@ class VoiceLockClient extends ChangeNotifier {
   int? _recordingSlot;
   (int, String)? _enrollError;
 
+  /// Set while a recording is in flight; close()/dispose() call it to end the
+  /// clip early. Null the rest of the time.
+  void Function()? _abortRecording;
+
   VoiceLockState? get state => _state;
   bool get isOpen => _open;
 
@@ -145,6 +153,9 @@ class VoiceLockClient extends ChangeNotifier {
   void close() {
     if (!_open) return;
     _open = false;
+    // A recording in flight ends here; its own `finally` is what gives the
+    // microphone back, so this must not try to do it too.
+    _abortRecording?.call();
     _connection.closeChannel(topic);
     unawaited(_sub?.cancel());
     _sub = null;
@@ -155,6 +166,139 @@ class VoiceLockClient extends ChangeNotifier {
   }
 
   void setMode(String mode) => _push('set_mode', {'mode': mode});
+
+  /// Record one enrollment clip into [slot] (1..3) and hand it to
+  /// `AppWeb.EnrollChannel`.
+  ///
+  /// EVERY exit from here runs the `finally`, and the `finally` is the ONE
+  /// place that releases the microphone: success, a server rejection, a reply
+  /// that never comes, the clip cap, close()/dispose() mid-record, a socket
+  /// death mid-record, and an acquireMic() that throws. A path that skips it
+  /// leaves the assistant deaf with no visible cause. Do not add a second
+  /// release site to shave the reply latency — two sites is how one gets
+  /// missed.
+  ///
+  /// `enroll:<uid>` is joined PER RECORDING, not per panel: it accumulates PCM
+  /// in channel state, so holding it open across a panel session would hold a
+  /// buffer for nothing. Join on record, clip_done, leave.
+  Future<void> startRecording(int slot) async {
+    if (_disposed || _recordingSlot != null) return;
+    final uid = _state?.userId;
+    // No state yet means no user id, and enroll:<uid> is self-only on the
+    // server. Nothing to join; the panel renders nothing in this state anyway.
+    if (uid == null) return;
+    final enrollTopic = 'enroll:$uid';
+
+    _recordingSlot = slot;
+    _enrollError = null;
+    _notify();
+
+    StreamSubscription<Uint8List>? micSub;
+    StreamSubscription<DecodedMessage>? chSub;
+    Timer? capTimer;
+    Timer? replyTimer;
+    final ended = Completer<_Ending>();
+    var rejectReason = 'unknown';
+    // Set right before acquireMic() is called — even if it throws — so the
+    // finally releases only a mic that was actually (attempted to be) taken.
+    // Without this, a not_connected bail-out (which returns before ever
+    // calling acquireMic) would still call releaseMic(), resuming a
+    // conversation mic that was never suspended.
+    var micAttempted = false;
+    void end(_Ending e) {
+      if (!ended.isCompleted) ended.complete(e);
+    }
+
+    _abortRecording = () => end(_Ending.aborted);
+
+    PhoenixChannel? ch;
+    try {
+      ch = _connection.openChannel(enrollTopic, onChannel: (c) => ch = c);
+      if (ch == null) {
+        // openChannel returns null when there is no socket up.
+        _enrollError = (slot, 'failed: not_connected');
+        return;
+      }
+      final enroll = ch!;
+
+      // The enroll channel replies to exactly ONE event, `clip_done`: binary
+      // `audio` frames carry no ref, `clip_reset` returns {:noreply, socket}
+      // and Phoenix sends no frame for that at all, and the join reply is
+      // consumed by PhoenixSocket before it reaches `messages`. So any
+      // phx_reply arriving here IS the clip_done reply, and no ref
+      // bookkeeping is needed — PhoenixChannel.push hands none out.
+      chSub = enroll.messages.listen(
+        (m) {
+          if (m.event != 'phx_reply') return;
+          if (m.replyStatus == 'ok') {
+            // Nothing to set locally: enroll_clip/3 broadcasts, so the panel
+            // channel re-pushes `state` with this slot in enrolled_slots.
+            end(_Ending.ok);
+          } else {
+            final resp = m.json?['response'];
+            rejectReason =
+                (resp is Map ? resp['reason'] : null)?.toString() ?? 'unknown';
+            end(_Ending.rejected);
+          }
+        },
+        // The socket died under us: the partial clip dies with the channel.
+        onDone: () => end(_Ending.aborted),
+      );
+
+      final Stream<Uint8List> stream;
+      try {
+        micAttempted = true;
+        stream = await acquireMic();
+      } catch (_) {
+        // Matches the web hook's own reason string for a refused mic
+        // (assets/js/voice/enroll.js:37).
+        _enrollError = (slot, 'failed: mic_blocked');
+        return;
+      }
+      micSub = stream.listen((chunk) {
+        if (enroll.isJoined) enroll.pushBinary('audio', chunk);
+      });
+
+      capTimer = Timer(clipLimit, () {
+        // Stop feeding BEFORE closing the clip, so nothing lands after it.
+        unawaited(micSub?.cancel());
+        micSub = null;
+        if (!enroll.isJoined) {
+          end(_Ending.aborted);
+          return;
+        }
+        enroll.push('clip_done', {'slot': slot});
+        replyTimer = Timer(replyTimeout, () {
+          rejectReason = 'timeout';
+          end(_Ending.rejected);
+        });
+      });
+
+      switch (await ended.future) {
+        case _Ending.ok:
+          break;
+        case _Ending.rejected:
+          _enrollError = (slot, 'failed: $rejectReason');
+        case _Ending.aborted:
+          // Discard the partial clip: without this, the next clip on this
+          // topic would be prefixed with the stale audio.
+          if (enroll.isJoined) enroll.push('clip_reset', const {});
+      }
+    } finally {
+      capTimer?.cancel();
+      replyTimer?.cancel();
+      await micSub?.cancel();
+      // THE one and only release site. Guarded on micAttempted: a bail-out
+      // before acquireMic() was ever called (not_connected) took nothing, so
+      // there is nothing to give back.
+      if (micAttempted) await releaseMic();
+      await chSub?.cancel();
+      _connection.closeChannel(enrollTopic);
+      _abortRecording = null;
+      _recordingSlot = null;
+      _notify();
+    }
+  }
 
   bool _push(String event, Map<String, dynamic> payload) {
     final ch = _channel;
@@ -186,6 +330,9 @@ class VoiceLockClient extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    // A recording in flight ends here; its own `finally` is what gives the
+    // microphone back, so this must not try to do it too.
+    _abortRecording?.call();
     if (_open) _connection.closeChannel(topic);
     unawaited(_sub?.cancel());
     super.dispose();
