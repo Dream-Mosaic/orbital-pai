@@ -8,6 +8,7 @@ defmodule AppWeb.UserSocket do
   channel "panel:reminders:*", AppWeb.Panels.RemindersChannel
   channel "panel:settings:*", AppWeb.Panels.SettingsChannel
   channel "panel:memory:*", AppWeb.Panels.MemoryChannel
+  channel "panel:voice_lock:*", AppWeb.Panels.VoiceLockChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) do
