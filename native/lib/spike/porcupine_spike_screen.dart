@@ -36,6 +36,7 @@ class PorcupineSpikeScreen extends StatefulWidget {
 
 class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
   final MicCapture _mic = MicCapture();
+  MicSession? _micSession;
   Porcupine? _porcupine;
   StreamSubscription<Uint8List>? _sub;
   final List<int> _pending = <int>[]; // int16 samples awaiting a full frame
@@ -59,7 +60,8 @@ class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
         [ppnPath],
       );
       final frameLen = _porcupine!.frameLength; // expect 512
-      final stream = await _mic.start();
+      final session = _micSession = _mic.start();
+      final stream = await session.stream;
       if (mounted) {
         setState(() => _status = 'listening (frameLength=$frameLen, '
             'sampleRate=${_porcupine!.sampleRate})');
@@ -107,7 +109,9 @@ class _PorcupineSpikeScreenState extends State<PorcupineSpikeScreen> {
   Future<void> _stop() async {
     await _sub?.cancel();
     _sub = null;
-    await _mic.stop();
+    final session = _micSession;
+    _micSession = null;
+    await session?.stop();
     await _porcupine?.delete();
     _porcupine = null;
     _pending.clear();

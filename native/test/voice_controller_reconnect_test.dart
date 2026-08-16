@@ -11,6 +11,7 @@ import 'package:henry_wall/meridian/thread_model.dart';
 import 'package:henry_wall/phoenix/decoded_message.dart';
 import 'package:henry_wall/phoenix/phoenix_socket.dart';
 import 'package:henry_wall/voice/voice_controller.dart';
+import 'package:record/record.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'support/fakes.dart';
@@ -984,7 +985,7 @@ void main() {
   });
 
   test('a start whose subscribe throws leaves micOn false', () async {
-    final mic = _RelistenMic();
+    final mic = MicCapture(recorder: _RelistenRecorder());
     final b = build(mic: mic);
     addTearDown(b.vc.dispose);
     addTearDown(b.conn.dispose);
@@ -1000,15 +1001,16 @@ void main() {
   });
 }
 
-/// A mic whose second start() hands back a stream that has already been
-/// listened to — the exact shape of the failure the old FakeMic hid.
-class _RelistenMic implements MicCapture {
+/// A recorder whose stream has already been listened to — the exact shape of
+/// the failure the old FakeMic hid. Faked at the RECORDER layer so the real
+/// MicCapture session logic runs underneath it.
+class _RelistenRecorder implements MicRecorder {
   final _c = StreamController<Uint8List>();
   late final Stream<Uint8List> _dead = _c.stream..listen((_) {});
   @override
-  bool get isRecording => true;
+  Future<bool> hasPermission() async => true;
   @override
-  Future<Stream<Uint8List>> start() async => _dead;
+  Future<Stream<Uint8List>> startStream(RecordConfig config) async => _dead;
   @override
   Future<void> stop() async {}
 }

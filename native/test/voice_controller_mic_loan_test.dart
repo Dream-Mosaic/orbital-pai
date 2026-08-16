@@ -392,4 +392,185 @@ void main() {
         reason: 'a later, unrelated startMic() must not be wedged by the '
             'stale loan');
   });
+
+  // THE ENTANGLED CASE the test above deliberately left out — and the one that
+  // actually breaks. Same abandoned-suspend race, but with the conversation's
+  // mic ON before the loan, so resumeMic() RESTORES it. A generation counter
+  // cannot fix this: it protects VoiceController's own fields, and the thing
+  // being clobbered is the one piece of shared hardware. Measured before the
+  // fix: micOn=true isRecording=false — deaf, with the indicator lying.
+  test(
+      'a suspendMic() abandoned mid-start must not stop the session the '
+      'restore opened', () async {
+    // Per-call delays reproduce the production shape: the loan's start is the
+    // one that wedges (the audio subsystem is busy tearing the conversation's
+    // session down); the restore's start is ordinary.
+    final mic = FakeMic(startDelays: const [
+      Duration.zero, // the conversation's own session
+      Duration(milliseconds: 100), // the loan's start — wedged
+      Duration.zero, // the restore's start
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the conversation has the mic');
+
+    // The borrower's acquire. Its error is captured rather than awaited: this
+    // models VoiceLockClient, whose `.timeout(acquireTimeout)` stops waiting
+    // but leaves a listener attached, so a late failure is discarded, not
+    // unhandled.
+    Object? loanOutcome;
+    final loan = b.vc.suspendMic().then<void>(
+      (s) => loanOutcome = s,
+      onError: (Object e) => loanOutcome = e,
+    );
+    await settle();
+    expect(mic.startCalls, 2,
+        reason: 'suspendMic() has issued the loan start and is waiting on it');
+    expect(mic.isRecording, isFalse,
+        reason: 'sanity: the wedged start has not opened anything yet, which '
+            'is exactly why a plain stop() cannot close it');
+
+    // acquireTimeout fires: the borrower gives up and its `finally` calls
+    // resumeMic() in its place, which restores the conversation's mic.
+    unawaited(b.vc.resumeMic());
+    // Long enough for the wedged loan start to land afterwards.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await settle();
+    await loan;
+
+    expect(loanOutcome, isA<StateError>(),
+        reason: 'the abandoned suspend must fail rather than hand back a '
+            'stream nobody will listen to');
+    expect(b.vc.micOn, isTrue,
+        reason: 'sanity: the restore claims the conversation is listening');
+    expect(mic.isRecording, isTrue,
+        reason: 'and it must actually BE listening — the stale suspend must '
+            'not stop the session the restore opened');
+    expect(mic.maxConcurrentStarts, 1,
+        reason: 'two concurrent startStream() calls on one AudioRecorder is '
+            'undefined behaviour: the restore must not open a session on top '
+            'of the wedged one');
+
+    // The decisive assertion: frames from the live session still reach
+    // voice:henry. micOn is a flag; this is the assistant actually hearing.
+    b.fake.sent.clear();
+    mic.emit(Uint8List.fromList(const [7, 7, 7, 7]));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty,
+        reason: 'the conversation must be subscribed to the session that is '
+            'really running');
+  });
+
+  test(
+      'a start that fails after a newer start took over must not cancel the '
+      'newer one', () async {
+    // The same ownership rule, on the conversation's own path rather than the
+    // loan's: a stale startMic() reporting its failure used to clear
+    // `_micWanted`, which made the LIVE start bail out on its own guard when
+    // it landed a moment later. Deaf, again, with nothing to debug from.
+    final mic = FakeMic(startDelays: const [
+      Duration(milliseconds: 80), // the abandoned start
+      Duration.zero, // the one the user actually gets
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final abandoned = b.vc.startMic();
+    await settle();
+    await b.vc.stopMic(); // the user changes their mind mid-start…
+    final wanted = b.vc.startMic(); // …and then changes it back
+
+    await abandoned;
+    await wanted;
+    await settle();
+
+    expect(b.vc.micOn, isTrue,
+        reason: 'the second start is the live one and nothing stale may '
+            'cancel it');
+    expect(mic.isRecording, isTrue);
+    expect(mic.maxConcurrentStarts, 1);
+  });
+
+  test(
+      'a mic-off tapped inside resumeMic()\'s own platform await is honoured, '
+      'not undone', () async {
+    // resumeMic() has an unbounded `stop()` of its own, and every write after
+    // it used to be unguarded — so the user tapping power OFF inside that
+    // await got the microphone turned back ON by the continuation.
+    final mic = FakeMic(stopDelay: const Duration(milliseconds: 60));
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await b.vc.suspendMic();
+    expect(b.vc.micOn, isFalse);
+
+    final resuming = b.vc.resumeMic();
+    await settle(); // land inside resumeMic()'s stop of the borrowed session
+
+    await b.vc.stopMic();
+    expect(b.vc.micOn, isFalse, reason: 'sanity: the tap took effect');
+
+    await resuming;
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'a power-off tapped while the mic was coming back must stick — '
+            'the same guarantee that already holds inside the loan');
+    expect(mic.isRecording, isFalse,
+        reason: 'and no recorder may be left running behind it');
+  });
+
+  test(
+      'a second enrollment started while a slow resumeMic() is still in flight '
+      'does not lose the restore intent', () async {
+    // VoiceLockClient bounds releaseMic() at 2s, so a slow resumeMic() is
+    // ABANDONED mid-flight and the panel lets the user record the next slot.
+    // suspendMic() then recomputed _resumeMicWanted from _micOn/_micWanted —
+    // both false precisely BECAUSE the first loan took the mic — so "the
+    // conversation had the microphone" was lost and the device stayed
+    // silently deaf after enrollment.
+    final mic = FakeMic(stopDelay: const Duration(milliseconds: 60));
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    await b.vc.suspendMic(); // enrollment 1 borrows the mic
+    final resuming = b.vc.resumeMic(); // …and its return is slow
+    await settle();
+
+    // The borrower gave up on that release; enrollment 2 takes the mic.
+    await b.vc.suspendMic();
+    await resuming; // the abandoned first return lands somewhere in here
+    await settle();
+
+    await b.vc.resumeMic(); // enrollment 2 gives it back
+    await settle();
+
+    expect(b.vc.micOn, isTrue,
+        reason: 'the conversation had the microphone before enrollment 1, and '
+            'nobody asked for it to go off');
+    expect(mic.isRecording, isTrue);
+    // The abandoned first return must also have STOOD DOWN rather than run
+    // its tail against a cycle it no longer owned. Its state writes happen to
+    // be self-healing today (see resumeMic), so the log is what makes the
+    // guard falsifiable at all — without it there is nothing to distinguish
+    // "recognised itself as stale" from "got lucky".
+    expect(b.vc.eventLog, contains('mic return superseded'),
+        reason: 'resumeMic() must read the generation it bumps, not just bump '
+            'it');
+  });
 }

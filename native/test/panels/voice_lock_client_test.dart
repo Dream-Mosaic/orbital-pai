@@ -1235,5 +1235,128 @@ void main() {
       expect(client.recordingSlot, isNull);
       expect(client.enrollError, (1, 'failed: mic_blocked'));
     });
+
+    // Branch-review Minor: close() left recordingSlot set, so leaving and
+    // re-entering the Voice Lock layer inside the finally's window (up to
+    // ~4s if both bounded steps time out) rendered all three Record buttons
+    // disabled with no explanation.
+    test(
+        '21: close() clears recordingSlot immediately, without waiting for a '
+        'slow teardown', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>();
+      final neverDone = Completer<void>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        // Hangs: this is what keeps the finally open long enough for a user
+        // to leave and come back.
+        releaseMic: () {
+          releases++;
+          return neverDone.future;
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+        teardownTimeout: const Duration(milliseconds: 300),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(client.recordingSlot, 1, reason: 'sanity: recording');
+
+      client.close();
+
+      // The discriminating moment: the finally is still parked in its
+      // hanging releaseMic() (teardownTimeout has not elapsed), so this is
+      // close() answering, not the teardown.
+      expect(client.recordingSlot, isNull,
+          reason: 'the panel is gone; a re-entered layer must show usable '
+              'Record buttons rather than three dead ones');
+
+      await fut.timeout(const Duration(seconds: 2));
+    });
+
+    // The other half of that fix: clearing the slot in close() is only safe
+    // if the abandoned teardown cannot then clobber the recording that
+    // replaced it.
+    test(
+        '22: a stale teardown does not clear the slot (or the abort hook) of '
+        'the recording that replaced it', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>.broadcast();
+      final releaseGate = Completer<void>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        // The first release parks until the test opens the gate; later ones
+        // return at once.
+        releaseMic: () async {
+          releases++;
+          if (releases == 1) await releaseGate.future;
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+        teardownTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(() {
+        if (!releaseGate.isCompleted) releaseGate.complete();
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final first = client.startRecording(1);
+      await pumpEventQueue();
+      client.close(); // leave the layer; the first teardown parks in release
+
+      // Back into Voice Lock, and record another slot.
+      client.open();
+      await pumpEventQueue();
+      final second = client.startRecording(2);
+      await pumpEventQueue();
+      expect(client.recordingSlot, 2, reason: 'sanity: the new clip is live');
+
+      // Now let the ABANDONED first teardown finish, underneath the live one.
+      releaseGate.complete();
+      await first.timeout(const Duration(seconds: 2));
+      await pumpEventQueue();
+
+      expect(client.recordingSlot, 2,
+          reason: 'a stale teardown must not re-enable the Record buttons '
+              'while slot 2 is still recording');
+
+      // And the live recording is still abortable — the stale teardown must
+      // not have unhooked close()'s only way to end a clip.
+      client.close();
+      await second.timeout(const Duration(seconds: 2));
+      expect(client.recordingSlot, isNull);
+    });
   });
 }

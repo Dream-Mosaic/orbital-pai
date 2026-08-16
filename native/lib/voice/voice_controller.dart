@@ -89,6 +89,12 @@ class VoiceController extends ChangeNotifier {
   /// comes back rather than silently lost.
   bool _resumeMicWanted = false;
 
+  /// The borrowed session, from the instant suspendMic() ASKS for it. Held so
+  /// resumeMic() can stop that specific session instead of "whatever the
+  /// recorder is doing" — the difference between closing the loan and
+  /// deafening the conversation that already got the mic back.
+  MicSession? _loanSession;
+
   /// Bumped by suspendMic() (capturing its own value) and again by
   /// resumeMic(), so a suspendMic() call whose caller gave up on it (see
   /// VoiceLockClient.acquireTimeout) can tell, once its own unbounded
@@ -111,6 +117,12 @@ class VoiceController extends ChangeNotifier {
   // mic/player teardown paths are testable headless — a real MicCapture or
   // AudioTrackPlayer needs a device.
   final MicCapture _mic;
+
+  /// The conversation's own recording session, from the instant startMic()
+  /// ASKS for it rather than from the instant the platform answers. Every
+  /// teardown path stops THIS session by name; none of them may stop "the
+  /// recorder", because by then it may belong to somebody else.
+  MicSession? _micSession;
   StreamSubscription<Uint8List>? _micSub;
   bool _micOn = false;
   bool _disposed = false;
@@ -438,7 +450,9 @@ class VoiceController extends ChangeNotifier {
       _micOn = false;
       unawaited(_micSub?.cancel());
       _micSub = null;
-      unawaited(_mic.stop());
+      final session = _micSession;
+      _micSession = null;
+      unawaited(session?.stop());
     }
     orbFrame.audioTarget = 0.0;
     _syncOrb();
@@ -677,7 +691,15 @@ class VoiceController extends ChangeNotifier {
   Future<Stream<Uint8List>> suspendMic() async {
     if (_micLoaned) throw StateError('the microphone is already on loan');
     _micLoaned = true;
-    _resumeMicWanted = _micOn || _micWanted;
+    // OR in any restore intent that is still outstanding rather than
+    // recomputing from scratch. A resumeMic() parked in its own platform
+    // await has already cleared `_micLoaned`, so a second enrollment can
+    // legitimately start on top of it (the borrower bounds releaseMic() at
+    // 2s and moves on) — and in that window `_micOn`/`_micWanted` read false
+    // PRECISELY BECAUSE the first loan took the mic. Recomputing dropped "the
+    // conversation had the microphone" on the floor and left the device
+    // silently deaf once enrollment finished.
+    _resumeMicWanted = _micOn || _micWanted || _resumeMicWanted;
     _micWanted = false;
     // Captured now, checked after each unbounded await below. resumeMic()
     // bumps this too, so a caller that gave up on this suspend (its own
@@ -693,7 +715,9 @@ class VoiceController extends ChangeNotifier {
       throw StateError('mic loan superseded while cancelling the mic sub');
     }
     _micSub = null;
-    await _mic.stop();
+    final conversation = _micSession;
+    _micSession = null;
+    await conversation?.stop();
     if (superseded()) {
       throw StateError('mic loan superseded while stopping the mic');
     }
@@ -703,13 +727,21 @@ class VoiceController extends ChangeNotifier {
     orbFrame.audioTarget = 0.0;
     _syncOrb();
     _log('mic loaned out (enrollment)');
-    final stream = await _mic.start();
+    // Named BEFORE the platform answers. That is what lets resumeMic() close
+    // this exact session even when `_mic.start()` is still wedged inside the
+    // plugin — and what stops the belated result below from reaching for a
+    // recorder a newer cycle has since opened.
+    final session = _mic.start();
+    _loanSession = session;
+    final stream = await session.stream;
     if (superseded()) {
       // Nobody is coming back for this stream: the caller already gave up
       // and resumeMic() already ran in its place. Stop the session we just
       // (belatedly) opened rather than returning — or silently leaking — a
-      // live recording nobody will ever listen to.
-      unawaited(_mic.stop());
+      // live recording nobody will ever listen to. Safe by construction now:
+      // if a newer cycle owns the recorder, this stop is a no-op against it.
+      unawaited(session.stop());
+      if (identical(_loanSession, session)) _loanSession = null;
       throw StateError('mic loan superseded before the acquire completed');
     }
     return stream;
@@ -731,11 +763,39 @@ class VoiceController extends ChangeNotifier {
     // Marks any suspendMic() still in flight (its caller already gave up
     // waiting on it) as superseded, so a late-arriving result from it
     // cleans itself up instead of clobbering what this call is about to do.
-    _micLoanGeneration++;
-    // Stop whatever session suspendMic() opened for the borrower. Harmless if
-    // start() threw and there is none: MicCapture.stop() short-circuits on
-    // !_recording.
-    await _mic.stop();
+    //
+    // And then READS it, which it did not use to. This method has an
+    // unbounded platform await of its own, and its own caller (the borrower's
+    // `finally`) bounds it at 2s and walks away — so every write below it was
+    // exactly as stale-able as suspendMic's, and unguarded. Mirror image,
+    // same guard.
+    final generation = _micLoanGeneration = _micLoanGeneration + 1;
+    bool superseded() => _disposed || generation != _micLoanGeneration;
+
+    // Close the session suspendMic() opened for the borrower, BY NAME.
+    // Harmless if start() threw and there is none, and — the point of the
+    // handle — a no-op rather than a catastrophe if a newer cycle has since
+    // taken the recorder. Null while the borrow never got that far.
+    final session = _loanSession;
+    _loanSession = null;
+    await session?.stop();
+    if (superseded()) {
+      // A newer suspend/resume cycle owns `_resumeMicWanted`, `_micWasOn` and
+      // the recorder now. It inherited our restore intent when it suspended
+      // (see suspendMic), so the one correct move here is to touch nothing.
+      //
+      // Honest note, measured: with the suspendMic inheritance and stopMic's
+      // unconditional clear both in place, the writes below this point are
+      // already SELF-HEALING when they run stale — a stale restore lands on
+      // startMic()'s own `_micLoaned` deflection, which puts the intent
+      // straight back. So this early return changes no state outcome today;
+      // it is here because the alternative is an invariant that holds only
+      // by agreement between three separate methods, which is exactly how
+      // the previous four fixes of this class were left one mirror image
+      // short. The log line is what a test can hold it to.
+      _log('mic return superseded');
+      return;
+    }
     final restore = _resumeMicWanted;
     _resumeMicWanted = false;
     _log('mic returned');
@@ -762,13 +822,19 @@ class VoiceController extends ChangeNotifier {
     }
     if (_micOn || _micWanted || _live == null) return;
     _micWanted = true;
+    // Claimed synchronously, so every exit below can say WHICH session it is
+    // talking about — including the exits that run while the platform is
+    // still opening it.
+    final session = _mic.start();
+    _micSession = session;
     try {
-      final stream = await _mic.start();
+      final stream = await session.stream;
       // 5th post-dispose variant: a dispose() OR a stopMic() landing inside this
       // await would otherwise register _micSub on a live recorder that nothing
-      // will ever stop — the mic records forever.
-      if (_disposed || !_micWanted) {
-        unawaited(_mic.stop());
+      // will ever stop — the mic records forever. `_micSession` moving on means
+      // a newer session already owns the recorder; ours is not it.
+      if (_disposed || !_micWanted || !identical(_micSession, session)) {
+        unawaited(session.stop());
         return;
       }
       // Subscribe BEFORE flipping the flags. `stream.listen` can throw, and
@@ -796,7 +862,15 @@ class VoiceController extends ChangeNotifier {
       _log('mic started (16k PCM16)');
       _safeNotify();
     } catch (e) {
-      _micWanted = false;
+      // A `stream.listen` that throws leaves a session running with nobody on
+      // it; close it. Also a no-op against a newer owner.
+      unawaited(session.stop());
+      // Only OUR failure may clear the controller's intent — if a newer
+      // session has taken over, `_micWanted` is its business now.
+      if (identical(_micSession, session)) {
+        _micSession = null;
+        _micWanted = false;
+      }
       _log('mic start failed: $e');
       _safeNotify();
     }
@@ -807,17 +881,23 @@ class VoiceController extends ChangeNotifier {
     // A deliberate stop must never be resurrected by a later reconnect, even
     // if a socket death upstream had already armed the restore flag.
     _micWasOn = false;
+    // Nor by a loan cycle. Cleared unconditionally, not just under
+    // `_micLoaned`: the window that mattered was resumeMic()'s own await,
+    // where `_micLoaned` is ALREADY false and the restore has not happened
+    // yet — a tap there used to be overwritten by the continuation that
+    // followed it, turning the microphone the user just switched off back on.
+    _resumeMicWanted = false;
     // On loan there is no conversation recording to stop, only the intent to
-    // restore one. Clearing it is what makes a power-off during enrollment
-    // stick once the microphone comes back.
+    // restore one, which the line above just cleared.
     if (_micLoaned) {
-      _resumeMicWanted = false;
       _safeNotify();
       return;
     }
     await _micSub?.cancel();
     _micSub = null;
-    await _mic.stop();
+    final session = _micSession;
+    _micSession = null;
+    await session?.stop();
     _micOn = false;
     _talking = false;
     _turnState = TurnState.idle;
@@ -839,9 +919,13 @@ class VoiceController extends ChangeNotifier {
     unawaited(_msgSub?.cancel());
     _channel = null;
     // A dispose mid-enrollment still has to stop the recorder the loan
-    // opened; clearing the flag routes stopMic() down its real path.
+    // opened. stopMic() below only knows about the CONVERSATION's session
+    // (null during a loan), so the borrowed one is closed by name here.
     _micLoaned = false;
     _resumeMicWanted = false;
+    final loan = _loanSession;
+    _loanSession = null;
+    unawaited(loan?.stop());
     stopMic();
     if (_playerReady) {
       _player.dispose();

@@ -151,6 +151,14 @@ class VoiceLockClient extends ChangeNotifier {
   int? _recordingSlot;
   (int, String)? _enrollError;
 
+  /// Which recording the UI state belongs to. [startRecording]'s `finally`
+  /// runs long after [close] has already ended the clip (up to teardownTimeout
+  /// per bounded step), so by then a NEWER recording may own `_recordingSlot`
+  /// and `_abortRecording` — and a stale teardown clearing them would
+  /// re-enable the Record buttons mid-clip and, worse, unhook the abort the
+  /// next close() needs.
+  int _recordingSeq = 0;
+
   /// Set while a recording is in flight; close()/dispose() call it to end the
   /// clip early. Null the rest of the time.
   void Function()? _abortRecording;
@@ -178,6 +186,11 @@ class VoiceLockClient extends ChangeNotifier {
     // A recording in flight ends here; its own `finally` is what gives the
     // microphone back, so this must not try to do it too.
     _abortRecording?.call();
+    // …but the UI state is ours, and nothing is recording once the layer is
+    // gone. Without this, leaving and re-entering Voice Lock inside the
+    // finally's window (up to ~4s if both bounded steps time out) showed all
+    // three Record buttons disabled with no explanation.
+    _recordingSlot = null;
     _connection.closeChannel(topic);
     unawaited(_sub?.cancel());
     _sub = null;
@@ -222,6 +235,7 @@ class VoiceLockClient extends ChangeNotifier {
     if (uid == null) return;
     final enrollTopic = 'enroll:$uid';
 
+    final recordingId = ++_recordingSeq;
     _recordingSlot = slot;
     _enrollError = null;
     _notify();
@@ -363,10 +377,22 @@ class VoiceLockClient extends ChangeNotifier {
         'cancel channel subscription',
         () => chSub?.cancel() ?? Future<void>.value(),
       );
-      _guardSync('close channel', () => _connection.closeChannel(enrollTopic));
-
-      _abortRecording = null;
-      _recordingSlot = null;
+      // Everything below belongs to THIS recording only. close() clears the
+      // slot up front so a re-entered panel is usable immediately, which
+      // means a NEWER recording can already be under way by the time this
+      // teardown gets here — and `enroll:<uid>` is per-USER, not per-clip, so
+      // it is the very channel that clip is streaming into. Leaving it would
+      // kill the live clip (its own chSub sees `onDone` and aborts);
+      // clobbering `_recordingSlot` would light the Record buttons up
+      // mid-clip; clobbering `_abortRecording` would leave the next close()
+      // with no way to end it. The newer recording's own finally does all
+      // three when its turn comes.
+      if (_recordingSeq == recordingId) {
+        _guardSync(
+            'close channel', () => _connection.closeChannel(enrollTopic));
+        _abortRecording = null;
+        _recordingSlot = null;
+      }
       _notify();
     }
   }
