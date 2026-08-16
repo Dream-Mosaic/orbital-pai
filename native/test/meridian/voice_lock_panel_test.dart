@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -96,6 +97,28 @@ void main() {
 
   Finder cardFor(int slot) =>
       find.byKey(VoiceLockPanelView.slotKey(slot));
+
+  // Minor from the follow-up review of 86e0ad6: the prompt strings were
+  // pinned only against the test's own copies — both here (a literal
+  // find.text below) and in kVoiceLockPrompts (voice_lock_panel.dart) —
+  // never against the server's own @voice_lock_prompts. A server-side edit
+  // to voice_modals.ex could drift silently. These are voiceprint
+  // CALIBRATION INPUTS (reading a different sentence than the one enrolled
+  // quietly degrades the score), so read the server source directly rather
+  // than trusting a second hand copy.
+  test(
+      'kVoiceLockPrompts stays byte-identical to @voice_lock_prompts on the '
+      'server', () {
+    final source = File(
+      '../server/lib/app_web/components/voice_modals.ex',
+    ).readAsStringSync();
+    for (final (slot, text) in kVoiceLockPrompts) {
+      expect(source.contains(text), isTrue,
+          reason: 'prompt $slot ("$text") no longer appears verbatim in '
+              "voice_modals.ex's @voice_lock_prompts — the native copy has "
+              'drifted from the server');
+    }
+  });
 
   testWidgets('the copy renders verbatim from the server', (tester) async {
     final (client, conn, _, _) = await openedClient(

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/panels/voice_lock_client.dart';
@@ -916,6 +916,268 @@ void main() {
       expect(releases, 1,
           reason: 'a hanging cancel() must not block releaseMic() forever');
       expect(client.recordingSlot, isNull);
+    });
+
+    // Critical from the follow-up review: releaseMic() was the one step in
+    // the finally that was NOT bounded by teardownTimeout, even though the
+    // doc comment already promised no step may stop the others "whether it
+    // throws or ... simply never completes" and named the mic as exactly the
+    // real-hardware step that can do that. Reachable in production:
+    // VoiceController.resumeMic() awaits _mic.stop(), a platform-channel
+    // call. Measured by the reviewer before this fix: recordingSlot stuck at
+    // 1, enroll:<uid> leaked, every Record button dead for the life of the
+    // app. teardownTimeout is overridden short so the test doesn't wait out
+    // a real hang.
+    test(
+        '16: a releaseMic() that hangs does not park the finally forever',
+        () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>();
+      final neverDone = Completer<void>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () {
+          releases++;
+          return neverDone.future;
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+        teardownTimeout: const Duration(milliseconds: 30),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      // The whole assertion: without the release timeout this future never
+      // completes and the test times out instead of failing cleanly, which
+      // is exactly the production symptom (recordingSlot stuck at 1 forever).
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(client.recordingSlot, isNull,
+          reason: 'a hanging releaseMic() must not leave the Record buttons '
+              'permanently disabled');
+      expect(
+        fake.textFrames.any((p) => p[3] == 'phx_leave' && p[2] == 'enroll:7'),
+        isTrue,
+        reason: 'a hanging releaseMic() must not leave enroll:7 wanted '
+            'forever',
+      );
+    });
+
+    // Important from the follow-up review: _guardStep/_guardSync used to be
+    // a bare `catch (_) {}` — the reviewer measured a TypeError thrown from
+    // releaseMic producing ZERO zone errors and no output at all. This pins
+    // that a cleanup-step failure is now reported through
+    // FlutterError.onError instead of vanishing.
+    test(
+        '17: a cleanup-step failure is reported through FlutterError.onError, '
+        'not swallowed silently', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        // A TypeError, deliberately: it is the exact class of programming
+        // bug the review's probe P7 used, and — unlike StateError — it is
+        // unambiguously not something the app is expected to throw on
+        // purpose.
+        releaseMic: () async {
+          releases++;
+          throw TypeError();
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      final reports = <FlutterErrorDetails>[];
+      final originalOnError = FlutterError.onError;
+      FlutterError.onError = reports.add;
+      addTearDown(() => FlutterError.onError = originalOnError);
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(reports, isNotEmpty,
+          reason: 'a caught cleanup-step failure must be reported, not '
+              'dropped by a bare catch (_) {}');
+      expect(reports.single.exception, isA<TypeError>());
+      expect(client.recordingSlot, isNull,
+          reason: 'reporting the failure must not stop the rest of the '
+              'finally from running');
+    });
+
+    // Important from the follow-up review: the cap timer's `micSub = null`
+    // removal (commit 86e0ad6's "test 12 correction") had no test of its
+    // own — mutation testing re-added the line and the whole suite still
+    // passed. A first draft of this test used a SYNCHRONOUS onCancel and
+    // also survived the mutation: with a synchronous onCancel, the cap
+    // timer's own `unawaited(micSub?.cancel())` records 'mic_cancelled'
+    // before the mutation's `micSub = null;` line even runs, so nulling the
+    // field changes nothing observable — the exact trap this phase's brief
+    // warned about (a catcher structurally incapable of catching its
+    // mutation). What the comment on `capTimer` actually promises is that
+    // the finally's OWN cancel call — idempotent, so a second call while the
+    // first is still pending returns that SAME pending future — is what
+    // guarantees release WAITS for teardown to finish. That only shows up
+    // with an ASYNCHRONOUS onCancel: this one resolves on a short delay, so
+    // the finally must actually wait on it rather than merely have recorded
+    // that cancel() was called at some point.
+    test(
+        '18: on the success path, release still waits for the (already '
+        'in-flight, cap-timer-started) mic teardown to finish', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final order = <String>[];
+      final localMic = StreamController<Uint8List>(
+        onCancel: () => Future<void>.delayed(
+          const Duration(milliseconds: 30),
+          () => order.add('mic_cancelled'),
+        ),
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () async {
+          releases++;
+          order.add('released');
+        },
+        // Short enough that the cap timer fires well before the test drives
+        // the clip_done reply.
+        clipLimit: const Duration(milliseconds: 20),
+        replyTimeout: const Duration(seconds: 5),
+        // Comfortably longer than the onCancel delay above: this test means
+        // to prove a genuine wait, not a bound cutting it short.
+        teardownTimeout: const Duration(milliseconds: 300),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      await waitForClipDone(fake);
+      replyToClipDone(fake, 'ok', {'slot': 1});
+
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(order, ['mic_cancelled', 'released'],
+          reason: 'a re-added `micSub = null` in the cap timer would turn '
+              "the finally's own idempotent cancel call into a no-op, so "
+              'release would stop waiting on the teardown the cap timer '
+              'already started and could run before it actually finishes');
+    });
+
+    // Minor from the follow-up review: nothing pinned two cleanup steps
+    // failing at the same time. The implementation survives it (each step
+    // is independently guarded), but that was previously only shown by a
+    // reviewer's probe, not a test.
+    test(
+        '19: a cancel() that throws AND a releaseMic() that throws at the '
+        'same time still clears recordingSlot and leaves enroll:7',
+        () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final localMic = StreamController<Uint8List>(
+        onCancel: () => throw StateError('platform cancel failed'),
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async {
+          acquires++;
+          return localMic.stream;
+        },
+        releaseMic: () async {
+          releases++;
+          throw StateError('resumeMic failed');
+        },
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      client.close();
+
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(releases, 1,
+          reason: 'a throwing cancel() must not skip releaseMic()');
+      expect(client.recordingSlot, isNull);
+      expect(
+        fake.textFrames.any((p) => p[3] == 'phx_leave' && p[2] == 'enroll:7'),
+        isTrue,
+        reason: 'both steps failing at once must not leave enroll:7 wanted '
+            'forever',
+      );
     });
   });
 }

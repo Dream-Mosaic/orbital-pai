@@ -320,15 +320,32 @@ class VoiceLockClient extends ChangeNotifier {
       // Each step is independently fault-tolerant: cancel, release, leave —
       // none may stop the others from running, whether it throws or (for the
       // mic, which is real hardware behind a plugin) simply never completes.
-      await _guardStep(() =>
-          micSub?.cancel().timeout(teardownTimeout, onTimeout: () {}) ??
-          Future<void>.value());
+      // Both the cancel AND the release are bounded by teardownTimeout: an
+      // earlier version only bounded the cancel, and a releaseMic() that
+      // never completes (VoiceController.resumeMic awaits _mic.stop(), a
+      // platform-channel call) parked this finally forever — recordingSlot
+      // stuck, enroll:<uid> leaked, every Record button dead for the life of
+      // the app. Same cure as the cancel: stop waiting, keep going.
+      await _guardStep(
+        'cancel mic subscription',
+        () =>
+            micSub?.cancel().timeout(teardownTimeout, onTimeout: () {}) ??
+            Future<void>.value(),
+      );
       // THE one and only release site. Guarded on micAttempted: a bail-out
       // before acquireMic() was ever called (not_connected) took nothing, so
       // there is nothing to give back.
-      if (micAttempted) await _guardStep(releaseMic);
-      await _guardStep(() => chSub?.cancel() ?? Future<void>.value());
-      _guardSync(() => _connection.closeChannel(enrollTopic));
+      if (micAttempted) {
+        await _guardStep(
+          'release mic',
+          () => releaseMic().timeout(teardownTimeout, onTimeout: () {}),
+        );
+      }
+      await _guardStep(
+        'cancel channel subscription',
+        () => chSub?.cancel() ?? Future<void>.value(),
+      );
+      _guardSync('close channel', () => _connection.closeChannel(enrollTopic));
 
       _abortRecording = null;
       _recordingSlot = null;
@@ -336,28 +353,62 @@ class VoiceLockClient extends ChangeNotifier {
     }
   }
 
-  /// Runs one `finally` cleanup step, swallowing anything it throws —
-  /// synchronously or via its Future. No single cleanup step may stop the
-  /// ones after it: see [startRecording]'s own doc for why silently losing
-  /// track of "did the mic actually come back" is the failure this whole
-  /// task exists to prevent.
-  Future<void> _guardStep(Future<void> Function() action) async {
+  /// Runs one `finally` cleanup step, catching anything it throws —
+  /// synchronously or via its Future — and reporting it via [_reportStepError]
+  /// instead of letting it stop the ones after it: see [startRecording]'s own
+  /// doc for why silently losing track of "did the mic actually come back" is
+  /// the failure this whole task exists to prevent. [step] is a short label
+  /// (e.g. "release mic") used only for the report.
+  ///
+  /// This deliberately never rethrows, `Error` included. `startRecording` is
+  /// called fire-and-forget from a button's `onTap`
+  /// (`meridian/voice_lock_panel.dart`) with no `await`, no `catch`, and this
+  /// app installs no zone/`PlatformDispatcher` error handler — so a rethrow
+  /// here (even one deferred until after every step has run) would surface
+  /// as an unhandled Future rejection at that call site, not a caught,
+  /// reportable error. For the one subsystem whose entire job is "the mic
+  /// must always come back, and nothing about that process may go further
+  /// wrong," trading a silent bug for a possible crash is not a win — swap a
+  /// try/catch for an uncaught throw and Critical #2 (the last review) comes
+  /// back by a different door. `StateError`, which several tests below throw
+  /// to simulate realistic plugin/platform failures, is itself an `Error`
+  /// subtype in Dart, not an `Exception` — so an Error/Exception split does
+  /// not even cleanly separate "expected hardware failure" from "programming
+  /// bug" here. Observability (report, keep going) is the fix for a silent
+  /// bug; propagation is not.
+  Future<void> _guardStep(String step, Future<void> Function() action) async {
     try {
       await action();
-    } catch (_) {
-      // Deliberately swallowed — there is no user-facing surface for a
-      // cleanup-step failure, and the next step still has to run.
+    } catch (error, stack) {
+      _reportStepError(step, error, stack);
     }
   }
 
   /// Synchronous counterpart to [_guardStep], for a cleanup step (like
   /// closeChannel) that isn't async.
-  void _guardSync(void Function() action) {
+  void _guardSync(String step, void Function() action) {
     try {
       action();
-    } catch (_) {
-      // See _guardStep.
+    } catch (error, stack) {
+      _reportStepError(step, error, stack);
     }
+  }
+
+  /// Reports a caught cleanup-step failure through Flutter's normal
+  /// already-caught-error channel (`FlutterError.onError`, which defaults to
+  /// dumping to the console and is where a future crash-reporting hook would
+  /// attach) instead of dropping it. Before this, `_guardStep`/`_guardSync`
+  /// used a bare `catch (_) {}`: a review measured a `TypeError` thrown from
+  /// `releaseMic` producing zero zone errors and no output at all — a
+  /// genuine programming bug vanishing without trace in the one subsystem
+  /// whose whole failure mode is silence.
+  void _reportStepError(String step, Object error, StackTrace stack) {
+    FlutterError.reportError(FlutterErrorDetails(
+      exception: error,
+      stack: stack,
+      library: 'voice_lock_client',
+      context: ErrorDescription('startRecording cleanup step "$step" failed'),
+    ));
   }
 
   bool _push(String event, Map<String, dynamic> payload) {
