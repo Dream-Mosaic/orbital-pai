@@ -323,4 +323,73 @@ void main() {
     await settle();
     expect(b.vc.debugMicLoaned, isFalse);
   });
+
+  // The second-order problem behind VoiceLockClient.acquireTimeout: that
+  // timeout only stops the CALLER from waiting on a hung suspendMic() —
+  // Dart futures cannot be cancelled, so suspendMic()'s own unbounded
+  // _mic.start() keeps running underneath. This pins what suspendMic() and
+  // resumeMic() must do about it: a caller that gives up (by calling
+  // resumeMic() in its place, exactly what VoiceLockClient's `finally`
+  // does) must not be undone by the belated start() landing afterward —
+  // it must not hand back a stream nobody listens to, must not leave the
+  // recorder running unconsumed, and must not re-latch a loan resumeMic()
+  // already closed.
+  test(
+      'a suspendMic() whose caller gives up before it finishes stops the '
+      'recorder instead of leaving it running once it belatedly completes',
+      () async {
+    final mic = FakeMic(startDelay: const Duration(milliseconds: 60));
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    // The conversation's mic was off before the loan, so resumeMic() below
+    // has nothing to restore — isolating exactly the race this test means
+    // to exercise, rather than entangling it with the restore path already
+    // covered above.
+    expect(b.vc.micOn, isFalse);
+
+    final fut = b.vc.suspendMic();
+    expect(b.vc.debugMicLoaned, isTrue,
+        reason: 'suspendMic() latches the loan synchronously, before its '
+            'own first await');
+    // Zero-duration turns are enough to clear _micSub?.cancel() and
+    // _mic.stop() (nothing delays those here), landing suspendMic() inside
+    // its call to the delayed _mic.start() — genuinely in flight, not yet
+    // resolved. mic.startCalls proves it: FakeMic.start() increments that
+    // before awaiting its own delay.
+    await settle();
+    expect(mic.startCalls, 1,
+        reason: 'suspendMic() has called _mic.start() and is now waiting '
+            'on it');
+
+    // Simulates VoiceLockClient's acquireTimeout firing while suspendMic()
+    // is genuinely still in flight: the caller gives up and its `finally`
+    // calls resumeMic() in its place.
+    await b.vc.resumeMic();
+    await settle();
+    expect(b.vc.debugMicLoaned, isFalse);
+
+    // Now let the abandoned suspendMic() actually finish.
+    await expectLater(fut, throwsA(isA<StateError>()),
+        reason: 'a suspend that finishes after its caller already gave up '
+            'must not hand back a stream nobody will ever listen to');
+    await settle();
+
+    expect(mic.isRecording, isFalse,
+        reason: 'the belated start() must be stopped immediately, not left '
+            'running with nobody consuming it');
+    expect(b.vc.debugMicLoaned, isFalse,
+        reason: 'the stale continuation must not re-latch a loan resumeMic() '
+            'already closed');
+
+    // And the world still works afterward: a normal conversation turn can
+    // still get the microphone.
+    await b.vc.startMic();
+    await settle();
+    expect(b.vc.micOn, isTrue,
+        reason: 'a later, unrelated startMic() must not be wedged by the '
+            'stale loan');
+  });
 }

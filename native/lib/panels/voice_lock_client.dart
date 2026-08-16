@@ -100,6 +100,7 @@ class VoiceLockClient extends ChangeNotifier {
     this.clipLimit = const Duration(seconds: 12),
     this.replyTimeout = const Duration(seconds: 10),
     this.teardownTimeout = const Duration(seconds: 2),
+    this.acquireTimeout = const Duration(seconds: 5),
   }) : _connection = connection;
 
   static const String topic = 'panel:voice_lock:henry';
@@ -127,6 +128,19 @@ class VoiceLockClient extends ChangeNotifier {
   /// silent, permanent deafness, worse than a thrown exception because there
   /// is nothing to catch.
   final Duration teardownTimeout;
+
+  /// How long [acquireMic] (VoiceController.suspendMic) is allowed to hang
+  /// before [startRecording] gives up on it. suspendMic's own platform-
+  /// channel awaits — stopping the conversation's recorder, then starting
+  /// the loaned one — are unbounded: a wedged audio subsystem or another
+  /// app holding the mic can park them forever. Unlike a thrown exception,
+  /// a hang there is invisible to the `catch` below: `await acquireMic()`
+  /// simply never returns, so the `finally` never runs, `_micLoaned` is
+  /// already latched, and the conversation's own capture is already
+  /// stopped — deaf, permanently, silently. This bound turns that hang into
+  /// an ordinary `TimeoutException`, which the existing `catch` already
+  /// treats exactly like a refused mic.
+  final Duration acquireTimeout;
 
   PhoenixChannel? _channel;
   StreamSubscription<DecodedMessage>? _sub;
@@ -273,10 +287,14 @@ class VoiceLockClient extends ChangeNotifier {
       final Stream<Uint8List> stream;
       try {
         micAttempted = true;
-        stream = await acquireMic();
+        // Bounded the same way releaseMic() is bounded below: a hang must
+        // become a catchable failure, not a permanently parked await. See
+        // [acquireTimeout] for why this exists.
+        stream = await acquireMic().timeout(acquireTimeout);
       } catch (_) {
         // Matches the web hook's own reason string for a refused mic
-        // (assets/js/voice/enroll.js:37).
+        // (assets/js/voice/enroll.js:37). A timed-out acquire lands here
+        // too now (TimeoutException), not just an outright throw.
         if (_open) _enrollError = (slot, 'failed: mic_blocked');
         return;
       }

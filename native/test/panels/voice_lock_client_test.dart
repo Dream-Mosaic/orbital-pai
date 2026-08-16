@@ -1179,5 +1179,61 @@ void main() {
             'forever',
       );
     });
+
+    // The other half of tests 15/16: those bound the RELEASE path
+    // (VoiceController.resumeMic / its mic-sub cancel); this bounds the
+    // ACQUIRE path (VoiceController.suspendMic). Before acquireTimeout, a
+    // hanging acquireMic() parked `await acquireMic()` inside the try
+    // FOREVER: the finally never ran, _micLoaned was already latched by
+    // suspendMic() before its own first await, and the conversation's
+    // capture was already stopped — deaf, permanently, silently, with
+    // nothing to catch (a hang isn't a throw). acquireTimeout is overridden
+    // short so the test doesn't wait out a real hang.
+    test(
+        '20: an acquireMic() that hangs does not park the finally forever',
+        () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final neverDone = Completer<Stream<Uint8List>>();
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () {
+          acquires++;
+          return neverDone.future;
+        },
+        releaseMic: () async => releases++,
+        clipLimit: const Duration(seconds: 5),
+        replyTimeout: const Duration(seconds: 5),
+        acquireTimeout: const Duration(milliseconds: 30),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      // The whole assertion: without the acquire timeout this future never
+      // completes and the test times out instead of failing cleanly, which
+      // is exactly the production symptom (recordingSlot stuck at 1
+      // forever, the mic never given back).
+      final fut = client.startRecording(1);
+      await pumpEventQueue();
+      expect(fake.joinedTopics, contains('enroll:7'));
+
+      await fut.timeout(const Duration(milliseconds: 500));
+
+      expect(releases, 1,
+          reason: 'a hanging acquireMic() must still reach the finally that '
+              'owns releasing the mic');
+      expect(client.recordingSlot, isNull);
+      expect(client.enrollError, (1, 'failed: mic_blocked'));
+    });
   });
 }

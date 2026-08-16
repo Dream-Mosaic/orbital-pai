@@ -89,6 +89,16 @@ class VoiceController extends ChangeNotifier {
   /// comes back rather than silently lost.
   bool _resumeMicWanted = false;
 
+  /// Bumped by suspendMic() (capturing its own value) and again by
+  /// resumeMic(), so a suspendMic() call whose caller gave up on it (see
+  /// VoiceLockClient.acquireTimeout) can tell, once its own unbounded
+  /// platform-channel awaits eventually return anyway, that the world moved
+  /// on without it. Without this, a late-arriving `_mic.start()` would hand
+  /// back — or just abandon — a live, running recording session nobody is
+  /// listening to, and the state writes around it (`_micOn`, `_micSub`)
+  /// could clobber whatever a newer suspend/resume cycle already set up.
+  int _micLoanGeneration = 0;
+
   // Mirrors index.js's `this.pttHeld`: read by the `state` snapshot merge and
   // written by pttPress/pttRelease.
   bool _pttHeld = false;
@@ -669,16 +679,40 @@ class VoiceController extends ChangeNotifier {
     _micLoaned = true;
     _resumeMicWanted = _micOn || _micWanted;
     _micWanted = false;
+    // Captured now, checked after each unbounded await below. resumeMic()
+    // bumps this too, so a caller that gave up on this suspend (its own
+    // await timed out — see VoiceLockClient.acquireTimeout) leaves a mark:
+    // if any of these platform-channel calls eventually returns anyway, this
+    // call can tell it is no longer the current loan instead of clobbering
+    // state a newer suspend/resume cycle already owns.
+    final generation = _micLoanGeneration = _micLoanGeneration + 1;
+    bool superseded() => _disposed || generation != _micLoanGeneration;
+
     await _micSub?.cancel();
+    if (superseded()) {
+      throw StateError('mic loan superseded while cancelling the mic sub');
+    }
     _micSub = null;
     await _mic.stop();
+    if (superseded()) {
+      throw StateError('mic loan superseded while stopping the mic');
+    }
     _micOn = false;
     _talking = false;
     _turnState = TurnState.idle;
     orbFrame.audioTarget = 0.0;
     _syncOrb();
     _log('mic loaned out (enrollment)');
-    return _mic.start();
+    final stream = await _mic.start();
+    if (superseded()) {
+      // Nobody is coming back for this stream: the caller already gave up
+      // and resumeMic() already ran in its place. Stop the session we just
+      // (belatedly) opened rather than returning — or silently leaking — a
+      // live recording nobody will ever listen to.
+      unawaited(_mic.stop());
+      throw StateError('mic loan superseded before the acquire completed');
+    }
+    return stream;
   }
 
   /// Give the microphone back. Idempotent, and safe to call when [suspendMic]
@@ -694,6 +728,10 @@ class VoiceController extends ChangeNotifier {
   Future<void> resumeMic() async {
     if (!_micLoaned) return;
     _micLoaned = false;
+    // Marks any suspendMic() still in flight (its caller already gave up
+    // waiting on it) as superseded, so a late-arriving result from it
+    // cleans itself up instead of clobbering what this call is about to do.
+    _micLoanGeneration++;
     // Stop whatever session suspendMic() opened for the borrower. Harmless if
     // start() threw and there is none: MicCapture.stop() short-circuits on
     // !_recording.
