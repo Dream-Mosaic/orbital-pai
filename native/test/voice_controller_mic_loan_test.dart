@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/audio/audio_track_player.dart';
 import 'package:henry_wall/audio/mic_capture.dart';
@@ -67,6 +67,18 @@ class FakeSocket {
   final vc = VoiceController(
       connection: conn, mic: mic ?? FakeMic(), player: player ?? FakePlayer());
   return (conn: conn, vc: vc, fake: fake);
+}
+
+/// Take delivery of the errors a test deliberately provokes. A platform stop
+/// that fails or times out is REPORTED on purpose — silence is the bug this
+/// subsystem keeps producing — so a test that drives one must collect it
+/// rather than let `FlutterError.onError` fail the test with it.
+List<FlutterErrorDetails> captureFlutterErrors() {
+  final reports = <FlutterErrorDetails>[];
+  final original = FlutterError.onError;
+  FlutterError.onError = reports.add;
+  addTearDown(() => FlutterError.onError = original);
+  return reports;
 }
 
 void main() {
@@ -345,20 +357,23 @@ void main() {
     await b.conn.connect();
     await settle();
     // The conversation's mic was off before the loan, so resumeMic() below
-    // has nothing to restore — isolating exactly the race this test means
-    // to exercise, rather than entangling it with the restore path already
-    // covered above.
+    // has nothing to restore. That is ONE case, not the interesting one: the
+    // entangled version — mic ON, so the restore path runs too — is covered
+    // by the test immediately below and by the sixth-Critical pair at the end
+    // of this file. Leaving the entangled case out is exactly how the fifth
+    // and sixth Criticals hid.
     expect(b.vc.micOn, isFalse);
 
     final fut = b.vc.suspendMic();
     expect(b.vc.debugMicLoaned, isTrue,
         reason: 'suspendMic() latches the loan synchronously, before its '
             'own first await');
-    // Zero-duration turns are enough to clear _micSub?.cancel() and
-    // _mic.stop() (nothing delays those here), landing suspendMic() inside
-    // its call to the delayed _mic.start() — genuinely in flight, not yet
-    // resolved. mic.startCalls proves it: FakeMic.start() increments that
-    // before awaiting its own delay.
+    // Zero-duration turns are enough to clear the conversation's own teardown
+    // (nothing delays it here), landing suspendMic() inside the delayed open
+    // of the borrowed session — genuinely in flight, not yet resolved.
+    // `mic.startCalls` proves it: it counts FakeRecorder.startStream calls,
+    // incremented once hasPermission() has resolved and the platform open is
+    // actually under way.
     await settle();
     expect(mic.startCalls, 1,
         reason: 'suspendMic() has called _mic.start() and is now waiting '
@@ -569,8 +584,185 @@ void main() {
     // be self-healing today (see resumeMic), so the log is what makes the
     // guard falsifiable at all — without it there is nothing to distinguish
     // "recognised itself as stale" from "got lucky".
-    expect(b.vc.eventLog, contains('mic return superseded'),
-        reason: 'resumeMic() must read the generation it bumps, not just bump '
+    // The abandoned first return also has to have stood down rather than run
+    // its tail against a cycle it no longer owned. What makes that falsifiable
+    // is the hardware, not a log line: a stale return that acted would have
+    // stopped or re-opened the recorder underneath the live session.
+    expect(mic.maxConcurrentStarts, 1);
+    expect(mic.recorder.startedOnLiveRecorder, isFalse,
+        reason: 'the abandoned return must not have opened a session on top '
+            'of the one enrollment 2 was holding');
+  });
+
+  // ---- THE SIXTH CRITICAL: the microphone goes off in the same breath the
+  // conversation gives up the recorder, never on the far side of a platform
+  // call ----
+  //
+  // Measured before the fix: suspendMic() dropped `_micSub` and `_micSession`
+  // BEFORE `await conversation.stop()` but set `_micOn = false` AFTER it,
+  // behind a superseded() that throws. A stop that wedged therefore left
+  // `micOn == true` over no recorder at all — and every automatic recovery
+  // path (_reArmMic, setPtt, resumeMic's own restore) funnels into startMic(),
+  // which bailed on `_micOn`. Recovery was two deliberate power taps by a user
+  // whose indicator said the assistant was listening.
+  //
+  // Both earlier race tests in this file park suspendMic at its LATER platform
+  // call (`_mic.start()`). These park it at the FIRST one, WITH THE MIC ON —
+  // the entangled case, which is the damaging one. That exclusion is how the
+  // sixth Critical hid.
+
+  test('a conversation stop that never answers cannot leave the microphone '
+      'claiming to be on', () async {
+    captureFlutterErrors();
+    final mic = FakeMic(
+      // The conversation's own session refuses to stop, the way a wedged
+      // audio subsystem does: no exception, just no answer. Bounded inside
+      // MicCapture (Invariant B), so it resolves — late, and as a failure.
+      stopBehaviour: const [FakeCall.hangs],
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the conversation has the mic');
+
+    Object? loanOutcome;
+    final loan = b.vc.suspendMic().then<void>(
+          (s) => loanOutcome = s,
+          onError: (Object e) => loanOutcome = e,
+        );
+    await settle();
+
+    // THE assertion. The conversation has already let go of its subscription
+    // and its session; a state that still reports "on" is a lie every
+    // recovery path then acts on.
+    expect(b.vc.micOn, isFalse,
+        reason: 'the transition off happens with the handles it describes, '
+            'entirely before the platform call — not after it, and not '
+            'conditionally on it returning');
+    expect(b.vc.debugMicLoaned, isTrue,
+        reason: 'sanity: the loan really is in flight at this point');
+
+    // And the same must hold once the wedged stop finally gives up.
+    await b.vc.resumeMic();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    await settle();
+    await loan;
+    expect(loanOutcome, anything, reason: 'the abandoned loan settled');
+  });
+
+  test('a conversation stop that wedges must not leave the restore path dead',
+      () async {
+    // The full sixth-Critical scenario, end to end: mic ON, Record tapped,
+    // suspendMic parks in the conversation's platform stop, acquireTimeout
+    // fires, and the borrower's `finally` calls resumeMic() in its place.
+    captureFlutterErrors();
+    final mic = FakeMic(
+      stopBehaviour: const [FakeCall.hangs],
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    Object? loanOutcome;
+    final loan = b.vc.suspendMic().then<void>(
+          (s) => loanOutcome = s,
+          onError: (Object e) => loanOutcome = e,
+        );
+    await settle();
+
+    unawaited(b.vc.resumeMic());
+    // Long enough for the bounded stop to give up and for the restore to open
+    // its own session behind it.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await settle();
+    await loan;
+
+    expect(loanOutcome, isA<StateError>(),
+        reason: 'the abandoned suspend must fail rather than hand back a '
+            'stream nobody will listen to');
+    expect(b.vc.micOn, isTrue,
+        reason: 'the restore must actually restart the microphone — it used '
+            'to bail out on a stale micOn and nothing ever restarted it');
+    expect(mic.isRecording, isTrue,
+        reason: 'and the indicator must not be the only thing that recovered');
+    expect(mic.maxConcurrentStarts, 1);
+    expect(mic.recorder.startedOnLiveRecorder, isFalse);
+
+    // The decisive assertion: the assistant can actually hear again.
+    b.fake.sent.clear();
+    mic.emit(Uint8List.fromList(const [4, 2, 4, 2]));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty,
+        reason: 'micOn is a flag; this is the conversation subscribed to the '
+            'session that is really running');
+  });
+
+  test('a conversation stop the platform refuses still completes the loan',
+      () async {
+    // The sixth Critical's SECOND trigger: a platform stop that THROWS rather
+    // than wedging used to propagate straight out of suspendMic() with the
+    // mic still claiming to be on. MicSession.stop() is non-throwing by
+    // construction now, so the loan simply proceeds.
+    captureFlutterErrors();
+    final mic = FakeMic(stopBehaviour: const [FakeCall.throws]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    final stream = await b.vc.suspendMic();
+
+    expect(b.vc.micOn, isFalse);
+    expect(b.vc.debugMicLoaned, isTrue);
+    final frames = <Uint8List>[];
+    final sub = stream.listen(frames.add);
+    mic.emit(Uint8List.fromList(const [5, 5]));
+    await settle();
+    expect(frames, hasLength(1),
+        reason: 'the borrowed stream must be live even though the '
+            "conversation's own session refused to close");
+    await sub.cancel();
+  });
+
+  test('a loan stop the platform refuses still gives the microphone back',
+      () async {
+    // Important 3: `await session?.stop()` throwing used to exit resumeMic()
+    // with `_micLoaned` already false and `_resumeMicWanted` never consumed,
+    // so startMic() was never reached and the mic never returned (logcat
+    // only — the indicator was honest, so nothing looked wrong).
+    captureFlutterErrors();
+    // stop #1 closes the conversation's session; stop #2 is the loan's return
+    // and the platform refuses it.
+    final mic = FakeMic(stopBehaviour: const [FakeCall.ok, FakeCall.throws]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await b.vc.suspendMic();
+    expect(b.vc.micOn, isFalse);
+
+    await b.vc.resumeMic();
+    await settle();
+
+    expect(b.vc.micOn, isTrue,
+        reason: 'the restore intent is consumed in the same synchronous '
+            'transition that ends the loan, so no platform failure can strand '
             'it');
+    expect(mic.isRecording, isTrue);
+    expect(b.vc.debugMicLoaned, isFalse);
   });
 }

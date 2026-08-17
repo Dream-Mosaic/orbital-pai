@@ -139,11 +139,19 @@ class MicCapture {
     MicRecorder? recorder,
     Duration? platformTimeout,
     Duration? permissionTimeout,
-  }) : _recorder = _BoundedRecorder(
+  })  : platformTimeout = platformTimeout ?? defaultPlatformTimeout,
+        _recorder = _BoundedRecorder(
           recorder ?? _PluginRecorder(),
           platformTimeout: platformTimeout ?? defaultPlatformTimeout,
           permissionTimeout: permissionTimeout ?? defaultPermissionTimeout,
         );
+
+  /// The bound every platform call in here is subject to, exposed for the one
+  /// microphone-shaped call that does NOT come through this class: the
+  /// `cancel()` of the subscription a caller attaches to a session's stream.
+  /// That subscription belongs to the plugin's own stream, so a caller has to
+  /// bound it — and the honest bound is the same one the hardware gets.
+  final Duration platformTimeout;
 
   /// How long `startStream`/`stop` may take before we stop believing in them.
   /// Comfortably longer than either takes on a healthy device, and strictly
