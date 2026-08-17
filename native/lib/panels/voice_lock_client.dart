@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../audio/mic_capture.dart';
 import '../connection/app_connection.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
@@ -246,12 +247,16 @@ class VoiceLockClient extends ChangeNotifier {
     Timer? replyTimer;
     final ended = Completer<_Ending>();
     var rejectReason = 'unknown';
-    // Set right before acquireMic() is called — even if it throws — so the
-    // finally releases only a mic that was actually (attempted to be) taken.
-    // Without this, a not_connected bail-out (which returns before ever
-    // calling acquireMic) would still call releaseMic(), resuming a
-    // conversation mic that was never suspended.
-    var micAttempted = false;
+    // Whether the loan MIGHT be ours. Set right before acquireMic() is
+    // called — even if it goes on to throw or time out — because suspendMic()
+    // gives the conversation's recorder up in its first synchronous breath,
+    // so a failure part-way down can still leave the loan taken and only
+    // releaseMic() ends it. Without this flag at all, a not_connected
+    // bail-out (which returns before ever calling acquireMic) would release a
+    // mic that was never suspended.
+    //
+    // Exactly one failure proves the opposite, and it is cleared below.
+    var micHeld = false;
     void end(_Ending e) {
       if (!ended.isCompleted) ended.complete(e);
     }
@@ -300,15 +305,28 @@ class VoiceLockClient extends ChangeNotifier {
 
       final Stream<Uint8List> stream;
       try {
-        micAttempted = true;
+        micHeld = true;
         // Bounded the same way releaseMic() is bounded below: a hang must
         // become a catchable failure, not a permanently parked await. See
         // [acquireTimeout] for why this exists.
         stream = await acquireMic().timeout(acquireTimeout);
+      } on MicAlreadyLoaned {
+        // THE refusal that took nothing — which is precisely why it has its
+        // own type rather than being one more StateError. The loan it names
+        // belongs to ANOTHER recording, still in flight in its own teardown;
+        // releasing it here would end that loan, stop the session that
+        // recording is streaming into, and fire its restore. Reachable since
+        // close() began clearing `_recordingSlot` up front, which lets a
+        // dismissed-and-reopened drawer start a second Record inside the
+        // first teardown's window.
+        micHeld = false;
+        if (_open) _enrollError = (slot, 'failed: mic_blocked');
+        return;
       } catch (_) {
         // Matches the web hook's own reason string for a refused mic
         // (assets/js/voice/enroll.js:37). A timed-out acquire lands here
-        // too now (TimeoutException), not just an outright throw.
+        // too now (TimeoutException), not just an outright throw — and both
+        // may be holding the loan, so `micHeld` deliberately stays set.
         if (_open) _enrollError = (slot, 'failed: mic_blocked');
         return;
       }
@@ -364,10 +382,11 @@ class VoiceLockClient extends ChangeNotifier {
             micSub?.cancel().timeout(teardownTimeout, onTimeout: () {}) ??
             Future<void>.value(),
       );
-      // THE one and only release site. Guarded on micAttempted: a bail-out
-      // before acquireMic() was ever called (not_connected) took nothing, so
-      // there is nothing to give back.
-      if (micAttempted) {
+      // THE one and only release site. Guarded on micHeld: a bail-out before
+      // acquireMic() was ever called (not_connected), or a refusal that
+      // proved it took nothing (MicAlreadyLoaned), has nothing to give back —
+      // and giving back a loan you never took ends somebody else's.
+      if (micHeld) {
         await _guardStep(
           'release mic',
           () => releaseMic().timeout(teardownTimeout, onTimeout: () {}),

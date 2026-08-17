@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:henry_wall/audio/mic_capture.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/panels/voice_lock_client.dart';
 
@@ -1357,6 +1358,89 @@ void main() {
       client.close();
       await second.timeout(const Duration(seconds: 2));
       expect(client.recordingSlot, isNull);
+    });
+
+    // Important 4 of the session-fix review, and it was INTRODUCED by the fix
+    // above: once close() cleared `_recordingSlot` up front, a dismissed-and-
+    // reopened drawer could start a second Record inside the first teardown's
+    // window — while the first recording still holds the microphone loan.
+    // suspendMic() refuses that with MicAlreadyLoaned, having TAKEN NOTHING,
+    // and the finally released anyway: ending somebody else's loan, stopping
+    // the session they are still streaming into, and firing their restore.
+    test(
+        '23: a microphone already on loan to another recording is refused '
+        'without releasing that recording\'s loan', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        // Exactly what VoiceController.suspendMic() does when the recorder is
+        // already lent out. The distinct type is the whole point: it is the
+        // one failure that PROVES nothing was taken.
+        acquireMic: () async => throw MicAlreadyLoaned(),
+        releaseMic: () async => releases++,
+        clipLimit: const Duration(milliseconds: 20),
+        replyTimeout: const Duration(milliseconds: 20),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      await client.startRecording(2).timeout(const Duration(seconds: 2));
+
+      expect(releases, 0,
+          reason: 'this recording took nothing; the loan it was refused '
+              'belongs to another one, and releasing it here deafens the '
+              'conversation that loan belongs to');
+      expect(client.enrollError, (2, 'failed: mic_blocked'),
+          reason: 'the user still has to be told the mic was unavailable');
+      expect(client.recordingSlot, isNull);
+    });
+
+    // Any OTHER acquire failure may well have taken the loan on its way down
+    // (suspendMic gives the conversation's recorder up in its first
+    // synchronous breath, before anything can fail), so the release still has
+    // to run. This is the assertion that stops the fix above from becoming
+    // "never release on failure", which is the deafness this whole file
+    // exists to prevent.
+    test('24: an acquire that fails any OTHER way still releases', () async {
+      final fake = FakeSocket(
+          joinPushes: const {'panel:voice_lock:henry': _stateFrame});
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final client = VoiceLockClient(
+        connection: conn,
+        acquireMic: () async => throw StateError('the platform said no'),
+        releaseMic: () async => releases++,
+        clipLimit: const Duration(milliseconds: 20),
+        replyTimeout: const Duration(milliseconds: 20),
+      );
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      await client.startRecording(2).timeout(const Duration(seconds: 2));
+
+      expect(releases, 1,
+          reason: 'a suspend that failed part-way may still be holding the '
+              'loan, and only resumeMic() ends it');
+      expect(client.enrollError, (2, 'failed: mic_blocked'));
     });
   });
 }
