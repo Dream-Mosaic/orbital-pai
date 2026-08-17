@@ -5,6 +5,12 @@ import 'package:henry_wall/audio/audio_track_player.dart';
 import 'package:henry_wall/audio/mic_capture.dart';
 import 'package:record/record.dart';
 
+/// What one platform call does. The `record` plugin can refuse (a throw) and
+/// can simply never answer (a wedged audio subsystem, another app holding the
+/// mic) — a fake that only ever succeeds cannot catch a bug whose whole shape
+/// is "what does the state machine claim when the hardware misbehaves".
+enum FakeCall { ok, throws, hangs }
+
 /// Headless [MicRecorder]: the platform half of MicCapture, and nothing else.
 ///
 /// The fake stops HERE, one layer lower than it used to. [FakeMic] is now the
@@ -13,13 +19,24 @@ import 'package:record/record.dart';
 /// fake's re-statement of them — a fake that reimplements the rules cannot
 /// fail when the rules break. No AudioRecorder, and therefore no platform
 /// channel, is ever constructed.
+///
+/// It models three things a real recorder does and this fake did not:
+/// a successful `stop()` **ends the session's stream**; a failing `stop()`
+/// leaves the hardware **streaming**; and any call can throw or simply never
+/// return. Six Criticals of one class all lived on exactly those axes.
 class FakeRecorder implements MicRecorder {
   FakeRecorder({
     this.startDelay = Duration.zero,
     List<Duration>? startDelays,
     this.stopDelay = Duration.zero,
     this.permitted = true,
-  }) : _startDelays = List.of(startDelays ?? const <Duration>[]);
+    this.stopEndsStream = true,
+    List<FakeCall>? startBehaviour,
+    List<FakeCall>? stopBehaviour,
+    this.permissionBehaviour = FakeCall.ok,
+  })  : _startDelays = List.of(startDelays ?? const <Duration>[]),
+        _startBehaviour = List.of(startBehaviour ?? const <FakeCall>[]),
+        _stopBehaviour = List.of(stopBehaviour ?? const <FakeCall>[]);
 
   /// How long `startStream` takes when [startDelays] has nothing to say.
   final Duration startDelay;
@@ -31,6 +48,18 @@ class FakeRecorder implements MicRecorder {
   final Duration stopDelay;
   final bool permitted;
 
+  /// A successful `AudioRecorder.stop()` closes the stream it handed out. A
+  /// FAILING one does not: the hardware keeps streaming, which is the whole
+  /// reason a state machine may not record "stopped" until it knows.
+  final bool stopEndsStream;
+
+  /// Per-call outcomes, indexed by call number; anything past the end is
+  /// [FakeCall.ok]. `hangs` returns a future that never completes — a wedge,
+  /// with no timer to leak.
+  final List<FakeCall> _startBehaviour;
+  final List<FakeCall> _stopBehaviour;
+  final FakeCall permissionBehaviour;
+
   /// ONE controller per start(). A real recorder opens a new session each
   /// time; a single-subscription StreamController cannot be listened to
   /// twice, so a shared one made every SECOND mic session throw "Stream has
@@ -41,6 +70,7 @@ class FakeRecorder implements MicRecorder {
 
   int startCalls = 0;
   int stopCalls = 0;
+  int permissionCalls = 0;
   bool listening = false;
   bool cancelled = false;
 
@@ -50,25 +80,58 @@ class FakeRecorder implements MicRecorder {
   int maxConcurrentStarts = 0;
   int _startsInFlight = 0;
 
+  /// True if `startStream` was ever called while a previous session was still
+  /// streaming. The SEQUENTIAL form of the same undefined behaviour
+  /// [maxConcurrentStarts] catches concurrently — and the one a failing
+  /// `stop()` produces.
+  bool startedOnLiveRecorder = false;
+
+  /// The session the hardware is currently streaming, or null.
+  StreamController<Uint8List>? _live;
+
+  /// Whether the fake HARDWARE is streaming, independent of anything
+  /// MicCapture believes.
+  bool get platformStreaming => _live != null;
+
+  FakeCall _behaviour(List<FakeCall> list, int call) =>
+      call < list.length ? list[call] : FakeCall.ok;
+
   @override
-  Future<bool> hasPermission() async => permitted;
+  Future<bool> hasPermission() async {
+    permissionCalls++;
+    switch (permissionBehaviour) {
+      case FakeCall.hangs:
+        return Completer<bool>().future;
+      case FakeCall.throws:
+        throw StateError('platform refused to answer about permission');
+      case FakeCall.ok:
+        return permitted;
+    }
+  }
 
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) async {
+    final behaviour = _behaviour(_startBehaviour, startCalls);
     final delay =
         startCalls < _startDelays.length ? _startDelays[startCalls] : startDelay;
+    if (_live != null) startedOnLiveRecorder = true;
     startCalls++;
+    if (behaviour == FakeCall.hangs) return Completer<Stream<Uint8List>>().future;
     _startsInFlight++;
     if (_startsInFlight > maxConcurrentStarts) {
       maxConcurrentStarts = _startsInFlight;
     }
     try {
       if (delay > Duration.zero) await Future<void>.delayed(delay);
+      if (behaviour == FakeCall.throws) {
+        throw StateError('platform refused to start');
+      }
       final c = StreamController<Uint8List>(
         onListen: () => listening = true,
         onCancel: () => cancelled = true,
       );
       sessions.add(c);
+      _live = c;
       return c.stream;
     } finally {
       _startsInFlight--;
@@ -77,8 +140,17 @@ class FakeRecorder implements MicRecorder {
 
   @override
   Future<void> stop() async {
+    final behaviour = _behaviour(_stopBehaviour, stopCalls);
     stopCalls++;
+    if (behaviour == FakeCall.hangs) return Completer<void>().future;
     if (stopDelay > Duration.zero) await Future<void>.delayed(stopDelay);
+    if (behaviour == FakeCall.throws) {
+      // The hardware keeps streaming: `_live` is deliberately NOT cleared.
+      throw StateError('platform refused to stop');
+    }
+    final live = _live;
+    _live = null;
+    if (stopEndsStream && live != null && !live.isClosed) live.close();
   }
 }
 
@@ -89,13 +161,26 @@ class FakeMic extends MicCapture {
     Duration startDelay = Duration.zero,
     List<Duration>? startDelays,
     Duration stopDelay = Duration.zero,
-  }) : this.withRecorder(FakeRecorder(
-          startDelay: startDelay,
-          startDelays: startDelays,
-          stopDelay: stopDelay,
-        ));
+    List<FakeCall>? startBehaviour,
+    List<FakeCall>? stopBehaviour,
+    FakeCall permissionBehaviour = FakeCall.ok,
+    Duration? platformTimeout,
+    Duration? permissionTimeout,
+  }) : this.withRecorder(
+          FakeRecorder(
+            startDelay: startDelay,
+            startDelays: startDelays,
+            stopDelay: stopDelay,
+            startBehaviour: startBehaviour,
+            stopBehaviour: stopBehaviour,
+            permissionBehaviour: permissionBehaviour,
+          ),
+          platformTimeout: platformTimeout,
+          permissionTimeout: permissionTimeout,
+        );
 
-  FakeMic.withRecorder(this.recorder) : super(recorder: recorder);
+  FakeMic.withRecorder(this.recorder, {super.platformTimeout, super.permissionTimeout})
+      : super(recorder: recorder);
 
   final FakeRecorder recorder;
 
