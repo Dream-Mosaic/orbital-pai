@@ -1,7 +1,20 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/audio/mic_capture.dart';
 
 import 'support/fakes.dart';
+
+/// Collect the errors a test EXPECTS MicCapture to report, instead of letting
+/// `FlutterError.onError` fail the test with them. A platform stop that fails
+/// is reported on purpose (silence is the bug this subsystem keeps producing),
+/// so a test that drives one has to take delivery of the report.
+List<FlutterErrorDetails> captureFlutterErrors() {
+  final reports = <FlutterErrorDetails>[];
+  final original = FlutterError.onError;
+  FlutterError.onError = reports.add;
+  addTearDown(() => FlutterError.onError = original);
+  return reports;
+}
 
 /// MicCapture's session rules, straight — no VoiceController in the way.
 ///
@@ -112,5 +125,108 @@ void main() {
     final mic2 = MicCapture(recorder: rec2);
     await mic2.start().stream;
     expect(mic2.isRecording, isTrue);
+  });
+
+  // ---- the platform REFUSING to stop (Critical 2 of the session-fix review) ----
+  //
+  // `_running = false` used to be written before `await _recorder.stop()`, and
+  // the stop RETHREW. A platform that refuses while the hardware keeps
+  // streaming therefore left MicCapture recording "idle" over a live recorder,
+  // and the next open skipped its defensive stop and issued `startStream` on
+  // top of it — measured `overlapSeen = true`. The rethrow separately aborted
+  // `VoiceController.stopMic()` half-way through. Both are Invariant A: the
+  // flag was written on the far side of a platform call and was simply not
+  // true when the call failed.
+
+  test('a stop the platform refuses is reported, never thrown, and leaves the '
+      'hardware recorded as possibly-still-streaming', () async {
+    final reports = captureFlutterErrors();
+    final rec = FakeRecorder(stopBehaviour: const [FakeCall.throws]);
+    final mic = MicCapture(recorder: rec);
+
+    final session = mic.start();
+    await session.stream;
+    expect(rec.platformStreaming, isTrue, reason: 'sanity: the fake is live');
+
+    // Must NOT throw: teardown is the one thing that always has to finish.
+    // A rethrow here aborted stopMic() before it could put the state right.
+    await session.stop();
+
+    expect(mic.hardware, MicHardware.unknown,
+        reason: 'we asked and were not told; recording that as idle is what '
+            'let the next start run on a live recorder');
+    expect(mic.isRecording, isFalse);
+    expect(rec.platformStreaming, isTrue,
+        reason: 'sanity: the hardware really did keep streaming');
+    expect(reports, hasLength(1),
+        reason: 'a swallowed platform failure is how this class of bug stays '
+            'invisible');
+  });
+
+  test('after a refused stop the next start re-stops the recorder instead of '
+      'opening on top of it', () async {
+    captureFlutterErrors();
+    // The first stop fails; the defensive stop inside the next open succeeds.
+    final rec = FakeRecorder(stopBehaviour: const [FakeCall.throws]);
+    final mic = MicCapture(recorder: rec);
+
+    final first = mic.start();
+    await first.stream;
+    await first.stop();
+
+    final second = mic.start();
+    await second.stream;
+
+    expect(rec.startedOnLiveRecorder, isFalse,
+        reason: 'two overlapping sessions on one AudioRecorder is the '
+            'undefined behaviour this whole class exists to prevent');
+    expect(rec.stopCalls, 2,
+        reason: 'the second open must retry the stop it was never told '
+            'succeeded');
+    expect(mic.isRecording, isTrue);
+  });
+
+  test('a recorder that will not stop at all refuses to start rather than '
+      'streaming twice', () async {
+    captureFlutterErrors();
+    final rec =
+        FakeRecorder(stopBehaviour: const [FakeCall.throws, FakeCall.throws]);
+    final mic = MicCapture(recorder: rec);
+
+    final first = mic.start();
+    await first.stream;
+    await first.stop();
+
+    final second = mic.start();
+    await expectLater(second.stream, throwsA(isA<StateError>()));
+
+    expect(rec.startCalls, 1,
+        reason: 'no second startStream may be issued while the first session '
+            'may still be live');
+    expect(rec.startedOnLiveRecorder, isFalse);
+    expect(second.isActive, isFalse,
+        reason: 'a session that refused to open must not hold the claim');
+  });
+
+  test('a stop that never answers is bounded, and the session gives up its '
+      'claim anyway', () async {
+    captureFlutterErrors();
+    final rec = FakeRecorder(stopBehaviour: const [FakeCall.hangs]);
+    final mic = MicCapture(
+      recorder: rec,
+      platformTimeout: const Duration(milliseconds: 40),
+    );
+
+    final session = mic.start();
+    await session.stream;
+
+    // Invariant B: unbounded is worse than throwing, because there is nothing
+    // to catch. This must complete on its own.
+    await session.stop().timeout(const Duration(seconds: 2));
+
+    expect(session.isActive, isFalse,
+        reason: 'the claim is dropped synchronously, before the platform call '
+            '— a wedged stop may not keep the recorder claimed forever');
+    expect(mic.hardware, MicHardware.unknown);
   });
 }
