@@ -141,14 +141,6 @@ class MicState {
     );
   }
 
-  /// The borrowed session is no longer ours to close (it never opened, or a
-  /// newer cycle owns it), but the loan itself stands.
-  MicState withoutBorrowedSession() => MicState._(
-        loaned: loaned,
-        resumeWanted: resumeWanted,
-        wasOn: wasOn,
-      );
-
   /// The loan is over. Whether the microphone comes back is [resumeWanted]'s
   /// business, and is deliberately still pending here.
   MicState returnedFromLoan() => MicState._(

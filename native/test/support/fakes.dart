@@ -34,6 +34,7 @@ class FakeRecorder implements MicRecorder {
     List<FakeCall>? startBehaviour,
     List<FakeCall>? stopBehaviour,
     this.permissionBehaviour = FakeCall.ok,
+    this.cancelBehaviour = FakeCall.ok,
   })  : _startDelays = List.of(startDelays ?? const <Duration>[]),
         _startBehaviour = List.of(startBehaviour ?? const <FakeCall>[]),
         _stopBehaviour = List.of(stopBehaviour ?? const <FakeCall>[]);
@@ -59,6 +60,13 @@ class FakeRecorder implements MicRecorder {
   final List<FakeCall> _startBehaviour;
   final List<FakeCall> _stopBehaviour;
   final FakeCall permissionBehaviour;
+
+  /// What the SESSION STREAM's own `cancel()` does. That stream belongs to the
+  /// plugin, not to MicCapture, so it is the one microphone-shaped call a
+  /// caller has to bound itself — and a cancel that throws, or simply never
+  /// returns, is what parked a teardown forever with the recorder still open.
+  /// The third failure axis, beside "throws" and "ends the stream".
+  final FakeCall cancelBehaviour;
 
   /// ONE controller per start(). A real recorder opens a new session each
   /// time; a single-subscription StreamController cannot be listened to
@@ -128,7 +136,17 @@ class FakeRecorder implements MicRecorder {
       }
       final c = StreamController<Uint8List>(
         onListen: () => listening = true,
-        onCancel: () => cancelled = true,
+        onCancel: () {
+          cancelled = true;
+          switch (cancelBehaviour) {
+            case FakeCall.hangs:
+              return Completer<void>().future;
+            case FakeCall.throws:
+              throw StateError('the platform refused to cancel');
+            case FakeCall.ok:
+              return null;
+          }
+        },
       );
       sessions.add(c);
       _live = c;
@@ -164,6 +182,7 @@ class FakeMic extends MicCapture {
     List<FakeCall>? startBehaviour,
     List<FakeCall>? stopBehaviour,
     FakeCall permissionBehaviour = FakeCall.ok,
+    FakeCall cancelBehaviour = FakeCall.ok,
     Duration? platformTimeout,
     Duration? permissionTimeout,
   }) : this.withRecorder(
@@ -174,6 +193,7 @@ class FakeMic extends MicCapture {
             startBehaviour: startBehaviour,
             stopBehaviour: stopBehaviour,
             permissionBehaviour: permissionBehaviour,
+            cancelBehaviour: cancelBehaviour,
           ),
           platformTimeout: platformTimeout,
           permissionTimeout: permissionTimeout,

@@ -731,17 +731,10 @@ class VoiceController extends ChangeNotifier {
     // newer cycle has since taken the recorder.
     final session = _mic.start();
     _micState = _micState.borrowed(session);
-    final Stream<Uint8List> stream;
-    try {
-      stream = await session.stream;
-    } catch (_) {
-      // A session that never opened owns nothing, so the loan must stop
-      // naming it — but the loan itself stands, and resumeMic() still ends it.
-      if (identical(_micState.loan, session)) {
-        _micState = _micState.withoutBorrowedSession();
-      }
-      rethrow;
-    }
+    // A borrowed session that fails to open needs no reconciliation here: it
+    // owns nothing, so resumeMic()'s stop of it is already a no-op, and the
+    // error is what the borrower's `catch` is for.
+    final stream = await session.stream;
     if (!identical(_micState.loan, session)) {
       // Nobody is coming back for this stream: the caller already gave up and
       // resumeMic() ran in its place. Stop the session we just (belatedly)
@@ -781,8 +774,10 @@ class VoiceController extends ChangeNotifier {
     final held = _micState;
     if (!held.loaned) return;
     // The loan is over, and — if the conversation is getting the microphone
-    // back — the intent that says so is consumed in the same breath.
-    final restore = held.resumeWanted && !_disposed;
+    // back — the intent that says so is consumed in the same breath. No
+    // `_disposed` check: dispose() sets the whole value to [MicState.idle],
+    // so a disposed controller has already returned on the line above.
+    final restore = held.resumeWanted;
     _micState = held.returnedFromLoan().withResumeWanted(false);
     // Close the session suspendMic() opened for the borrower, BY NAME.
     // Harmless if the open failed and there is none, and — the point of the

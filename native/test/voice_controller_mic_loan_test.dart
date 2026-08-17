@@ -594,6 +594,90 @@ void main() {
             'of the one enrollment 2 was holding');
   });
 
+  // ---- the ordinary conversation teardown, held to the same two rules ----
+  //
+  // stopMic() is the NORMAL path, not the enrollment one, and it has the same
+  // shape as every Critical in this family: a transition and a platform call.
+  // These three pin the rules directly rather than through a scenario.
+
+  test('stopMic() switches the microphone off before it touches the platform, '
+      'not after', () async {
+    // INVARIANT A, measured at the only moment that can tell the difference:
+    // while the platform call is still outstanding.
+    captureFlutterErrors();
+    final mic = FakeMic(
+      stopBehaviour: const [FakeCall.hangs],
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    final stopping = b.vc.stopMic();
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'the whole transition is applied before the recorder is asked '
+            'to stop; a state that waits for the platform is a state that '
+            'lies whenever the platform does not answer');
+    await stopping.timeout(const Duration(seconds: 2));
+    expect(b.vc.micOn, isFalse);
+  });
+
+  test('a mic subscription whose cancel never returns cannot park the '
+      'teardown', () async {
+    // INVARIANT B. The session stream belongs to the plugin, so its cancel()
+    // is the one microphone-shaped call MicCapture cannot bound for us. An
+    // unbounded one is worse than a throwing one: there is nothing to catch,
+    // and the teardown simply never finishes.
+    final mic = FakeMic(
+      cancelBehaviour: FakeCall.hangs,
+      platformTimeout: const Duration(milliseconds: 40),
+    );
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    // The assertion IS the timeout: without the bound this never completes.
+    await b.vc.stopMic().timeout(const Duration(seconds: 2));
+
+    expect(b.vc.micOn, isFalse);
+    expect(mic.isRecording, isFalse,
+        reason: 'and the recorder must have been stopped regardless of what '
+            'the subscription did');
+  });
+
+  test('a mic subscription whose cancel throws does not stop the recorder '
+      'being closed', () async {
+    // The same step failing the other way. It must not propagate either:
+    // dispose() and _onChannelDown() tear down fire-and-forget, so a throw
+    // here becomes an unhandled async error rather than anything catchable.
+    final mic = FakeMic(cancelBehaviour: FakeCall.throws);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+
+    await expectLater(b.vc.stopMic(), completes,
+        reason: 'teardown is the one thing that must always finish');
+
+    expect(b.vc.micOn, isFalse);
+    expect(mic.isRecording, isFalse);
+    expect(b.vc.eventLog, contains(startsWith('mic cancel failed')),
+        reason: 'and the failure must be visible, not swallowed — silence is '
+            'this subsystem’s whole failure mode');
+  });
+
   // ---- THE SIXTH CRITICAL: the microphone goes off in the same breath the
   // conversation gives up the recorder, never on the far side of a platform
   // call ----
@@ -734,6 +818,48 @@ void main() {
         reason: 'the borrowed stream must be live even though the '
             "conversation's own session refused to close");
     await sub.cancel();
+  });
+
+  test('a restore that fails does not leave an intent for the NEXT enrollment '
+      'to act on', () async {
+    // resumeMic() consumes the restore intent, it does not merely read it.
+    // Left set, it is inherited by the next suspendMic() — so an enrollment
+    // that follows a failed restore would switch the microphone on by itself,
+    // with the user having asked for nothing. The failed restore is what makes
+    // this observable: after a SUCCESSFUL one the mic is on anyway, so a stale
+    // intent and a consumed one look identical.
+    captureFlutterErrors();
+    final mic = FakeMic(startBehaviour: const [
+      FakeCall.ok, // the conversation's own session
+      FakeCall.ok, // enrollment 1's borrowed session
+      FakeCall.throws, // the restore — the platform refuses
+      FakeCall.ok, // enrollment 2's borrowed session
+      FakeCall.ok, // anything enrollment 2's return might try to open
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    await b.vc.suspendMic();
+    await b.vc.resumeMic();
+    await settle();
+    expect(b.vc.micOn, isFalse,
+        reason: 'sanity: the restore was refused by the platform');
+
+    // A second enrollment, with the conversation's mic legitimately off.
+    await b.vc.suspendMic();
+    await b.vc.resumeMic();
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'nobody asked for the microphone between the two '
+            'enrollments; a restore intent the first return failed to consume '
+            'must not be inherited by the second');
+    expect(mic.isRecording, isFalse);
   });
 
   test('a loan stop the platform refuses still gives the microphone back',
