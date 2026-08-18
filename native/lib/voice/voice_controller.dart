@@ -824,6 +824,18 @@ class VoiceController extends ChangeNotifier {
       // will ever stop — the mic records forever. The state no longer naming
       // OUR session means somebody else's transition has been applied since;
       // whatever it decided, this one is not it.
+      //
+      // DELIBERATELY UNFALSIFIABLE, and recorded as such so no cleanup pass
+      // reads it as dead code. `if (false)` here leaves the whole suite green,
+      // because MicCapture drops a superseded session's claim SYNCHRONOUSLY
+      // and the await above therefore throws instead of arriving here. Its
+      // DELETION is equally unfalsifiable, so no test can settle the question
+      // either way — the only argument is what it defends: a MicCapture
+      // regression that let a superseded open resolve. `MicState`'s asserts
+      // are compiled out of a release build, so without this line such a
+      // regression reaches production silently. The type change on
+      // [MicState.listening] removes the worst outcome (a microphone claiming
+      // ON with nothing to turn off); this keeps the merely-stale one out too.
       if (_disposed || !identical(_micState.session, session)) {
         unawaited(session.stop());
         return;
@@ -845,7 +857,7 @@ class VoiceController extends ChangeNotifier {
           orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
       }, onError: (Object e) => _log('mic error: $e'));
-      _micState = _micState.listening(sub);
+      _micState = _micState.listening(session, sub);
       _talking = true;
       _turnState = TurnState.idle;
       _syncOrb();

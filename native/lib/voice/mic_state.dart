@@ -41,6 +41,9 @@ class MicState {
     this.wasOn = false,
   })  : assert(sub == null || session != null,
             'a microphone cannot be streaming into a session we do not hold'),
+        // ^ now also carried by [listening]'s SIGNATURE, which is the only
+        //   transition that can produce a non-null `sub`. Kept as well because
+        //   an assert is free and a future transition might not be.
         assert(!loaned || (session == null && sub == null && !wanted),
             'a loan means the conversation is holding nothing'),
         assert(loan == null || loaned,
@@ -103,13 +106,31 @@ class MicState {
 
   /// The platform answered and we are subscribed: the microphone is ON. There
   /// is no separate flag to set, and therefore none to forget.
-  MicState listening(StreamSubscription<Uint8List> sub) => MicState._(
-        session: session,
-        sub: sub,
-        wanted: wanted,
-        resumeWanted: resumeWanted,
-        wasOn: wasOn,
-      );
+  ///
+  /// [opened] is a REQUIRED, non-nullable argument rather than being read off
+  /// `this`, and that is the point: the sixth Critical's state —
+  /// `sub != null` with `session == null`, a microphone reporting ON with the
+  /// handles to stop it already gone — is not constructible through this
+  /// signature. Before, `MicState.idle.listening(sub)` compiled and produced
+  /// exactly that; only the debug-only assert above stopped it, and asserts
+  /// are compiled out of a release build (MEASURED: the probe compiled and
+  /// threw only an `AssertionError`).
+  ///
+  /// The caller must still check that [opened] is the session the state names
+  /// — the assert below says so — because writing a STALE session in would be
+  /// a different bug. What the type removes is the silent one: whatever
+  /// happens, the microphone cannot claim to be on with nothing to turn off.
+  MicState listening(MicSession opened, StreamSubscription<Uint8List> sub) {
+    assert(identical(session, opened),
+        'the session that opened is not the one this state holds');
+    return MicState._(
+      session: opened,
+      sub: sub,
+      wanted: wanted,
+      resumeWanted: resumeWanted,
+      wasOn: wasOn,
+    );
+  }
 
   /// The conversation is holding no recording session. Intents (a pending
   /// restore, an outstanding loan) are deliberately preserved: this says what
