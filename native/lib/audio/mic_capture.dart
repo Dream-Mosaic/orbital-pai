@@ -181,11 +181,10 @@ class MicCapture {
 
   /// The session whose `startStream` is in flight RIGHT NOW, if any.
   ///
-  /// Only that session's own `stop()` may skip issuing a platform stop (the
-  /// in-flight open closes its own orphan; a stop now would race it). It is
-  /// tracked explicitly rather than inferred from [_hardware], because
-  /// "unknown" has a second cause — a stop that failed — and the two need
-  /// opposite handling.
+  /// While ANY open is inside `startStream`, no stop may touch the hardware or
+  /// the [_ops] chain — see [_stopSession]. It is tracked explicitly rather
+  /// than inferred from [_hardware], because "unknown" has a second cause — a
+  /// stop that failed — and the two need opposite handling.
   int? _startInFlight;
 
   /// What the hardware is doing. Deliberately NOT optimistic in either
@@ -282,9 +281,27 @@ class MicCapture {
     // hardware a newer session owns.
     if (_activeId != id) return;
     _activeId = null;
-    if (_startInFlight == id) {
-      // Our own open is inside `startStream`. It will find itself unowned and
-      // close its own orphan; issuing a platform stop now would race it.
+    if (_startInFlight != null) {
+      // SOME open is inside `startStream` — not necessarily ours. Whichever it
+      // is, it now finds itself unowned (we just cleared the claim, and an
+      // open that still owned it would have to BE `id`) and closes its own
+      // orphan, so a platform stop here would only race it.
+      //
+      // The reason this is deliberately the BROAD test and not `== id`: the
+      // lines below REPLACE `_ops`. When the in-flight open belongs to another
+      // session, replacing the chain drops that still-running open out of the
+      // queue, the next start issues `startStream` on top of it (Rule 2
+      // broken, measured maxConcurrentStarts == 2), and the stale open's
+      // orphan-close then stops the recorder that newer session is using
+      // (Rule 3, whose safety argument rests on Rule 2). That is the seventh
+      // Critical of this class: `micOn == true` over a stopped recorder, with
+      // only a double power tap recovering. `_hardware` still moves BEFORE any
+      // platform call — this restores the old guard's BREADTH, not its
+      // dishonest timing.
+      //
+      // Every OTHER await inside `_open` re-checks `_activeId` before it
+      // touches the recorder, so the window where a dropped chain can produce
+      // overlapping `startStream` calls is exactly this one.
       return;
     }
     if (_hardware == MicHardware.idle) return;

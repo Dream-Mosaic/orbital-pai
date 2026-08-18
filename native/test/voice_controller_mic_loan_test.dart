@@ -480,6 +480,114 @@ void main() {
             'really running');
   });
 
+  // THE MIRROR IMAGE of the test above, and the seventh Critical of this
+  // class. Same abandoned-suspend race, but the wedged start is the
+  // CONVERSATION'S OWN rather than the loan's — the shape a slow audio
+  // subsystem actually produces when the user taps Record right after tapping
+  // power. The test above is satisfied by a short-circuit that only fires for
+  // the stopping session's own in-flight open; this one is not, because here
+  // the in-flight open belongs to somebody else, so `_stopSession` falls
+  // through and clobbers MicCapture's serialisation chain.
+  //
+  // Measured before the fix, end to end through the real VoiceController:
+  // maxConcurrentStarts=2, settling at micOn=true micIsRecording=false — deaf,
+  // indicator lit, with startMic() and setPtt() both dead and only two power
+  // taps recovering.
+  test(
+      "a suspendMic() abandoned while the CONVERSATION'S own start is still "
+      'in flight must not overlap the restore onto it', () async {
+    final mic = FakeMic(startDelays: const [
+      Duration(milliseconds: 120), // the conversation's own start — wedged
+      Duration.zero, // the loan's start
+      Duration.zero, // the restore's start
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    // Not awaited: the point is that the platform has NOT answered yet.
+    final ownStart = b.vc.startMic();
+    await settle();
+    expect(mic.startCalls, 1,
+        reason: "sanity: the conversation's own start is inside startStream");
+    expect(b.vc.micOn, isFalse, reason: 'sanity: it has not opened yet');
+
+    // The user taps Record inside that window. Its error is captured rather
+    // than awaited, modelling VoiceLockClient's `.timeout(acquireTimeout)`.
+    Object? loanOutcome;
+    final loan = b.vc.suspendMic().then<void>(
+      (s) => loanOutcome = s,
+      onError: (Object e) => loanOutcome = e,
+    );
+    await settle();
+
+    // acquireTimeout fires: the borrower's `finally` calls resumeMic(), which
+    // restores the conversation's mic — while the original start is STILL
+    // inside the plugin.
+    unawaited(b.vc.resumeMic());
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await settle();
+    await loan;
+    await ownStart;
+
+    expect(mic.maxConcurrentStarts, 1,
+        reason: 'the restore must queue behind the wedged open, not be handed '
+            'a chain the loan-stop already replaced');
+    expect(loanOutcome, isA<StateError>());
+    expect(b.vc.micOn, isTrue,
+        reason: 'sanity: the restore claims the conversation is listening');
+    expect(mic.isRecording, isTrue,
+        reason: "and it must actually BE listening — the stale open's "
+            'orphan-close may not stop the session the restore opened');
+
+    b.fake.sent.clear();
+    mic.emit(Uint8List.fromList(const [9, 9, 9, 9]));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty,
+        reason: 'the assistant actually hearing, not merely a lit indicator');
+  });
+
+  // The same guard reached WITHOUT enrollment: impatient power tapping. There
+  // is no loan here at all, so a reader cannot dismiss the Critical above as
+  // an enrollment-only problem — any stop issued for one session while
+  // another session's open is in flight has to leave the chain alone.
+  test('power tapped repeatedly while a start is wedged never overlaps two '
+      'starts', () async {
+    final mic = FakeMic(startDelays: const [
+      Duration(milliseconds: 120), // tap 1 — still inside startStream
+      Duration.zero,
+      Duration.zero,
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final wedged = b.vc.startMic(); // ON  — session 1, wedged
+    await settle();
+    await b.vc.stopMic(); // OFF — short-circuits: session 1 is its own
+    final second = b.vc.startMic(); // ON  — session 2, queued behind it
+    await settle();
+    await b.vc.stopMic(); // OFF — THE case: session 2's stop, session 1 in flight
+    final third = b.vc.startMic(); // ON  — session 3
+
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await settle();
+    await wedged;
+    await second;
+    await third;
+
+    expect(mic.maxConcurrentStarts, 1,
+        reason: "stopping session 2 must not drop session 1's open out of "
+            "MicCapture's queue");
+    expect(b.vc.micOn, isTrue);
+    expect(mic.isRecording, isTrue,
+        reason: 'the last tap left the mic ON and it must really be on');
+  });
+
   test(
       'a start that fails after a newer start took over must not cancel the '
       'newer one', () async {

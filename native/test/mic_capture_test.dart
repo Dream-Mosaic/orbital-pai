@@ -107,6 +107,69 @@ void main() {
     expect(live.isActive, isTrue);
   });
 
+  test("a stop for one session must not drop ANOTHER session's in-flight open "
+      'from the chain', () async {
+    // THE MIRROR of the test above, and the seventh Critical. There, the
+    // session being stopped is the one whose open is wedged. Here it is a
+    // DIFFERENT one — the shape `_stopSession` gets during an abandoned loan:
+    // the conversation's own open is still inside `startStream` when the
+    // borrowed session is stopped.
+    //
+    // A short-circuit that only fires for the stopping session's OWN open
+    // falls through here, stops the hardware, and REPLACES `_ops` — dropping
+    // the wedged open out of the serialisation chain. The next start then
+    // issues `startStream` on top of it (maxConcurrentStarts == 2), and when
+    // the stale open finally resolves it finds itself unowned and closes the
+    // recorder the new session is using: `isActive == true` over an idle
+    // recorder, which is the signature of Criticals 5 and 6.
+    final rec = FakeRecorder(startDelays: const [
+      Duration(milliseconds: 80), // session 1 — wedged inside startStream
+      Duration.zero,
+      Duration.zero,
+    ]);
+    final mic = MicCapture(recorder: rec);
+
+    final wedged = mic.start();
+    Object? wedgedError;
+    final settledWedged =
+        wedged.stream.then<void>((_) {}, onError: (Object e) => wedgedError = e);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(rec.startCalls, 1,
+        reason: 'sanity: session 1 is inside startStream, not merely queued');
+
+    // A second session claims the recorder (queued behind the wedged open)
+    // and is then given up — the borrower's acquireTimeout, one layer down.
+    final abandoned = mic.start();
+    Object? abandonedError;
+    final settledAbandoned = abandoned.stream
+        .then<void>((_) {}, onError: (Object e) => abandonedError = e);
+    await abandoned.stop();
+
+    // ...and a third opens in its place while session 1 is STILL in flight.
+    final restored = mic.start();
+    await restored.stream.timeout(const Duration(seconds: 2));
+    await settledAbandoned;
+    // Let the wedged open land afterwards and do whatever it is going to do.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await settledWedged;
+    await settle();
+
+    expect(rec.maxConcurrentStarts, 1,
+        reason: 'two concurrent startStream() calls on one AudioRecorder is '
+            'undefined behaviour: stopping session 2 must not drop session '
+            "1's open out of the queue");
+    expect(wedgedError, isA<StateError>());
+    expect(abandonedError, isA<StateError>());
+    expect(restored.isActive, isTrue);
+    expect(mic.isRecording, isTrue,
+        reason: 'the session that won must actually be running — a stale '
+            "open's orphan-close may not stop the recorder the restore "
+            'opened');
+    expect(rec.platformStreaming, isTrue,
+        reason: 'and the HARDWARE must agree: `isActive` over an idle '
+            'recorder is the assistant going deaf with the indicator lit');
+  });
+
   test('a refused permission leaves no claim on the recorder', () async {
     final rec = FakeRecorder(permitted: false);
     final mic = MicCapture(recorder: rec);
