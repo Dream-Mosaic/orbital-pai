@@ -803,6 +803,40 @@ void main() {
   // the entangled case, which is the damaging one. That exclusion is how the
   // sixth Critical hid.
 
+  // The ACQUIRE-side companion to the stop-side bound tests below. Mutation
+  // testing found the asymmetry exactly: deleting `.timeout()` from `stop()`
+  // killed four tests; deleting it from `startStream()` killed none. What it
+  // protects, from up here where a user would feel it: an unbounded wedge
+  // never settles MicCapture's `_ops`, so every later start queues behind it
+  // forever and the microphone never comes back — no error, no indicator, not
+  // even a power tap.
+  test('a start the platform never answers gives the microphone back to the '
+      'next tap', () async {
+    captureFlutterErrors();
+    final mic = FakeMic(
+      // Only the FIRST start wedges; the user's second tap is ordinary.
+      startBehaviour: const [FakeCall.hangs],
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    await b.vc.startMic().timeout(const Duration(seconds: 2));
+    expect(b.vc.micOn, isFalse,
+        reason: 'a start that never opened must report itself off rather '
+            'than hang the caller');
+
+    // THE assertion: the next tap actually works.
+    await b.vc.startMic().timeout(const Duration(seconds: 2));
+    await settle();
+    expect(b.vc.micOn, isTrue);
+    expect(mic.isRecording, isTrue);
+    expect(mic.startCalls, 2);
+  }, timeout: const Timeout(Duration(seconds: 8)));
+
   test('a conversation stop that never answers cannot leave the microphone '
       'claiming to be on', () async {
     captureFlutterErrors();

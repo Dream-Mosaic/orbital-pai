@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/audio/mic_capture.dart';
@@ -292,4 +294,52 @@ void main() {
             '— a wedged stop may not keep the recorder claimed forever');
     expect(mic.hardware, MicHardware.unknown);
   });
+
+  // ---- and the ACQUIRE side of the same bound ----
+  //
+  // The release bound above was pinned four times over; neither acquire bound
+  // was pinned at all, and mutation testing confirmed it: deleting
+  // `.timeout()` from `stop()` killed four tests, deleting it from
+  // `startStream()` or from `hasPermission()` killed none. `FakeRecorder` has
+  // implemented both failure axes the whole time and no test used either.
+  //
+  // What they protect: `_open` holds `_ops`, so an unbounded wedge in an
+  // acquire never settles the chain and `await previous` blocks EVERY
+  // subsequent start for the life of the process. MicCapture is bricked and
+  // the microphone never returns by any path — no error, no indicator, not
+  // even a power tap.
+
+  test('a startStream that never answers is bounded, and the recorder stays '
+      'usable', () async {
+    captureFlutterErrors();
+    final rec = FakeRecorder(startBehaviour: const [FakeCall.hangs]);
+    final mic = MicCapture(
+      recorder: rec,
+      platformTimeout: const Duration(milliseconds: 40),
+    );
+
+    final wedged = mic.start();
+    await expectLater(wedged.stream, throwsA(isA<TimeoutException>()));
+    expect(wedged.isActive, isFalse);
+
+    // THE point: an unbounded wedge never settles `_ops`, so every later start
+    // queues behind it forever and MicCapture is bricked for the life of the
+    // process.
+    final next = mic.start();
+    await next.stream.timeout(const Duration(seconds: 2));
+    expect(mic.isRecording, isTrue);
+  }, timeout: const Timeout(Duration(seconds: 8)));
+
+  test('a hasPermission that never answers is bounded', () async {
+    captureFlutterErrors();
+    final rec = FakeRecorder(permissionBehaviour: FakeCall.hangs);
+    final mic = MicCapture(
+      recorder: rec,
+      permissionTimeout: const Duration(milliseconds: 40),
+    );
+    await expectLater(mic.start().stream, throwsA(isA<TimeoutException>()));
+    // The chain SETTLED: a later start reaches its own verdict rather than
+    // queueing behind the first one forever.
+    await expectLater(mic.start().stream, throwsA(isA<TimeoutException>()));
+  }, timeout: const Timeout(Duration(seconds: 8)));
 }
