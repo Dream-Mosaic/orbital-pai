@@ -856,7 +856,18 @@ class VoiceController extends ChangeNotifier {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
           orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
-      }, onError: (Object e) => _log('mic error: $e'));
+      },
+          onError: (Object e) => _log('mic error: $e'),
+          // The platform ending the stream is the one way the microphone goes
+          // away that nothing here asked for: audio focus lost to an incoming
+          // call, the OS revoking the record permission, another app taking
+          // the mic. Nothing throws, so without this the assistant simply
+          // stops hearing — and `on` keeps reporting TRUE, because it is
+          // derived from HOLDING a subscription and a subscription to a done
+          // stream is still non-null. startMic() then no-ops on that very
+          // flag, so the recovery path is dead too (MEASURED). This is the one
+          // hole left in "derived, therefore cannot lie".
+          onDone: () => _onMicStreamEnded(session));
       _micState = _micState.listening(session, sub);
       _talking = true;
       _turnState = TurnState.idle;
@@ -875,6 +886,35 @@ class VoiceController extends ChangeNotifier {
       _log('mic start failed: $e');
       _safeNotify();
     }
+  }
+
+  /// The platform ended [ended]'s stream without being asked to.
+  ///
+  /// Two halves, and a fix that does only the first is the same lie the other
+  /// way round: the indicator has to go off, AND the recorder has to actually
+  /// be let go of — otherwise the next start opens on top of a session nobody
+  /// stopped. Deliberately does NOT re-open: the conversation is honestly off,
+  /// the log says why, and a tap works again. Silently re-arming a microphone
+  /// the platform just took away is how a retry loop starts.
+  void _onMicStreamEnded(MicSession ended) {
+    if (_disposed) return;
+    // Defensive, like startMic()'s post-await guard and just as unfalsifiable:
+    // every teardown path cancels the subscription BEFORE the stop that closes
+    // the stream, so a done for a session we no longer hold is not deliverable
+    // today. If one ever were, tearing down on it would stop whatever session
+    // is live now — the exact move that produced Criticals 5, 6 and 7.
+    final held = _micState;
+    if (!identical(held.session, ended)) return;
+    // Invariant A: the whole-value transition first, the teardown of what it
+    // gave up second.
+    _micState = held.captureOff();
+    _talking = false;
+    _turnState = TurnState.idle;
+    orbFrame.audioTarget = 0.0;
+    _syncOrb();
+    _log('mic stream ended by the platform');
+    _safeNotify();
+    unawaited(_release(held));
   }
 
   /// **Invariant A.** One synchronous transition — the conversation holds

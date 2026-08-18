@@ -588,6 +588,90 @@ void main() {
         reason: 'the last tap left the mic ON and it must really be on');
   });
 
+  // ---- the platform ENDING the stream under us ----
+  //
+  // `MicState.on` is derived from holding a subscription — but a subscription
+  // to a DONE stream is still non-null, so it is derived from HOLDING one, not
+  // from audio FLOWING. Audio focus lost to an incoming call, the OS revoking
+  // the record permission, another app taking the microphone: the frames stop
+  // and nothing throws. MEASURED before the fix: micOn=true, and startMic()
+  // then no-ops on its own `held.on` guard, so the recovery path is dead too.
+
+  test('a mic stream the platform ends under us turns the indicator off, and '
+      'the next tap gets the microphone back', () async {
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the conversation has the mic');
+
+    // The platform ends the stream. No exception, no stop() — the frames just
+    // cease.
+    unawaited(mic.current.close());
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'the refactor claims `on` is derived and therefore cannot '
+            'lie; it can, because it is derived from holding a subscription '
+            'rather than from audio flowing');
+
+    // The consequence that makes it a Critical rather than a cosmetic one:
+    // with the indicator stuck on, startMic() bails on `held.on`.
+    await b.vc.startMic();
+    await settle();
+    expect(b.vc.micOn, isTrue);
+    expect(mic.isRecording, isTrue);
+    expect(mic.startCalls, 2,
+        reason: 'the retry has to actually reach the platform, not no-op on a '
+            'stale flag');
+
+    b.fake.sent.clear();
+    mic.emit(Uint8List.fromList(const [3, 3, 3, 3]));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty,
+        reason: 'the assistant really hearing again, not merely a dark '
+            'indicator');
+  });
+
+  // THE MIRROR: turning the indicator off is only half of it. The recorder is
+  // still CLAIMED — this controller's session owns it and MicCapture still has
+  // the hardware down as streaming — so a fix that only flipped the state
+  // would leave the next start opening on top of a session nobody stopped,
+  // which is the undefined behaviour the whole MicCapture design exists to
+  // prevent.
+  test('a mic stream the platform ends is also let go of at the hardware',
+      () async {
+    final rec = FakeRecorder();
+    final mic = FakeMic.withRecorder(rec);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(rec.platformStreaming, isTrue, reason: 'sanity: the fake is live');
+
+    unawaited(rec.sessions.last.close());
+    await settle();
+
+    expect(mic.isRecording, isFalse,
+        reason: 'the session must be stopped by name, not merely forgotten');
+    expect(rec.platformStreaming, isFalse,
+        reason: 'and the HARDWARE let go: an indicator turned off over a '
+            'recorder still claimed is the same lie in the other direction');
+    expect(rec.stopCalls, 1);
+
+    await b.vc.startMic();
+    await settle();
+    expect(rec.startedOnLiveRecorder, isFalse,
+        reason: 'the retry must not open a second session on top of one that '
+            'was never released');
+    expect(rec.maxConcurrentStarts, 1);
+  });
+
   test(
       'a start that fails after a newer start took over must not cancel the '
       'newer one', () async {
