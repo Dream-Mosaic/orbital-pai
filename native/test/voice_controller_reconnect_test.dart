@@ -392,6 +392,67 @@ void main() {
         reason: 'once from the user, once from the automatic re-arm on rejoin');
   });
 
+  test('the re-arm CONSUMES the restore flag, so a later rejoin does not '
+      'switch the mic on by itself', () async {
+    // `_reArmMic`'s `withWasOn(false)` has been called redundant with
+    // `_onConnectionChanged` — it is not, and deleting it on those grounds
+    // would be a defect. `_onConnectionChanged` clears the flag only when
+    // `wantConnected` is FALSE; `_reArmMic` runs on a SUCCESSFUL JOIN, where
+    // it is true, so nothing else consumes it there. Nothing pinned that:
+    // deleting the line left the suite at 437/0.
+    //
+    // The consequence, reached without a single stopMic() (which would clear
+    // the flag and hide the bug): the platform takes the microphone away
+    // AFTER a re-arm, and the NEXT transport outage then resurrects it,
+    // because the flag from the first outage was never spent.
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final b = build(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      backoff: const [Duration(milliseconds: 10)],
+      mic: mic,
+    );
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue);
+
+    // Outage 1: arms the restore flag, and the rejoin spends it.
+    await sockets.first.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the re-arm ran');
+    expect(mic.startCalls, 2);
+
+    // The platform now takes the microphone away — audio focus, a revoked
+    // permission. The user did NOT ask for it back.
+    unawaited(mic.current.close());
+    await settle();
+    expect(b.vc.micOn, isFalse, reason: 'sanity: the mic is honestly off');
+
+    // Outage 2, with the mic off: `_onChannelDown` skips its whole block, so
+    // nothing writes the flag here either. Only the re-arm's own consume
+    // stands between a spent flag and a microphone that turns itself on.
+    await sockets.last.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(b.conn.state, ConnState.joined, reason: 'sanity: rejoined');
+    expect(b.vc.micOn, isFalse,
+        reason: 'a microphone the platform took away, and that the user never '
+            'asked back, must not be switched on by an unrelated reconnect');
+    expect(mic.startCalls, 2, reason: 'no third start was ever issued');
+  });
+
   test('an explicit stopMic() before the outage is not resurrected by the rejoin',
       () async {
     final mic = FakeMic();

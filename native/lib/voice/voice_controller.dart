@@ -475,6 +475,14 @@ class VoiceController extends ChangeNotifier {
   /// later reconnect.
   void _reArmMic() {
     if (_micState.wasOn) {
+      // NOT redundant with `_onConnectionChanged`, however much it looks it —
+      // an earlier report called it that, and deleting it on those grounds
+      // would put the sixth Critical's symptom back. This is a CONSUME of the
+      // flag before startMic(), on the success path of a JOIN, where
+      // `wantConnected` is true; `_onConnectionChanged` only clears `wasOn`
+      // when `wantConnected` is FALSE, so it never fires here. Without this
+      // line the flag survives the restore and the next reconnect switches
+      // the microphone back on by itself.
       _micState = _micState.withWasOn(false);
       unawaited(startMic());
     }
