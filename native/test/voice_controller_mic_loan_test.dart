@@ -694,6 +694,88 @@ void main() {
         reason: 'the last tap left the mic ON and it must really be on');
   });
 
+  // ---- what the power button means while the recorder is lent out ----
+  //
+  // During a loan the conversation holds nothing, so `on` and `wanted` BOTH
+  // read false — and `togglePower()` compared exactly those, so both of its
+  // branches routed to startMic(). The button could only ever mean ON.
+  // MEASURED: mic ON, tap Record, two power taps, mic still on afterwards.
+  // The other half of the damage is that `stopMic()`'s "a deliberate stop
+  // during a loan cancels the restore" — pinned by a test since Task 2 — was
+  // unreachable from the UI, so the pinned behaviour was dead in the product.
+  //
+  // While the recorder is lent out the restore INTENT is the only thing there
+  // is to toggle, so that is what the button toggles.
+
+  test('a power tap during a loan cancels a restore that was pending',
+      () async {
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the conversation has the mic');
+    await b.vc.suspendMic();
+    expect(b.vc.debugMicLoaned, isTrue, reason: 'sanity: lent out');
+
+    // The conversation HAD the microphone, so the button means OFF.
+    await b.vc.togglePower();
+    await b.vc.resumeMic();
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'a deliberate power-off during enrollment must survive the '
+            'end of the loan');
+    expect(mic.isRecording, isFalse);
+  });
+
+  test('two power taps during a loan leave the microphone where it started',
+      () async {
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    // Mic OFF before the loan: the first tap means ON, the second OFF.
+    await b.vc.suspendMic();
+    expect(b.vc.debugMicLoaned, isTrue, reason: 'sanity: lent out');
+
+    await b.vc.togglePower();
+    await b.vc.togglePower();
+    await b.vc.resumeMic();
+    await settle();
+
+    expect(b.vc.micOn, isFalse,
+        reason: 'a button whose every tap means ON is not a toggle');
+    expect(mic.isRecording, isFalse);
+  });
+
+  test('a power tap during a loan can still turn the microphone ON', () async {
+    // The MIRROR, and the overcorrection this fix invites: making the tap
+    // always mean OFF would pass both tests above and break the case the loan
+    // machinery exists for — a user who taps power while enrolling and
+    // expects the assistant listening when it ends.
+    final mic = FakeMic();
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.suspendMic();
+    expect(b.vc.micOn, isFalse, reason: 'sanity: the mic was off');
+
+    await b.vc.togglePower();
+    await b.vc.resumeMic();
+    await settle();
+
+    expect(b.vc.micOn, isTrue,
+        reason: 'the intent recorded during the loan must be honoured');
+    expect(mic.isRecording, isTrue);
+  });
+
   // ---- the platform ENDING the stream under us ----
   //
   // `MicState.on` is derived from holding a subscription — but a subscription

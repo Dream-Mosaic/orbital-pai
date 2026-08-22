@@ -310,8 +310,18 @@ class VoiceController extends ChangeNotifier {
   // ---- controls ----
 
   /// The native twin of index.js's startTalking()/stopTalking().
+  ///
+  /// While the recorder is LENT OUT the conversation holds nothing, so `on`
+  /// and `wanted` both read false and comparing them made every tap mean ON —
+  /// two taps left the microphone on, and [stopMic]'s "a deliberate stop
+  /// during a loan cancels the restore", pinned since Task 2, was unreachable
+  /// from the UI. The restore intent is the only thing there is to toggle in
+  /// that window, so it is what the button toggles.
   Future<void> togglePower() async {
-    if (_micState.on || _micState.wanted) {
+    final on = _micState.loaned
+        ? _micState.resumeWanted
+        : _micState.on || _micState.wanted;
+    if (on) {
       await stopMic();
     } else {
       _caption = '';
