@@ -87,19 +87,18 @@ class MicAlreadyLoaned extends StateError {
 
 /// One recording session on [MicCapture]'s single recorder.
 ///
-/// A session has an identity from the instant it is REQUESTED — [MicCapture.start]
-/// is synchronous and hands the handle back before the platform has opened
-/// anything. That is the whole point. The gap between "asked the platform for
-/// the microphone" and "the platform answered" is where six bugs of the same
-/// class lived: with only a `bool _recording` (set after `startStream`
-/// resolved) there was no way to *name* the session in flight, so a caller who
-/// had given up could not tell its own session from a newer one, and its
-/// `stop()` killed whichever session happened to be live.
+/// A session has an identity from the instant it is REQUESTED —
+/// [MicCapture.start] is synchronous and hands the handle back before the
+/// platform has opened anything. The gap between asking for the microphone
+/// and being given it is where six bugs of one class lived: with only a
+/// `bool _recording`, set after `startStream` resolved, an in-flight session
+/// had no NAME, so a caller who had given up could not tell its own session
+/// from a newer one and its `stop()` killed whichever happened to be live.
 ///
-/// With a session handle, [stop] stops the session it names and nothing else:
-/// once a newer session owns the recorder, an older handle's stop is a no-op.
-/// A stale caller is therefore *structurally* unable to deafen a live one —
-/// there is no guard to forget, because there is no reachable code path.
+/// With a handle, [stop] stops the session it names and nothing else: once a
+/// newer session owns the recorder, an older handle's stop is a no-op. A
+/// stale caller is *structurally* unable to deafen a live one — no guard to
+/// forget, because no reachable code path.
 class MicSession {
   MicSession._(this._owner, this._id, this.stream);
 
@@ -116,14 +115,14 @@ class MicSession {
   bool get isActive => _owner._owns(_id);
 
   /// Stop this session. A no-op — deliberately — once it no longer owns the
-  /// recorder.
+  /// recorder, and the CLAIM is given up synchronously, so nothing a caller
+  /// does next waits on the platform.
   ///
-  /// NEVER throws and never hangs: it is bounded (see [_BoundedRecorder]) and
-  /// it reports a platform failure rather than propagating it. Teardown is
-  /// the one thing that must always finish — a rethrow here used to abort
-  /// `VoiceController.stopMic()` half-way through, leaving `micOn` true over
-  /// a dead microphone, and became an unhandled async error on the
-  /// fire-and-forget `dispose()` path.
+  /// Never throws and always finishes: bounded by [MicCapture._stopSession],
+  /// and it reports a platform failure rather than propagating it. A rethrow
+  /// here used to abort `VoiceController.stopMic()` half-way through, leaving
+  /// `micOn` true over a dead microphone, and became an unhandled async error
+  /// on the fire-and-forget `dispose()` path.
   Future<void> stop() => _owner._stopSession(_id);
 }
 
@@ -171,21 +170,12 @@ class MicCapture {
 
   int _seq = 0;
 
-  /// The session that owns the recorder, or null when nobody does.
-  ///
-  /// Claimed SYNCHRONOUSLY by [start], before `startStream` resolves. This is
-  /// the optimistic half of the state, and the one that matters: it is what
-  /// makes an in-flight session nameable, and therefore stoppable by its own
-  /// owner and untouchable by anybody else.
+  /// The session that owns the recorder, or null when nobody does. Claimed
+  /// synchronously by [start], given up synchronously by [_stopSession] —
+  /// both BEFORE anything is queued, which is what lets an operation already
+  /// in [_ops] find on its first line that nobody wants it and step aside
+  /// without touching the platform.
   int? _activeId;
-
-  /// The session whose `startStream` is in flight RIGHT NOW, if any.
-  ///
-  /// While ANY open is inside `startStream`, no stop may touch the hardware or
-  /// the [_ops] chain — see [_stopSession]. It is tracked explicitly rather
-  /// than inferred from [_hardware], because "unknown" has a second cause — a
-  /// stop that failed — and the two need opposite handling.
-  int? _startInFlight;
 
   /// What the hardware is doing. Deliberately NOT optimistic in either
   /// direction: every write happens BEFORE the platform call it describes and
@@ -194,8 +184,27 @@ class MicCapture {
   /// never to a less true one.
   MicHardware _hardware = MicHardware.idle;
 
-  /// Serialises platform work on the recorder, so two `startStream` calls are
-  /// never in flight at once.
+  /// THE queue, and the only route to the recorder.
+  ///
+  /// Everything that changes what the recorder is doing — `startStream` and
+  /// `stop`, opens and teardowns alike — goes through [_queue]. No fast path,
+  /// no short-circuit, no bypass, and that is the whole design: eight defects
+  /// of one class came out of there being TWO ways to reach one
+  /// `AudioRecorder`. The seventh was a stop REPLACING this chain and
+  /// dropping a running open out of it; the eighth was the same stop reaching
+  /// the platform without joining the chain at all, whenever no `startStream`
+  /// happened to be in flight for its guard to see. Both fixes were guards
+  /// about who may interrupt whom. Neither sentence is writable now: a second
+  /// concurrent platform call would have to be issued from outside [_queue],
+  /// and there is nowhere outside it left to issue one from.
+  ///
+  /// The one platform call NOT in here is `hasPermission`, and its absence is
+  /// load-bearing. It does not change what the recorder is doing, and it can
+  /// put a system dialog in front of the user, so its bound is
+  /// [defaultPermissionTimeout] — a MINUTE, against four seconds for
+  /// everything else. That is the objection that kept stops out of this queue
+  /// for two rounds, and asking permission outside it is the answer: see
+  /// [_stopSession] for the resulting bound.
   Future<void> _ops = Future<void>.value();
 
   /// Whether the platform is, as far as we know, streaming.
@@ -211,33 +220,27 @@ class MicCapture {
   MicSession start() {
     final id = ++_seq;
     _activeId = id;
-    final previous = _ops;
-    final open = _open(id, previous);
-    // Attaching the handler here also means a caller that never awaits
-    // [MicSession.stream] cannot produce an unhandled async error.
-    _ops = _settled(open);
+    final open = _open(id);
+    // A caller that never awaits [MicSession.stream] must not turn a refused
+    // permission into an unhandled async error.
+    open.ignore();
     return MicSession._(this, id, open);
   }
 
-  Future<Stream<Uint8List>> _open(int id, Future<void> previous) async {
+  Future<Stream<Uint8List>> _open(int id) async {
     try {
-      // Wait for whatever the recorder was already doing. Only one
-      // `startStream` may ever be in flight: two concurrent ones on a single
-      // AudioRecorder is undefined behaviour on the plugin side (it either
-      // throws or tears the first stream down), and issuing a "recovery"
-      // start on top of a wedged one is precisely how the microphone used to
-      // be lost.
-      await previous;
-      if (_activeId != id) throw _superseded(id);
+      // Outside the queue on purpose, and the only call that is — see [_ops].
       if (!await _recorder.hasPermission()) {
         throw StateError('microphone permission denied');
       }
-      if (_activeId != id) throw _superseded(id);
-      // Defensive: a start that supersedes a still-streaming session must
-      // close it first, or `startStream` runs on a live recorder. `unknown`
-      // counts as still-streaming — that is the whole point of the state.
-      if (_hardware != MicHardware.idle) {
-        await _stopHardware();
+      return await _queue(() async {
+        // Unconditionally, WITHOUT first asking whether we are still wanted.
+        // A start that supersedes a live session must close it or
+        // `startStream` runs on a live recorder — and a session that has
+        // since been superseded wants the recorder idle just as much, since
+        // that is what whoever replaced us queued behind us to do. So the
+        // ownership check below is the only one that has to exist.
+        await _ensureIdle();
         if (_hardware != MicHardware.idle) {
           // We asked the platform to stop and it would not say that it did.
           // Refusing to open is the only honest move: `startStream` on a
@@ -247,28 +250,24 @@ class MicCapture {
           throw StateError('the microphone would not stop; refusing to start');
         }
         if (_activeId != id) throw _superseded(id);
-      }
-      // Written BEFORE the call, and true whatever it does: from here the
-      // platform may or may not be streaming, and a start that throws or
-      // never answers must leave the NEXT open knowing that.
-      _hardware = MicHardware.unknown;
-      _startInFlight = id;
-      final Stream<Uint8List> stream;
-      try {
-        stream = await _recorder.startStream(_config);
-      } finally {
-        if (_startInFlight == id) _startInFlight = null;
-      }
-      if (_activeId != id) {
-        // Superseded (or stopped) while the platform was opening. Whoever
-        // took the claim is QUEUED BEHIND this future and has not touched the
-        // recorder yet, so closing our own orphan here cannot close theirs —
-        // which is exactly the move that used to kill a live session.
-        await _stopHardware();
-        throw _superseded(id);
-      }
-      _hardware = MicHardware.streaming;
-      return stream;
+        // Written BEFORE the call, and true whatever it does: from here the
+        // platform may or may not be streaming, and a start that throws or
+        // never answers must leave the NEXT operation knowing that.
+        _hardware = MicHardware.unknown;
+        final stream = await _recorder.startStream(_config);
+        _hardware = MicHardware.streaming;
+        if (_activeId != id) {
+          // Superseded while the platform was opening. Closing our own orphan
+          // is safe for a reason it did not used to be: we are INSIDE the
+          // queue, so it cannot overlap anybody else's platform call. It has
+          // to happen HERE rather than be left to whoever comes next, because
+          // a superseding start that then fails its permission check never
+          // joins the queue at all, and nobody would close this.
+          await _ensureIdle();
+          throw _superseded(id);
+        }
+        return stream;
+      });
     } catch (_) {
       // A session that failed to open owns nothing.
       if (_activeId == id) _activeId = null;
@@ -276,39 +275,39 @@ class MicCapture {
     }
   }
 
-  Future<void> _stopSession(int id) async {
+  /// Give up [id]'s claim and bring the hardware down with it. The claim goes
+  /// synchronously; the platform work joins the queue like everything else.
+  ///
+  /// **It does not park behind a wedged open.** Nothing guards against that;
+  /// three facts leave no room for it. A system dialog holds no queue slot
+  /// (`hasPermission` is asked outside — see [_ops]). Every operation already
+  /// queued has just been disowned by the line below, so the most any of them
+  /// does before stepping aside is bring the hardware to idle, which is this
+  /// teardown's own work. And whatever IS in flight is bounded by
+  /// [platformTimeout]. Worst case: one `startStream` plus the close of the
+  /// session it opened — 2 × [platformTimeout], and never the minute-long
+  /// bound.
+  Future<void> _stopSession(int id) {
     // Not ours to stop. THE invariant: a stale caller cannot reach the
     // hardware a newer session owns.
-    if (_activeId != id) return;
+    if (_activeId != id) return Future<void>.value();
     _activeId = null;
-    if (_startInFlight != null) {
-      // SOME open is inside `startStream` — not necessarily ours. Whichever it
-      // is, it now finds itself unowned (we just cleared the claim, and an
-      // open that still owned it would have to BE `id`) and closes its own
-      // orphan, so a platform stop here would only race it.
-      //
-      // The reason this is deliberately the BROAD test and not `== id`: the
-      // lines below REPLACE `_ops`. When the in-flight open belongs to another
-      // session, replacing the chain drops that still-running open out of the
-      // queue, the next start issues `startStream` on top of it (Rule 2
-      // broken, measured maxConcurrentStarts == 2), and the stale open's
-      // orphan-close then stops the recorder that newer session is using
-      // (Rule 3, whose safety argument rests on Rule 2). That is the seventh
-      // Critical of this class: `micOn == true` over a stopped recorder, with
-      // only a double power tap recovering. `_hardware` still moves BEFORE any
-      // platform call — this restores the old guard's BREADTH, not its
-      // dishonest timing.
-      //
-      // Every OTHER await inside `_open` re-checks `_activeId` before it
-      // touches the recorder, so the window where a dropped chain can produce
-      // overlapping `startStream` calls is exactly this one.
-      return;
-    }
-    if (_hardware == MicHardware.idle) return;
-    final stopped = _stopHardware();
-    // The next start waits for this stop to land before it opens anything.
-    _ops = _settled(stopped);
-    await stopped;
+    return _queue(_ensureIdle);
+  }
+
+  /// Run [body] once every platform call already asked for has finished, and
+  /// make the next one wait for it in turn.
+  Future<T> _queue<T>(Future<T> Function() body) {
+    final result = _ops.then((_) => body());
+    _ops = _settled(result);
+    return result;
+  }
+
+  /// Bring the hardware to [MicHardware.idle] if it is not already there —
+  /// the one reconciliation a teardown, the head of an open and an orphan
+  /// close all perform. Callers must be inside [_queue].
+  Future<void> _ensureIdle() async {
+    if (_hardware != MicHardware.idle) await _stopHardware();
   }
 
   /// Ask the platform to stop, and never lie about the result.

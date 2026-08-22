@@ -588,6 +588,112 @@ void main() {
         reason: 'the last tap left the mic ON and it must really be on');
   });
 
+  // ---- and the STOP-SIDE MIRROR of the pair above (the eighth Critical) ----
+  //
+  // Both tests above wedge a `startStream`. Neither wedges a `stop`, and that
+  // asymmetry is the whole reason the eighth Critical existed after the
+  // seventh was closed. These two are the same two scenarios — one with
+  // enrollment, one with nothing but power taps — with the wedged platform
+  // call moved to the teardown.
+  //
+  // Nothing exotic is required: a conversation `stop()` that takes 250ms
+  // because the audio subsystem is busy is the ORDINARY state this feature
+  // creates by stopping and immediately restarting the recorder.
+
+  test('a slow conversation teardown must not land on the session the '
+      'restore opened', () async {
+    final mic = FakeMic(stopDelays: const [
+      Duration(milliseconds: 250), // the conversation's own stop — wedged
+      Duration.zero,
+      Duration.zero,
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    expect(b.vc.micOn, isTrue, reason: 'sanity: the conversation has the mic');
+
+    Object? loanOutcome;
+    final loan = b.vc.suspendMic().then<void>(
+          (s) => loanOutcome = s,
+          onError: (Object e) => loanOutcome = e,
+        );
+    await settle();
+    expect(mic.stopCalls, 1,
+        reason: "sanity: the conversation's teardown is in flight, with the "
+            'borrowed open queued behind it');
+
+    // acquireTimeout fires: the borrower's `finally` calls resumeMic() in its
+    // place, which restores the conversation's microphone.
+    await b.vc.resumeMic();
+    // Long enough for the wedged teardown to land afterwards.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await settle();
+    await loan;
+
+    expect(mic.maxConcurrentStops, 1,
+        reason: 'ending the loan may not issue a second stop() alongside the '
+            'conversation teardown that is still in flight');
+    expect(mic.stopOverlappedStart, isFalse,
+        reason: 'nor may the restore open a session while either of them is '
+            'still at the platform');
+    expect(loanOutcome, isA<StateError>());
+    expect(b.vc.micOn, isTrue,
+        reason: 'sanity: the restore claims the conversation is listening');
+    expect(mic.isRecording, isTrue,
+        reason: 'and it must actually BE listening — the wedged teardown '
+            'belongs to a session that is long gone');
+
+    b.fake.sent.clear();
+    mic.emit(Uint8List.fromList(const [5, 5, 5, 5]));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty,
+        reason: 'deaf after enrolling a voice sample is the whole failure');
+  });
+
+  test('power tapped repeatedly while a teardown is wedged never overlaps two '
+      'stops', () async {
+    // The same defect with NO enrollment at all, so it cannot be read as an
+    // enrollment-only problem — "ship without native enrollment" does not
+    // dodge it.
+    final mic = FakeMic(stopDelays: const [
+      Duration(milliseconds: 250), // tap 1's teardown — wedged
+      Duration.zero,
+      Duration.zero,
+    ]);
+    final b = build(mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    await b.vc.startMic(); // ON  — session 1
+    expect(b.vc.micOn, isTrue, reason: 'sanity');
+    final off1 = b.vc.stopMic(); // OFF — session 1's stop wedges
+    await settle();
+    expect(mic.stopCalls, 1, reason: 'sanity: the teardown is in flight');
+    final on2 = b.vc.startMic(); // ON  — session 2, queued behind it
+    await settle();
+    await b.vc.stopMic(); // OFF — THE case: session 2's stop, stop 1 in flight
+    final on3 = b.vc.startMic(); // ON  — session 3
+
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await settle();
+    await off1;
+    await on2;
+    await on3;
+
+    expect(mic.maxConcurrentStops, 1,
+        reason: "stopping session 2 must not issue a stop alongside session "
+            "1's, nor drop anything out of MicCapture's queue");
+    expect(mic.stopOverlappedStart, isFalse);
+    expect(b.vc.micOn, isTrue);
+    expect(mic.isRecording, isTrue,
+        reason: 'the last tap left the mic ON and it must really be on');
+  });
+
   // ---- the platform ENDING the stream under us ----
   //
   // `MicState.on` is derived from holding a subscription — but a subscription

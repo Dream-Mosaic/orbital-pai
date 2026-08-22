@@ -172,6 +172,214 @@ void main() {
             'recorder is the assistant going deaf with the indicator lit');
   });
 
+  // ---- the STOP side of the same chain (the eighth Critical) ----
+  //
+  // The two tests above wedge a `startStream` and prove no second one is
+  // issued. Both of the tests below wedge a `stop`, which for eight rounds
+  // nothing did. A guard that watched only `startStream` fell through in both
+  // of these windows, issued a SECOND concurrent `stop()`, and replaced the
+  // queue — dropping the still-running open out of it. Measured, before the
+  // fix: `maxConcurrentStops == 2`, `stopOverlappedStart == true`, and the
+  // wedged stop landing on the session the next start had already opened.
+
+  test('a stop must not race the platform stop another open is already inside',
+      () async {
+    // Window one: the DEFENSIVE stop at the head of an open that supersedes a
+    // live session. No `startStream` is in flight, so a `startStream`-shaped
+    // guard sees nothing to wait for.
+    final rec = FakeRecorder(stopDelays: const [
+      Duration(milliseconds: 120), // the defensive stop — wedged
+      Duration.zero,
+    ]);
+    final mic = MicCapture(recorder: rec);
+
+    final first = mic.start();
+    await first.stream;
+    final second = mic.start();
+    final settledSecond =
+        second.stream.then<void>((_) {}, onError: (Object _) {});
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(rec.stopCalls, 1,
+        reason: "sanity: session 2's open is inside the defensive stop, and "
+            'no startStream is in flight');
+
+    // The borrower gives up on session 2 — the shape `resumeMic()` produces.
+    await second.stop();
+    // ...and a third session opens in its place.
+    final third = mic.start();
+    await third.stream.timeout(const Duration(seconds: 2));
+    // Let the wedged defensive stop land afterwards and do its worst.
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await settledSecond;
+    await settle();
+
+    expect(rec.maxConcurrentStops, 1,
+        reason: 'two concurrent stop() calls on one AudioRecorder is the same '
+            'undefined behaviour as two concurrent starts, from the other '
+            'side');
+    expect(rec.stopOverlappedStart, isFalse,
+        reason: 'and so is a stop overlapping a start, in either order');
+    expect(rec.maxConcurrentStarts, 1);
+    expect(third.isActive, isTrue);
+    expect(rec.platformStreaming, isTrue,
+        reason: 'the wedged stop belongs to a session that is long gone; when '
+            'it lands it must not be the thing that closes the recorder the '
+            'restore is using');
+  });
+
+  test('a stop must not race the orphan close of a superseded open', () async {
+    // THE MIRROR of the test above: same defect, the other window. Here the
+    // in-flight platform stop is the ORPHAN close of an open that finished
+    // `startStream` only to find itself superseded — again with no
+    // `startStream` in flight for a guard to see.
+    final rec = FakeRecorder(
+      startDelays: const [Duration(milliseconds: 40), Duration.zero],
+      stopDelays: const [
+        Duration(milliseconds: 120), // the orphan close — wedged
+        Duration.zero,
+      ],
+    );
+    final mic = MicCapture(recorder: rec);
+
+    final wedged = mic.start();
+    final settledWedged =
+        wedged.stream.then<void>((_) {}, onError: (Object _) {});
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(rec.startCalls, 1,
+        reason: 'sanity: session 1 is inside startStream');
+
+    final second = mic.start();
+    final settledSecond =
+        second.stream.then<void>((_) {}, onError: (Object _) {});
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(rec.stopCalls, 1,
+        reason: "sanity: session 1's open is now inside its orphan close");
+
+    await second.stop();
+    final third = mic.start();
+    await third.stream.timeout(const Duration(seconds: 2));
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await settledWedged;
+    await settledSecond;
+    await settle();
+
+    expect(rec.maxConcurrentStops, 1);
+    expect(rec.stopOverlappedStart, isFalse);
+    expect(rec.maxConcurrentStarts, 1);
+    expect(third.isActive, isTrue);
+    expect(rec.platformStreaming, isTrue,
+        reason: 'a stale open closing its own orphan may not close the '
+            'session that replaced it');
+  });
+
+  test('a superseded open closes its own orphan even when its superseder '
+      'never reaches the queue', () async {
+    // The price of asking `hasPermission` outside the queue, and the reason a
+    // superseded open may NOT simply leave its orphan for whoever comes next.
+    // Here session 2 takes the claim and is then refused permission, so it
+    // throws without ever queueing anything. Nobody is coming. If session 1
+    // does not close the session the platform handed it after it lost the
+    // claim, the recorder streams for the life of the process with no
+    // subscriber, no error and no indicator.
+    final rec = FakeRecorder(
+      startDelays: const [Duration(milliseconds: 40)],
+      permissionBehaviours: const [FakeCall.ok, FakeCall.throws],
+    );
+    final mic = MicCapture(recorder: rec);
+
+    final wedged = mic.start();
+    Object? wedgedError;
+    final settledWedged = wedged.stream
+        .then<void>((_) {}, onError: (Object e) => wedgedError = e);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    expect(rec.startCalls, 1,
+        reason: 'sanity: session 1 is inside startStream');
+
+    // Deliberately NOT given an error handler: a claim that dies before the
+    // platform is even asked must not become an unhandled async error for a
+    // caller that only ever wanted the handle.
+    mic.start();
+    await settle();
+    expect(rec.permissionCalls, 2, reason: 'sanity: session 2 asked and lost');
+
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    await settledWedged;
+    await settle();
+
+    expect(wedgedError, isA<StateError>());
+    expect(rec.stopCalls, 1,
+        reason: 'the orphan the platform opened anyway must be closed by the '
+            'open that lost the claim — nothing else is queued to do it');
+    expect(rec.platformStreaming, isFalse,
+        reason: 'a recorder left streaming with no subscriber is the '
+            'assistant recording forever, silently');
+    expect(mic.isRecording, isFalse);
+  });
+
+  // ---- what the queue may and may not make a teardown wait for ----
+
+  test('a teardown does not park behind an open wedged in the permission '
+      'dialog', () async {
+    // Why `hasPermission` is asked OUTSIDE the queue. It is the one platform
+    // call with a HUMAN-scale bound — it can put a system dialog in front of
+    // the user — and it does not change what the recorder is doing. A
+    // teardown queued behind it would inherit that bound, and a teardown
+    // that takes a minute is the assistant going deaf for a minute.
+    final rec = FakeRecorder(
+      permissionBehaviours: const [FakeCall.ok, FakeCall.hangs],
+    );
+    final mic = MicCapture(
+      recorder: rec,
+      permissionTimeout: const Duration(seconds: 3),
+    );
+
+    final live = mic.start();
+    await live.stream;
+    expect(rec.platformStreaming, isTrue, reason: 'sanity: the recorder is up');
+
+    // A second session claims the recorder and wedges inside the dialog.
+    final wedged = mic.start();
+    wedged.stream.ignore();
+    await settle();
+    expect(rec.permissionCalls, 2,
+        reason: 'sanity: session 2 is inside the dialog, holding the claim');
+
+    await wedged.stop().timeout(const Duration(milliseconds: 300));
+
+    expect(rec.platformStreaming, isFalse,
+        reason: 'and it must really have stopped the hardware, not merely '
+            'returned quickly');
+  });
+
+  test('a teardown DOES wait for a startStream already in flight', () async {
+    // The mirror, and the half that must still wait. A permission check does
+    // not change what the recorder is doing; an open does. `stop()`
+    // overlapping `startStream()` on one AudioRecorder is undefined
+    // behaviour whichever of the two started first — this is the direction
+    // the deleted `_startInFlight` guard used to cover on its own.
+    final rec = FakeRecorder(startDelays: const [Duration(milliseconds: 60)]);
+    final mic = MicCapture(recorder: rec);
+
+    final session = mic.start();
+    Object? error;
+    final settled =
+        session.stream.then<void>((_) {}, onError: (Object e) => error = e);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(rec.startCalls, 1, reason: 'sanity: inside startStream');
+
+    await session.stop();
+    await settled;
+    await settle();
+
+    expect(rec.stopOverlappedStart, isFalse,
+        reason: 'the teardown may not reach the platform until the open it '
+            'would overlap has landed');
+    expect(rec.maxConcurrentStops, 1);
+    expect(error, isA<StateError>());
+    expect(rec.platformStreaming, isFalse,
+        reason: 'and the orphan the platform opened anyway is closed');
+  });
+
   test('a refused permission leaves no claim on the recorder', () async {
     final rec = FakeRecorder(permitted: false);
     final mic = MicCapture(recorder: rec);
