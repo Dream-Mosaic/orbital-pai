@@ -29,15 +29,20 @@ class FakeRecorder implements MicRecorder {
     this.startDelay = Duration.zero,
     List<Duration>? startDelays,
     this.stopDelay = Duration.zero,
+    List<Duration>? stopDelays,
     this.permitted = true,
     this.stopEndsStream = true,
     List<FakeCall>? startBehaviour,
     List<FakeCall>? stopBehaviour,
     this.permissionBehaviour = FakeCall.ok,
+    List<FakeCall>? permissionBehaviours,
     this.cancelBehaviour = FakeCall.ok,
   })  : _startDelays = List.of(startDelays ?? const <Duration>[]),
+        _stopDelays = List.of(stopDelays ?? const <Duration>[]),
         _startBehaviour = List.of(startBehaviour ?? const <FakeCall>[]),
-        _stopBehaviour = List.of(stopBehaviour ?? const <FakeCall>[]);
+        _stopBehaviour = List.of(stopBehaviour ?? const <FakeCall>[]),
+        _permissionBehaviours =
+            List.of(permissionBehaviours ?? const <FakeCall>[]);
 
   /// How long `startStream` takes when [startDelays] has nothing to say.
   final Duration startDelay;
@@ -46,7 +51,15 @@ class FakeRecorder implements MicRecorder {
   /// shape is asymmetric — one start wedges while the next is instant — and a
   /// single shared delay cannot express it.
   final List<Duration> _startDelays;
+
+  /// How long `stop()` takes when [stopDelays] has nothing to say.
   final Duration stopDelay;
+
+  /// Per-call `stop()` delays — the MIRROR of [startDelays], and missing until
+  /// the eighth Critical needed it. A slow teardown followed by a quick one is
+  /// the production shape of a wedged audio subsystem, and a single shared
+  /// delay cannot express it any better on this side than on that one.
+  final List<Duration> _stopDelays;
   final bool permitted;
 
   /// A successful `AudioRecorder.stop()` closes the stream it handed out. A
@@ -59,7 +72,16 @@ class FakeRecorder implements MicRecorder {
   /// with no timer to leak.
   final List<FakeCall> _startBehaviour;
   final List<FakeCall> _stopBehaviour;
+
+  /// What `hasPermission` does when [permissionBehaviours] has nothing to say.
   final FakeCall permissionBehaviour;
+
+  /// Per-call permission outcomes, so a test can let the FIRST session open
+  /// and wedge a LATER one inside the system dialog. `hasPermission` is the
+  /// one platform call with a human-scale bound, so "one succeeds, the next
+  /// hangs" is the only shape in which the cost of serialising it is
+  /// observable at all.
+  final List<FakeCall> _permissionBehaviours;
 
   /// What the SESSION STREAM's own `cancel()` does. That stream belongs to the
   /// plugin, not to MicCapture, so it is the one microphone-shaped call a
@@ -88,6 +110,40 @@ class FakeRecorder implements MicRecorder {
   int maxConcurrentStarts = 0;
   int _startsInFlight = 0;
 
+  /// The most `stop()` calls that were ever in flight at once — the MIRROR of
+  /// [maxConcurrentStarts], and unmeasurable here until the eighth Critical.
+  /// Two concurrent `stop()`s on one AudioRecorder is the same undefined
+  /// behaviour from the other side, and for eight rounds only one side of it
+  /// could be seen.
+  int maxConcurrentStops = 0;
+  int _stopsInFlight = 0;
+
+  /// True if a `stop()` and a `startStream()` were ever in flight at the same
+  /// time, in EITHER order. The cross term neither counter above can see, and
+  /// the one the eighth Critical actually produced: a teardown landing on top
+  /// of the session a newer start had just opened.
+  bool stopOverlappedStart = false;
+
+  /// A call that HANGS is deliberately not counted as in flight by any of the
+  /// three above. It never ends, so it would poison every later measurement;
+  /// what a hang is for is proving the `.timeout()` bounds, and those tests
+  /// assert on settling rather than on overlap.
+  void _enteringStart() {
+    _startsInFlight++;
+    if (_startsInFlight > maxConcurrentStarts) {
+      maxConcurrentStarts = _startsInFlight;
+    }
+    if (_stopsInFlight > 0) stopOverlappedStart = true;
+  }
+
+  void _enteringStop() {
+    _stopsInFlight++;
+    if (_stopsInFlight > maxConcurrentStops) {
+      maxConcurrentStops = _stopsInFlight;
+    }
+    if (_startsInFlight > 0) stopOverlappedStart = true;
+  }
+
   /// True if `startStream` was ever called while a previous session was still
   /// streaming. The SEQUENTIAL form of the same undefined behaviour
   /// [maxConcurrentStarts] catches concurrently — and the one a failing
@@ -101,13 +157,20 @@ class FakeRecorder implements MicRecorder {
   /// MicCapture believes.
   bool get platformStreaming => _live != null;
 
+  /// Per-call override if there is one, otherwise the scalar default — the
+  /// same shape [startDelay]/[startDelays] already had.
+  static T _forCall<T>(List<T> perCall, int call, T fallback) =>
+      call < perCall.length ? perCall[call] : fallback;
+
   FakeCall _behaviour(List<FakeCall> list, int call) =>
-      call < list.length ? list[call] : FakeCall.ok;
+      _forCall(list, call, FakeCall.ok);
 
   @override
   Future<bool> hasPermission() async {
+    final behaviour =
+        _forCall(_permissionBehaviours, permissionCalls, permissionBehaviour);
     permissionCalls++;
-    switch (permissionBehaviour) {
+    switch (behaviour) {
       case FakeCall.hangs:
         return Completer<bool>().future;
       case FakeCall.throws:
@@ -120,15 +183,13 @@ class FakeRecorder implements MicRecorder {
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) async {
     final behaviour = _behaviour(_startBehaviour, startCalls);
-    final delay =
-        startCalls < _startDelays.length ? _startDelays[startCalls] : startDelay;
+    final delay = _forCall(_startDelays, startCalls, startDelay);
     if (_live != null) startedOnLiveRecorder = true;
     startCalls++;
-    if (behaviour == FakeCall.hangs) return Completer<Stream<Uint8List>>().future;
-    _startsInFlight++;
-    if (_startsInFlight > maxConcurrentStarts) {
-      maxConcurrentStarts = _startsInFlight;
+    if (behaviour == FakeCall.hangs) {
+      return Completer<Stream<Uint8List>>().future;
     }
+    _enteringStart();
     try {
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       if (behaviour == FakeCall.throws) {
@@ -159,16 +220,22 @@ class FakeRecorder implements MicRecorder {
   @override
   Future<void> stop() async {
     final behaviour = _behaviour(_stopBehaviour, stopCalls);
+    final delay = _forCall(_stopDelays, stopCalls, stopDelay);
     stopCalls++;
     if (behaviour == FakeCall.hangs) return Completer<void>().future;
-    if (stopDelay > Duration.zero) await Future<void>.delayed(stopDelay);
-    if (behaviour == FakeCall.throws) {
-      // The hardware keeps streaming: `_live` is deliberately NOT cleared.
-      throw StateError('platform refused to stop');
+    _enteringStop();
+    try {
+      if (delay > Duration.zero) await Future<void>.delayed(delay);
+      if (behaviour == FakeCall.throws) {
+        // The hardware keeps streaming: `_live` is deliberately NOT cleared.
+        throw StateError('platform refused to stop');
+      }
+      final live = _live;
+      _live = null;
+      if (stopEndsStream && live != null && !live.isClosed) live.close();
+    } finally {
+      _stopsInFlight--;
     }
-    final live = _live;
-    _live = null;
-    if (stopEndsStream && live != null && !live.isClosed) live.close();
   }
 }
 
@@ -179,9 +246,11 @@ class FakeMic extends MicCapture {
     Duration startDelay = Duration.zero,
     List<Duration>? startDelays,
     Duration stopDelay = Duration.zero,
+    List<Duration>? stopDelays,
     List<FakeCall>? startBehaviour,
     List<FakeCall>? stopBehaviour,
     FakeCall permissionBehaviour = FakeCall.ok,
+    List<FakeCall>? permissionBehaviours,
     FakeCall cancelBehaviour = FakeCall.ok,
     Duration? platformTimeout,
     Duration? permissionTimeout,
@@ -190,16 +259,19 @@ class FakeMic extends MicCapture {
             startDelay: startDelay,
             startDelays: startDelays,
             stopDelay: stopDelay,
+            stopDelays: stopDelays,
             startBehaviour: startBehaviour,
             stopBehaviour: stopBehaviour,
             permissionBehaviour: permissionBehaviour,
+            permissionBehaviours: permissionBehaviours,
             cancelBehaviour: cancelBehaviour,
           ),
           platformTimeout: platformTimeout,
           permissionTimeout: permissionTimeout,
         );
 
-  FakeMic.withRecorder(this.recorder, {super.platformTimeout, super.permissionTimeout})
+  FakeMic.withRecorder(this.recorder,
+      {super.platformTimeout, super.permissionTimeout})
       : super(recorder: recorder);
 
   final FakeRecorder recorder;
@@ -207,6 +279,9 @@ class FakeMic extends MicCapture {
   int get startCalls => recorder.startCalls;
   int get stopCalls => recorder.stopCalls;
   int get maxConcurrentStarts => recorder.maxConcurrentStarts;
+  int get maxConcurrentStops => recorder.maxConcurrentStops;
+  bool get stopOverlappedStart => recorder.stopOverlappedStart;
+  bool get platformStreaming => recorder.platformStreaming;
   bool get listening => recorder.listening;
   bool get cancelled => recorder.cancelled;
   List<StreamController<Uint8List>> get sessions => recorder.sessions;
