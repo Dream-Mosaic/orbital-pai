@@ -46,11 +46,15 @@ class _BoundedRecorder implements MicRecorder {
     this._inner, {
     required this.platformTimeout,
     required this.permissionTimeout,
+    required this.onAbandonedCallLanded,
   });
 
   final MicRecorder _inner;
   final Duration platformTimeout;
   final Duration permissionTimeout;
+
+  /// Told when a platform call this wrapper GAVE UP ON finally completes.
+  final void Function() onAbandonedCallLanded;
 
   @override
   Future<bool> hasPermission() =>
@@ -58,10 +62,31 @@ class _BoundedRecorder implements MicRecorder {
 
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) =>
-      _inner.startStream(config).timeout(platformTimeout);
+      _bounded(_inner.startStream(config));
 
   @override
-  Future<void> stop() => _inner.stop().timeout(platformTimeout);
+  Future<void> stop() => _bounded(_inner.stop());
+
+  /// [platformTimeout] — plus a watch on what the call does AFTER the bound
+  /// expires, because it goes on doing it.
+  ///
+  /// `.timeout()` stops WAITING for a platform call; it cannot cancel one.
+  /// Dart has no way to reach into a platform channel and withdraw a request,
+  /// so the recorder is still inside an abandoned `startStream`/`stop` when
+  /// the next operation is issued, and will still act on it whenever it
+  /// finishes. That is the limit of this design (see [MicCapture]). The one
+  /// thing still knowable is WHEN it lands, so keep listening and say so.
+  Future<T> _bounded<T>(Future<T> call) async {
+    try {
+      return await call.timeout(platformTimeout);
+    } on TimeoutException {
+      call.then<void>(
+        (_) => onAbandonedCallLanded(),
+        onError: (Object _, StackTrace __) => onAbandonedCallLanded(),
+      );
+      rethrow;
+    }
+  }
 }
 
 /// What the microphone hardware is doing, as far as this process can know.
@@ -138,12 +163,14 @@ class MicCapture {
     MicRecorder? recorder,
     Duration? platformTimeout,
     Duration? permissionTimeout,
-  })  : platformTimeout = platformTimeout ?? defaultPlatformTimeout,
-        _recorder = _BoundedRecorder(
-          recorder ?? _PluginRecorder(),
-          platformTimeout: platformTimeout ?? defaultPlatformTimeout,
-          permissionTimeout: permissionTimeout ?? defaultPermissionTimeout,
-        );
+  }) : platformTimeout = platformTimeout ?? defaultPlatformTimeout {
+    _recorder = _BoundedRecorder(
+      recorder ?? _PluginRecorder(),
+      platformTimeout: platformTimeout ?? defaultPlatformTimeout,
+      permissionTimeout: permissionTimeout ?? defaultPermissionTimeout,
+      onAbandonedCallLanded: _abandonedCallLanded,
+    );
+  }
 
   /// The bound every platform call in here is subject to, exposed for the one
   /// microphone-shaped call that does NOT come through this class: the
@@ -165,8 +192,9 @@ class MicCapture {
   static const Duration defaultPermissionTimeout = Duration(seconds: 60);
 
   /// Always a [_BoundedRecorder]. The raw recorder is not stored anywhere:
-  /// see Invariant B on [_BoundedRecorder].
-  final MicRecorder _recorder;
+  /// see Invariant B on [_BoundedRecorder]. `late` only because the wrapper
+  /// is handed a callback into this object.
+  late final MicRecorder _recorder;
 
   int _seq = 0;
 
@@ -355,6 +383,22 @@ class MicCapture {
       ));
     }
   }
+
+  /// A platform call we gave up waiting for has finally landed.
+  ///
+  /// It cannot be prevented — `.timeout()` abandons, it does not cancel — but
+  /// the moment it lands, any precise belief held here is one the platform has
+  /// just had the chance to falsify: an abandoned `stop()` may have taken down
+  /// the session that replaced it, an abandoned `startStream` may have opened
+  /// the hardware after we recorded it idle. [MicHardware.unknown] is the only
+  /// honest answer, and it is the USEFUL one — it is what makes the next
+  /// [_ensureIdle] reconcile the recorder instead of skipping it and opening a
+  /// second stream on top.
+  ///
+  /// Deliberately unconditional. It may be overwritten moments later by a
+  /// platform call that is still in flight, and that is correct: that call's
+  /// answer is the more recent news.
+  void _abandonedCallLanded() => _hardware = MicHardware.unknown;
 
   bool _owns(int id) => _activeId == id;
 

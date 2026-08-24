@@ -652,4 +652,116 @@ void main() {
     // queueing behind the first one forever.
     await expectLater(mic.start().stream, throwsA(isA<TimeoutException>()));
   }, timeout: const Timeout(Duration(seconds: 8)));
+
+  // ---- the residual limit: a bound ABANDONS, it does not CANCEL ----
+  //
+  // Everything above proves what the queue guarantees for platform calls that
+  // finish inside [MicCapture.defaultPlatformTimeout]. These two are what
+  // happens when one does not, and they are the honest limit of this design:
+  // `.timeout()` stops WAITING for a platform call, it cannot stop the call.
+  // The slot is released, the next operation reaches the same recorder, and
+  // for a while two calls really are inside one AudioRecorder at once.
+  //
+  // Dart cannot close this — see the class documentation on [MicCapture]. What
+  // it CAN do is not lie about it afterwards. Both tests below assert only
+  // that: when a call we stopped believing in finally lands, MicCapture stops
+  // claiming to know what the hardware is doing. Neither asserts that the race
+  // did not happen, because it did.
+
+  test('an abandoned stop that finally lands must not leave the hardware '
+      'recorded as streaming', () async {
+    captureFlutterErrors();
+    // A stop that merely OVERRUNS its bound — not a wedge. This is the
+    // ordinary shape of a busy audio subsystem, and it needs no enrollment:
+    // end to end it is a power OFF then ON.
+    final rec = FakeRecorder(stopDelays: const [
+      Duration(milliseconds: 300), // abandoned at 60ms, lands at 300ms
+      Duration.zero,
+    ]);
+    final mic = MicCapture(
+      recorder: rec,
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+
+    final first = mic.start();
+    await first.stream;
+    await first.stop();
+
+    final second = mic.start();
+    await second.stream.timeout(const Duration(seconds: 2));
+    expect(mic.isRecording, isTrue, reason: 'sanity: session 2 really is up');
+    expect(rec.platformStreaming, isTrue);
+    expect(rec.maxConcurrentStops, 2,
+        reason: 'THE LIMIT ITSELF, recorded rather than asserted away: the '
+            'abandoned stop is still inside the recorder while the next one '
+            'is issued');
+    expect(rec.stopOverlappedStart, isTrue);
+
+    // The abandoned stop lands and closes the recorder session 2 is using.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await settle();
+
+    expect(rec.platformStreaming, isFalse,
+        reason: 'sanity: the late stop really did take the hardware down '
+            'under a live session — this is the deafness, and Dart cannot '
+            'prevent it');
+    expect(mic.hardware, MicHardware.unknown,
+        reason: 'but it must not be reported as streaming. A call we stopped '
+            'believing in has just touched the recorder; whatever we thought '
+            'the hardware was doing, we no longer know');
+    expect(mic.isRecording, isFalse,
+        reason: '`isRecording == true` over a dead recorder is a NEW lie, and '
+            'the reporting is the half of this that Dart can fix');
+  });
+
+  test('an abandoned startStream that finally lands must not leave the '
+      'hardware recorded as idle', () async {
+    // THE MIRROR, and the more dangerous direction. An abandoned stop leaves
+    // us claiming a microphone we have lost; an abandoned START leaves us
+    // claiming an idle recorder that is in fact live. That belief is what
+    // `_ensureIdle` consults, so the next open skips its defensive stop and
+    // issues `startStream` on top of a streaming recorder — the undefined
+    // behaviour this whole class exists to prevent.
+    captureFlutterErrors();
+    final rec = FakeRecorder(startDelays: const [
+      Duration(milliseconds: 300), // abandoned at 60ms, lands at 300ms
+      Duration.zero,
+    ]);
+    final mic = MicCapture(
+      recorder: rec,
+      platformTimeout: const Duration(milliseconds: 60),
+    );
+
+    final abandoned = mic.start();
+    await expectLater(abandoned.stream, throwsA(isA<TimeoutException>()));
+
+    // A session opens and closes cleanly in the meantime, which is what walks
+    // MicCapture's belief all the way back to `idle`.
+    final second = mic.start();
+    await second.stream.timeout(const Duration(seconds: 2));
+    await second.stop();
+    expect(mic.hardware, MicHardware.idle, reason: 'sanity: a clean teardown');
+
+    // Now the abandoned open lands and opens the hardware behind our back.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await settle();
+
+    expect(rec.platformStreaming, isTrue,
+        reason: 'sanity: the platform opened the microphone after we gave up '
+            'waiting for it, and nothing in Dart could stop it');
+    expect(mic.hardware, MicHardware.unknown,
+        reason: 'recording that as idle is how a recorder ends up streaming '
+            'for the life of the process with no subscriber');
+
+    // And the consequence that makes this worth fixing rather than merely
+    // reporting: the next open must RECONCILE instead of opening on top.
+    final third = mic.start();
+    await third.stream.timeout(const Duration(seconds: 2));
+
+    expect(rec.startedOnLiveRecorder, isFalse,
+        reason: 'believing the recorder idle is exactly what makes the next '
+            'open skip its defensive stop and start a second stream on a live '
+            'AudioRecorder');
+    expect(mic.isRecording, isTrue);
+  }, timeout: const Timeout(Duration(seconds: 8)));
 }
