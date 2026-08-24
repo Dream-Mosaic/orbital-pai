@@ -36,13 +36,16 @@ class FakeRecorder implements MicRecorder {
     List<FakeCall>? stopBehaviour,
     this.permissionBehaviour = FakeCall.ok,
     List<FakeCall>? permissionBehaviours,
+    this.permissionDelay = Duration.zero,
+    List<Duration>? permissionDelays,
     this.cancelBehaviour = FakeCall.ok,
   })  : _startDelays = List.of(startDelays ?? const <Duration>[]),
         _stopDelays = List.of(stopDelays ?? const <Duration>[]),
         _startBehaviour = List.of(startBehaviour ?? const <FakeCall>[]),
         _stopBehaviour = List.of(stopBehaviour ?? const <FakeCall>[]),
         _permissionBehaviours =
-            List.of(permissionBehaviours ?? const <FakeCall>[]);
+            List.of(permissionBehaviours ?? const <FakeCall>[]),
+        _permissionDelays = List.of(permissionDelays ?? const <Duration>[]);
 
   /// How long `startStream` takes when [startDelays] has nothing to say.
   final Duration startDelay;
@@ -82,6 +85,25 @@ class FakeRecorder implements MicRecorder {
   /// hangs" is the only shape in which the cost of serialising it is
   /// observable at all.
   final List<FakeCall> _permissionBehaviours;
+
+  /// How long `hasPermission` takes when [permissionDelays] has nothing to
+  /// say.
+  final Duration permissionDelay;
+
+  /// Per-call `hasPermission` LATENCIES — the missing third of the
+  /// [startDelays]/[stopDelays] family, and the ninth Critical is what it
+  /// cost. `hasPermission` is asked OUTSIDE the queue, so the moment an open
+  /// JOINS the queue is the moment its permission check answers: a slow first
+  /// dialog and an instant second one put the two opens into the queue in the
+  /// OPPOSITE order to the one they were started in. Outcomes alone
+  /// (`permissionBehaviours`) cannot express that — they can only say who
+  /// fails, never who is late — so for nine rounds the one call the design
+  /// treats as special was the one the fake could not misbehave in.
+  ///
+  /// Reachable in production: `SwiftRecordPlugin.swift:159-170` hops
+  /// `requestAccess`'s completion through `DispatchQueue.main.async`, and two
+  /// concurrent requests are two independent hops with no guaranteed order.
+  final List<Duration> _permissionDelays;
 
   /// What the SESSION STREAM's own `cancel()` does. That stream belongs to the
   /// plugin, not to MicCapture, so it is the one microphone-shaped call a
@@ -124,10 +146,19 @@ class FakeRecorder implements MicRecorder {
   /// of the session a newer start had just opened.
   bool stopOverlappedStart = false;
 
-  /// A call that HANGS is deliberately not counted as in flight by any of the
-  /// three above. It never ends, so it would poison every later measurement;
-  /// what a hang is for is proving the `.timeout()` bounds, and those tests
-  /// assert on settling rather than on overlap.
+  /// A call that HANGS **is** counted as in flight by all three above, and
+  /// never stops being — because that is what it is.
+  ///
+  /// It used to be excluded, on the reasoning that a call which never ends
+  /// "would poison every later measurement". It does; the poison is the
+  /// finding. `.timeout()` ABANDONS a platform call, it does not cancel it, so
+  /// the moment a bound expires MicCapture issues its next call while the
+  /// abandoned one is still inside the recorder — genuinely concurrent, and
+  /// undefined behaviour on the plugin side exactly as two fast calls would
+  /// be. Excluding hangs meant the instrument could never register the one
+  /// case in which the queue's guarantee does not hold, which is why nine
+  /// rounds of review reported four impossibilities that were only ever true
+  /// of calls completing inside their bound.
   void _enteringStart() {
     _startsInFlight++;
     if (_startsInFlight > maxConcurrentStarts) {
@@ -167,17 +198,17 @@ class FakeRecorder implements MicRecorder {
 
   @override
   Future<bool> hasPermission() async {
+    final call = permissionCalls;
     final behaviour =
-        _forCall(_permissionBehaviours, permissionCalls, permissionBehaviour);
+        _forCall(_permissionBehaviours, call, permissionBehaviour);
+    final delay = _forCall(_permissionDelays, call, permissionDelay);
     permissionCalls++;
-    switch (behaviour) {
-      case FakeCall.hangs:
-        return Completer<bool>().future;
-      case FakeCall.throws:
-        throw StateError('platform refused to answer about permission');
-      case FakeCall.ok:
-        return permitted;
+    if (behaviour == FakeCall.hangs) return Completer<bool>().future;
+    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    if (behaviour == FakeCall.throws) {
+      throw StateError('platform refused to answer about permission');
     }
+    return permitted;
   }
 
   @override
@@ -186,10 +217,12 @@ class FakeRecorder implements MicRecorder {
     final delay = _forCall(_startDelays, startCalls, startDelay);
     if (_live != null) startedOnLiveRecorder = true;
     startCalls++;
+    _enteringStart();
+    // Deliberately NOT inside the try below: a hung call never leaves the
+    // recorder, so its slot in `_startsInFlight` must never be given back.
     if (behaviour == FakeCall.hangs) {
       return Completer<Stream<Uint8List>>().future;
     }
-    _enteringStart();
     try {
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       if (behaviour == FakeCall.throws) {
@@ -222,8 +255,9 @@ class FakeRecorder implements MicRecorder {
     final behaviour = _behaviour(_stopBehaviour, stopCalls);
     final delay = _forCall(_stopDelays, stopCalls, stopDelay);
     stopCalls++;
-    if (behaviour == FakeCall.hangs) return Completer<void>().future;
     _enteringStop();
+    // See [startStream]: a hang holds its slot for good.
+    if (behaviour == FakeCall.hangs) return Completer<void>().future;
     try {
       if (delay > Duration.zero) await Future<void>.delayed(delay);
       if (behaviour == FakeCall.throws) {
@@ -251,6 +285,7 @@ class FakeMic extends MicCapture {
     List<FakeCall>? stopBehaviour,
     FakeCall permissionBehaviour = FakeCall.ok,
     List<FakeCall>? permissionBehaviours,
+    List<Duration>? permissionDelays,
     FakeCall cancelBehaviour = FakeCall.ok,
     Duration? platformTimeout,
     Duration? permissionTimeout,
@@ -264,6 +299,7 @@ class FakeMic extends MicCapture {
             stopBehaviour: stopBehaviour,
             permissionBehaviour: permissionBehaviour,
             permissionBehaviours: permissionBehaviours,
+            permissionDelays: permissionDelays,
             cancelBehaviour: cancelBehaviour,
           ),
           platformTimeout: platformTimeout,
