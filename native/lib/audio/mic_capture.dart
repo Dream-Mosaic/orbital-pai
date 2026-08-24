@@ -158,6 +158,68 @@ class MicSession {
 /// ONE [AudioRecorder] is the whole contended resource: everything that wants
 /// the microphone goes through here, so this class — not its callers — is
 /// where "who owns the recorder right now" has to be decided. See [MicSession].
+///
+/// ## What the queue guarantees — and what it cannot
+///
+/// If you are reading this after a report that the microphone sometimes stops
+/// working, start here. Nine defects of one class have been fixed in this
+/// file. What is described below is a tenth, it is NOT fixed, and it is not
+/// fixable from Dart. Please do not add a guard for it.
+///
+/// Everything that changes what the recorder is doing goes through [_ops], and
+/// there is no second route. **Provided every platform call finishes inside
+/// [platformTimeout]**, that makes four things impossible, each with its own
+/// test in `mic_capture_test.dart`:
+///
+///  * two `startStream` calls in flight at once;
+///  * two `stop` calls in flight at once;
+///  * a `stop` overlapping a `startStream`, in either order;
+///  * a stale operation stopping the recorder a newer session owns.
+///
+/// That proviso is not a formality; it is the whole limit. **`.timeout()`
+/// abandons a platform call, it does not cancel it.** Nothing in Dart can
+/// withdraw a request already handed to a platform channel. So when a call
+/// overruns its bound, the queue releases the slot and the next operation
+/// reaches a recorder the previous call is still inside — and the first three
+/// impossibilities above stop holding. Measured, not theorised: with a single
+/// `stop()` slower than the bound, `maxConcurrentStops` is 2 and
+/// `stopOverlappedStart` is true.
+///
+/// The honest statement of the guarantee is therefore: **[_ops] serialises
+/// AWAITS, not platform calls.** On a healthy device, where `startStream` and
+/// `stop` take tens of milliseconds against a four-second bound, that is the
+/// same thing. On a device whose audio subsystem is wedged or contended by
+/// another app, it is not, and the difference is a race this file cannot
+/// close. Two shapes of it have been measured end to end:
+///
+///  * a `stop()` that merely exceeds [defaultPlatformTimeout] during a power
+///    OFF → ON lands afterwards and closes the session the ON had already
+///    opened. No enrollment, no loan — an ordinary power cycle is enough.
+///  * an abandoned `startStream` opens the hardware AFTER this class recorded
+///    it idle. If the owning controller is disposed inside that window,
+///    nothing is left that will ever stop it and the microphone stays open for
+///    the life of the process.
+///
+/// **Symptom:** the assistant goes deaf. No exception, no crash, no log line
+/// that names the cause. The indicator does not lie — `VoiceController`
+/// notices the platform ending the mic stream and turns itself off, and this
+/// class stops claiming to be streaming as soon as an abandoned call lands
+/// (see [_abandonedCallLanded]) — so what the user sees is the microphone
+/// switching itself off, not a lit indicator over a dead recorder.
+///
+/// **Recovery is one tap.** Toggling power off and on opens a fresh session,
+/// and every open reconciles the hardware before it starts, so nothing else
+/// needs restarting. Nothing is wedged permanently; every call in here is
+/// bounded, so the chain always settles.
+///
+/// **The real cure is not in this file.** The calls have to be serialised
+/// where they can actually be sequenced or cancelled — in the Kotlin and Swift
+/// plugin code, or in a `record` plugin that queues on the platform side.
+/// Anything added on this side can only order the Dart half of a call whose
+/// other half has already left. Nine rounds of Dart-side guards produced this
+/// file, and three of those nine defects were introduced by the fix for the
+/// one before; a tenth guard is likelier to add an eleventh defect than to
+/// close this one.
 class MicCapture {
   MicCapture({
     MicRecorder? recorder,
@@ -207,9 +269,14 @@ class MicCapture {
 
   /// What the hardware is doing. Deliberately NOT optimistic in either
   /// direction: every write happens BEFORE the platform call it describes and
-  /// is true whatever that call goes on to do. The only write that depends on
-  /// a call returning moves [MicHardware.unknown] to a MORE precise value,
-  /// never to a less true one.
+  /// is true whatever that call goes on to do.
+  ///
+  /// Writes that depend on a call RETURNING only ever move towards the truth.
+  /// A call that answers moves [MicHardware.unknown] to a more precise value;
+  /// an abandoned call that finally lands moves a precise value back to
+  /// [MicHardware.unknown], because the platform has just had the chance to
+  /// falsify it (see [_abandonedCallLanded]). Neither direction ever writes a
+  /// precise value the platform has not earned.
   MicHardware _hardware = MicHardware.idle;
 
   /// THE queue, and the only route to the recorder.
@@ -222,9 +289,15 @@ class MicCapture {
   /// dropping a running open out of it; the eighth was the same stop reaching
   /// the platform without joining the chain at all, whenever no `startStream`
   /// happened to be in flight for its guard to see. Both fixes were guards
-  /// about who may interrupt whom. Neither sentence is writable now: a second
-  /// concurrent platform call would have to be issued from outside [_queue],
-  /// and there is nowhere outside it left to issue one from.
+  /// about who may interrupt whom. Neither sentence is writable now: no code
+  /// path issues a platform call from outside [_queue], because there is
+  /// nowhere outside it left to issue one from.
+  ///
+  /// That is a statement about where calls are ISSUED, and it is as far as it
+  /// goes. It does not mean two platform calls are never in flight together:
+  /// a bound that expires releases the slot while the call runs on. See the
+  /// residual limit on [MicCapture] before relying on this queue for more
+  /// than it says.
   ///
   /// The one platform call NOT in here is `hasPermission`, and its absence is
   /// load-bearing. It does not change what the recorder is doing, and it can
@@ -329,12 +402,20 @@ class MicCapture {
   /// **It does not park behind a wedged open.** Nothing guards against that;
   /// three facts leave no room for it. A system dialog holds no queue slot
   /// (`hasPermission` is asked outside — see [_ops]). Every operation already
-  /// queued has just been disowned by the line below, so the most any of them
-  /// does before stepping aside is bring the hardware to idle, which is this
-  /// teardown's own work. And whatever IS in flight is bounded by
-  /// [platformTimeout]. Worst case: one `startStream` plus the close of the
-  /// session it opened — 2 × [platformTimeout], and never the minute-long
-  /// bound.
+  /// queued has just been disowned by the line below, so it finds at the head
+  /// of its body that nobody wants it and steps aside WITHOUT touching the
+  /// platform — which is true only because that head check exists; deleting it
+  /// as redundant was the ninth defect, and the second fact is what it costs.
+  /// And whatever IS in flight is bounded by [platformTimeout].
+  ///
+  /// The bound, stated accurately rather than optimistically: a teardown can
+  /// wait for a `startStream` already in flight plus the orphan close of the
+  /// session it opens — 2 × [platformTimeout] — and the chain including this
+  /// teardown's own stop runs to 3 ×. Measured with a 300 ms bound: a 529 ms
+  /// wait (1.76 ×) behind an ≈840 ms chain. Never the minute-long permission
+  /// bound, which is the point of the fact above. And "bounded" means we stop
+  /// WAITING at the bound, not that the call has finished — see the residual
+  /// limit on [MicCapture].
   Future<void> _stopSession(int id) {
     // Not ours to stop. THE invariant: a stale caller cannot reach the
     // hardware a newer session owns.
