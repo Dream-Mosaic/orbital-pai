@@ -234,12 +234,27 @@ class MicCapture {
         throw StateError('microphone permission denied');
       }
       return await _queue(() async {
-        // Unconditionally, WITHOUT first asking whether we are still wanted.
-        // A start that supersedes a live session must close it or
-        // `startStream` runs on a live recorder — and a session that has
-        // since been superseded wants the recorder idle just as much, since
-        // that is what whoever replaced us queued behind us to do. So the
-        // ownership check below is the only one that has to exist.
+        // FIRST, before touching anything: are we still wanted? This reads as
+        // redundant against the identical check below and is load-bearing —
+        // it is the ninth defect of this class, and deleting it as redundant
+        // is how the ninth happened.
+        //
+        // JOIN ORDER IS NOT START ORDER. `hasPermission` is awaited OUTSIDE
+        // the queue (see [_ops]), so an open joins only when its permission
+        // check answers, and permission is the one call that can sit in front
+        // of a human. A slow dialog for this session and a fast one for the
+        // next puts this open into the queue BEHIND the very session that
+        // superseded it. The proof that once justified deleting this line —
+        // "a superseded open wants the recorder idle just as much, since that
+        // is what whoever replaced us queued behind us to do" — assumed the
+        // superseder is always queued behind. It is not, and when it is
+        // queued ahead the reconcile below is not housekeeping: it is the
+        // teardown of a live session. An open holding no claim owns no
+        // hardware, so it must not reconcile any.
+        if (_activeId != id) throw _superseded(id);
+        // Now, and unconditionally for an open that IS still wanted: a start
+        // that supersedes a live session must close it, or `startStream` runs
+        // on a live recorder.
         await _ensureIdle();
         if (_hardware != MicHardware.idle) {
           // We asked the platform to stop and it would not say that it did.
@@ -249,6 +264,11 @@ class MicCapture {
           // opened safely must fail loudly rather than half-open.
           throw StateError('the microphone would not stop; refusing to start');
         }
+        // And AGAIN, because the reconcile above is an await like any other:
+        // a session that was still wanted at the head of the queue can have
+        // been superseded inside its own defensive stop. The two checks cover
+        // two different windows and each has its own test; neither is the
+        // other's spare.
         if (_activeId != id) throw _superseded(id);
         // Written BEFORE the call, and true whatever it does: from here the
         // platform may or may not be streaming, and a start that throws or

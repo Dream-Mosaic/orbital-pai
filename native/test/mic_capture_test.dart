@@ -316,6 +316,108 @@ void main() {
     expect(mic.isRecording, isFalse);
   });
 
+  // ---- an open that lost the claim before it reached the queue ----
+  //
+  // THE NINTH Critical, and the pair of guards that close it. `hasPermission`
+  // is asked OUTSIDE the queue, so an open joins the queue only when its
+  // permission check answers: JOIN ORDER IS PERMISSION-COMPLETION ORDER, NOT
+  // START ORDER. Between joining and calling `startStream` an open therefore
+  // has to establish twice that it is still wanted — once when it reaches the
+  // head of the queue, and again after its own defensive stop, because that
+  // stop is an await like any other. The two tests below are those two
+  // windows. Before them, NEITHER guard was pinned by anything in this suite:
+  // deleting either left all 448 tests green.
+
+  test('an open superseded inside the permission dialog must not tear down '
+      'the session that replaced it', () async {
+    // Window one. Session 1's dialog is slow and session 2's is instant, so
+    // session 2 queues FIRST and opens the recorder. Session 1 then arrives at
+    // the head of the queue holding a claim it has already lost, with the
+    // recorder LIVE. If its first act is to reconcile the hardware to idle
+    // rather than to ask whether it is still wanted, "reconcile" is the
+    // teardown of the session that replaced it — deaf after enrolling, with
+    // no error and no indicator.
+    final rec = FakeRecorder(permissionDelays: const [
+      Duration(milliseconds: 60), // session 1 — still inside the dialog
+      Duration.zero, //              session 2 — answers at once
+    ]);
+    final mic = MicCapture(recorder: rec);
+
+    final superseded = mic.start();
+    Object? supersededError;
+    final settled = superseded.stream
+        .then<void>((_) {}, onError: (Object e) => supersededError = e);
+
+    final live = mic.start();
+    await live.stream.timeout(const Duration(seconds: 2));
+    expect(rec.permissionCalls, 2,
+        reason: 'sanity: session 1 is still inside the dialog, holding a '
+            'claim it has already lost');
+    expect(rec.platformStreaming, isTrue, reason: 'sanity: session 2 is up');
+
+    // Let session 1's dialog answer and its open reach the head of the queue.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await settled;
+    await settle();
+
+    expect(supersededError, isA<StateError>(),
+        reason: 'the superseded open must give up');
+    expect(rec.stopCalls, 0,
+        reason: 'and give up WITHOUT touching the platform — it holds no '
+            'claim, so it owns no hardware to reconcile, and the hardware it '
+            "would find is somebody else's");
+    expect(rec.platformStreaming, isTrue,
+        reason: 'the recorder its superseder opened must still be streaming: '
+            'a stale open tearing down a live one is the signature this whole '
+            'class exists to prevent');
+    expect(mic.isRecording, isTrue);
+    expect(live.isActive, isTrue,
+        reason: '`isActive` over an idle recorder is the assistant going deaf '
+            'with the indicator lit');
+  });
+
+  test('an open superseded during its own defensive stop must not open the '
+      'recorder anyway', () async {
+    // THE MIRROR, and the second window: this open IS still wanted when it
+    // reaches the head of the queue, and loses the claim while it is inside
+    // the defensive stop it correctly issued. Its own reconcile is an await
+    // like every other, so ownership established above it has expired by the
+    // time `startStream` is reached — and a `startStream` issued for a session
+    // nobody is waiting on is an orphan handed to nobody.
+    final rec = FakeRecorder(stopDelays: const [
+      Duration(milliseconds: 60), // session 2's defensive stop — slow
+      Duration.zero,
+    ]);
+    final mic = MicCapture(recorder: rec);
+
+    final first = mic.start();
+    await first.stream;
+
+    final superseded = mic.start();
+    Object? supersededError;
+    final settled = superseded.stream
+        .then<void>((_) {}, onError: (Object e) => supersededError = e);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(rec.stopCalls, 1,
+        reason: 'sanity: session 2 is inside its own defensive stop, and it '
+            'still owns the claim');
+
+    // A third session claims the recorder while session 2 is mid-reconcile.
+    final live = mic.start();
+    await live.stream.timeout(const Duration(seconds: 2));
+    await settled;
+    await settle();
+
+    expect(supersededError, isA<StateError>());
+    expect(rec.startCalls, 2,
+        reason: 'sessions 1 and 3 opened; session 2 lost the claim while its '
+            'defensive stop was in flight and must not issue a startStream '
+            'for a session nobody is waiting on');
+    expect(rec.platformStreaming, isTrue);
+    expect(live.isActive, isTrue);
+    expect(mic.isRecording, isTrue);
+  });
+
   // ---- what the queue may and may not make a teardown wait for ----
 
   test('a teardown does not park behind an open wedged in the permission '
