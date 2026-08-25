@@ -217,7 +217,18 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('the conversation topic is never joined', (tester) async {
+  // RETITLED, because the old name — "the conversation topic is never joined"
+  // — was a claim this fixture is structurally unable to test: it carries a
+  // ConnectorsClient and nothing else, no VoiceController and no BadgesClient,
+  // so `voice:henry` could never appear in joinedTopics no matter what
+  // main.dart did. That claim now has a real home in test/main_routing_test
+  // .dart, which builds an actual HenryHome — where both topics ARE joined at
+  // boot, so "opening a panel disturbs neither" is falsifiable.
+  //
+  // What remains here is the narrower thing the assertion genuinely checks:
+  // this route's open/dismiss round trip touches exactly one topic.
+  testWidgets('the drawer round trip joins no topic but the panel\'s own',
+      (tester) async {
     final (client, conn, fake) = await openedClient(tester);
     final navKey = GlobalKey<NavigatorState>();
     await pumpDrawer(tester, navKey, client);
