@@ -135,14 +135,18 @@ void main() {
     Type panel,
   ) async {
     await tapStation(tester, tab);
+    // Webview first, deliberately: a lost branch falls THROUGH to the
+    // fallthrough, so this is the assertion that names the actual regression.
+    // Ordering it first also keeps the two below provable in their own right —
+    // they are what fires when a branch pushes nothing at all.
+    expect(find.byType(PanelWebViewScreen), findsNothing,
+        reason: '${tab.label} is native; it must not reach _openPanel\'s '
+            'webview fallthrough');
     expect(find.byType(MeridianDrawer), findsOneWidget,
         reason: '${tab.label} must open the native drawer');
     expect(find.byType(panel), findsOneWidget,
         reason: '${tab.label} must be handed its own panel, not another '
             "station's");
-    expect(find.byType(PanelWebViewScreen), findsNothing,
-        reason: '${tab.label} is native; it must not reach _openPanel\'s '
-            'webview fallthrough');
   }
 
   // ---- routing: which screen each station opens ----
