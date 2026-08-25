@@ -210,4 +210,242 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
     assert rows == []
     refute Enum.any?(rows, &(&1.email == "bob-1@x.com"))
   end
+
+  # The join pushes one state; a successful write pushes another. Draining both
+  # is not tidiness: leaving the second in flight puts the channel mid-query at
+  # sandbox teardown and cascades "Database busy" through the whole file.
+  defp drain_join!(socket, user) do
+    {:ok, _reply, sock} = join!(socket, user)
+    assert_push "state", _
+    sock
+  end
+
+  describe "set_default" do
+    test "on the user's own account persists and pushes a fresh state",
+         %{socket: socket, alice: alice} do
+      first = account!(alice, "first@x.com", [@cal_read])
+      _second = account!(alice, "second@x.com", [@cal_read], is_default: true)
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "set_default", %{"account_id" => first.id})
+      assert_reply ref, :ok
+
+      assert_push "state", %{connections: rows}
+      first_row = Enum.find(rows, &(&1.email == "first@x.com"))
+      second_row = Enum.find(rows, &(&1.email == "second@x.com"))
+      assert first_row.is_default == true
+      assert second_row.is_default == false
+    end
+
+    test "exactly ONE state follows a successful set_default",
+         %{socket: socket, alice: alice} do
+      first = account!(alice, "first@x.com", [@cal_read])
+      _second = account!(alice, "second@x.com", [@cal_read], is_default: true)
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "set_default", %{"account_id" => first.id})
+      assert_reply ref, :ok
+
+      assert_push "state", _
+      refute_push "state", _, 200
+    end
+
+    test "on ANOTHER user's account is bad_request and changes nothing",
+         %{socket: socket, alice: alice, bob: bob} do
+      bobs = account!(bob, "bobs@x.com", [@cal_read], is_default: false)
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "set_default", %{"account_id" => bobs.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      refute_push "state", _, 200
+      assert Repo.get(Account, bobs.id).is_default == false
+    end
+
+    test "with a non-integer account_id, or a missing key, is bad_request and the channel survives",
+         %{socket: socket, alice: alice} do
+      valid = account!(alice, "valid@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "set_default", %{"account_id" => "3"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      ref = push(sock, "set_default", %{"account_id" => nil})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      ref = push(sock, "set_default", %{})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      ref = push(sock, "set_default", %{"account_id" => valid.id})
+      assert_reply ref, :ok
+      assert_push "state", _
+    end
+  end
+
+  describe "disconnect" do
+    test "on a SOLE grant deletes the account and pushes a state without it",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "sole@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+      assert_reply ref, :ok
+
+      assert_push "state", %{connections: []}
+      assert Repo.get(Account, account.id) == nil
+    end
+
+    test "on a MULTI-grant account replies needs_web and deletes nothing",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "multi@x.com", [@cal_read, @gmail_read])
+      original_scope = account.scope
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+      assert_reply ref, :error, %{reason: "needs_web"}
+
+      refute_push "state", _, 200
+      persisted = Repo.get(Account, account.id)
+      assert persisted
+      assert persisted.scope == original_scope
+    end
+
+    test "a stale client that sends only_grant cannot buy a delete",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "multi@x.com", [@cal_read, @gmail_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref =
+        push(sock, "disconnect", %{
+          "account_id" => account.id,
+          "connector" => "calendar",
+          "only_grant" => true
+        })
+
+      assert_reply ref, :error, %{reason: "needs_web"}
+
+      refute_push "state", _, 200
+      assert Repo.get(Account, account.id)
+    end
+
+    test "for a connector the account does not hold at all replies needs_web and deletes nothing",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "cal-only@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "gmail"})
+      assert_reply ref, :error, %{reason: "needs_web"}
+
+      refute_push "state", _, 200
+      assert Repo.get(Account, account.id)
+    end
+
+    test "an unknown connector string is bad_request and the channel survives",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "sole@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      for bad_connector <- ["drive", "Calendar", "elixir", 123] do
+        ref =
+          push(sock, "disconnect", %{"account_id" => account.id, "connector" => bad_connector})
+
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      assert Repo.get(Account, account.id)
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+      assert_reply ref, :ok
+      assert_push "state", _
+    end
+
+    # "drive"/"elixir" have no matching atom in the VM at all, so a
+    # String.to_existing_atom/1 implementation would raise and crash the
+    # channel on those — a failure, but the WRONG one (an unrelated process
+    # exit, not a verdict on the allowlist). "email" and "scope" ARE already
+    # existing atoms (used elsewhere in this module and its neighbours) but
+    # are not connectors, so this is the case that actually distinguishes "is
+    # a registry member" from "is merely a pre-existing atom" — and it fails
+    # cleanly (a reply mismatch), not via a crash.
+    test "a string that is an existing atom but not a connector is bad_request",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "sole@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      for not_a_connector <- ["email", "scope"] do
+        ref =
+          push(sock, "disconnect", %{"account_id" => account.id, "connector" => not_a_connector})
+
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      assert Repo.get(Account, account.id)
+
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+      assert_reply ref, :ok
+      assert_push "state", _
+    end
+
+    test "on ANOTHER user's sole-grant account is bad_request",
+         %{socket: socket, alice: alice, bob: bob} do
+      bobs = account!(bob, "bobs@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "disconnect", %{"account_id" => bobs.id, "connector" => "calendar"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      assert Repo.get(Account, bobs.id)
+    end
+  end
+
+  test "an unknown event is bad_request and the channel survives", %{socket: socket, alice: alice} do
+    account = account!(alice, "sole@x.com", [@cal_read])
+
+    sock = drain_join!(socket, alice)
+
+    ref = push(sock, "not_a_real_event", %{})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+    assert_reply ref, :ok
+    assert_push "state", _
+  end
+
+  # The socket is authenticated as Alice (the setup block's token), but this
+  # joins BOB's topic suffix deliberately — mirroring the read-only "the state
+  # is the token's user, not the topic's" test above, but for a WRITE. Every
+  # other test in this file joins a user's own topic, which is exactly the
+  # shape that let a topic-suffix mutant through on the sibling Memory
+  # channel: own_account/2 must resolve against socket.assigns.user_id (the
+  # token), never socket.topic (client-supplied), or this would let alice's
+  # write succeed by looking up BOB's accounts instead of her own.
+  test "a write resolves against the token's user, not the topic's suffix",
+       %{socket: socket, alice: alice, bob: bob} do
+    alices_account = account!(alice, "alices@x.com", [@cal_read])
+    _bobs_account = account!(bob, "bobs@x.com", [@cal_read], is_default: true)
+
+    {:ok, _reply, sock} = subscribe_and_join(socket, "panel:connectors:#{bob.id}", %{})
+    assert_push "state", _
+
+    ref = push(sock, "set_default", %{"account_id" => alices_account.id})
+    assert_reply ref, :ok
+
+    assert_push "state", %{connections: rows}
+    assert [%{email: "alices@x.com", is_default: true}] = rows
+    assert Repo.get(Account, alices_account.id).is_default == true
+  end
 end

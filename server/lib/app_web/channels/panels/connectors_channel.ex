@@ -48,8 +48,50 @@ defmodule AppWeb.Panels.ConnectorsChannel do
     {:ok, socket}
   end
 
+  @impl true
+  def handle_in("set_default", %{"account_id" => id}, socket) when is_integer(id) do
+    case own_account(socket, id) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      account ->
+        case Accounts.set_default(account) do
+          # set_default/1 does not broadcast (accounts.ex:32-38), so the fresh
+          # state is pushed HERE. See the moduledoc.
+          {:ok, _updated} -> {:reply, :ok, push_state(socket)}
+          {:error, _reason} -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+        end
+    end
+  end
+
+  def handle_in("disconnect", %{"account_id" => id, "connector" => conn}, socket)
+      when is_integer(id) and is_binary(conn) do
+    account = own_account(socket, id)
+    connector = known_connector(conn)
+
+    cond do
+      is_nil(account) or is_nil(connector) ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      # RE-DERIVED, every time. The payload's own `only_grant` — if a stale
+      # client sends one — is never read: the panel that decided it may have
+      # been rendered before this account gained a second connector, and the
+      # cost of trusting it is deleting a Google connection the user still
+      # wants. The web makes the same check at conversation_live.ex:332.
+      Connectors.granted(account) != [connector] ->
+        # Not an error path to skip: this is the ONLY signal the client has that
+        # the browser is needed, and the panel shows a sentence for it.
+        {:reply, {:error, %{reason: "needs_web"}}, socket}
+
+      true ->
+        case Accounts.delete(account) do
+          {:ok, _account} -> {:reply, :ok, push_state(socket)}
+          {:error, _changeset} -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+        end
+    end
+  end
+
   # A client bug — or a probe — must not crash the channel and drop the panel.
-  # Task 2 adds the write clauses ABOVE this one.
   @impl true
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
@@ -97,4 +139,20 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   # connector, because with one there is nothing to choose between.
   defp multi?(accounts, connector),
     do: Enum.count(accounts, &(Connectors.access(&1, connector) != :none)) >= 2
+
+  # Both ids on this channel are CLIENT-SUPPLIED. Resolved against this user's
+  # own accounts — never Repo.get, never the topic suffix. Accounts.list/1 is
+  # already `where: a.user_id == ^user_id` (accounts.ex:13-14), so a foreign id
+  # simply is not in the list.
+  defp own_account(socket, id),
+    do: Enum.find(Accounts.list(socket.assigns.user_id), &(&1.id == id))
+
+  # A LITERAL allowlist walk over the registry — NOT String.to_existing_atom/1,
+  # which is no guard at all here: :calendar, :gmail, :email, :id, :scope and
+  # :refresh_token are all already-existing atoms in this VM. Walking
+  # Connectors.all/0 (connectors.ex:31-32) means the allowlist widens by itself
+  # when the registry gains a connector, and cannot widen any other way.
+  # Returns nil for anything unknown; the caller turns that into bad_request.
+  defp known_connector(name),
+    do: Enum.find(Connectors.all(), &(Atom.to_string(&1) == name))
 end
