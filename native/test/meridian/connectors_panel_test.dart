@@ -37,6 +37,23 @@ String _stateFrame(List<Map<String, Object?>> connections) => jsonEncode([
       {'connections': connections},
     ]);
 
+/// Answer a frame the client just pushed, echoing its own ref so the socket
+/// routes the reply back to that channel. Duplicated from
+/// connectors_client_test.dart (same rationale as `_conn`/`_stateFrame`
+/// above): FakeSocket only auto-answers phx_join, so this is how a test
+/// drives a handler's reply.
+void replyTo(FakeSocket fake, String event, String status,
+    Map<String, dynamic> response) {
+  final frame = fake.textFrames.lastWhere((p) => p[3] == event);
+  fake.ctrl.foreign.sink.add(jsonEncode([
+    frame[0],
+    frame[1],
+    frame[2],
+    'phx_reply',
+    {'status': status, 'response': response},
+  ]));
+}
+
 void main() {
   // Same rationale as memory_panel_test.dart / reminders_panel_test.dart /
   // voice_lock_panel_test.dart: the socket's heartbeat is a 24h periodic
@@ -359,5 +376,285 @@ void main() {
             'instead');
 
     await conn.disconnect();
+  });
+
+  group('the two dead ends explain themselves', () {
+    testWidgets(
+        'tapping + Connect account shows the explanation and pushes NOTHING',
+        (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'read',
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kConnectAccountMessage), findsOneWidget);
+      expect(fake.textFrames, isEmpty,
+          reason: 'a dead end explains itself; it must never also push — '
+              'connecting an account is an OAuth round trip, not a local '
+              'write');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'tapping Disconnect on an only_grant: false row shows '
+        'kReduceAccessMessage and pushes NOTHING', (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: false,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pumpAndSettle();
+
+      expect(find.text(kReduceAccessMessage), findsOneWidget);
+      expect(fake.textFrames, isEmpty,
+          reason: 'this is the local fork — a round trip whose only '
+              'possible answer is needs_web is a round trip worth skipping');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'tapping Disconnect on an only_grant: true row pushes disconnect '
+        'and shows NO dialog', (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:connectors:henry',
+        'disconnect',
+        {'account_id': 1, 'connector': 'calendar'},
+      ]);
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'a server needs_web reply shows kReduceAccessMessage — the '
+        'stale-client path, a defence distinct from the local fork above',
+        (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true, // a stale panel: the server disagrees below.
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+      replyTo(fake, 'disconnect', 'error', {'reason': 'needs_web'});
+      await tester.pumpAndSettle();
+
+      expect(find.text(kReduceAccessMessage), findsOneWidget);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('a bad_request reply shows NO dialog', (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+      replyTo(fake, 'disconnect', 'error', {'reason': 'bad_request'});
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('a killed socket shows no dialog', (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+      await fake.kill();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'the dialog is dismissible and acks: OK closes it, and a later '
+        'rebuild does not reopen it', (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+      replyTo(fake, 'disconnect', 'error', {'reason': 'needs_web'});
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(client.needsWeb, isFalse);
+
+      // Force a rebuild the same way a live server would — another `state`
+      // frame — and make sure the acked flag does not reopen the dialog.
+      fake.ctrl.foreign.sink.add(_stateFrame([
+        _conn(
+          accountId: 1,
+          email: 'a@b.com',
+          connector: 'calendar',
+          label: 'Google Calendar',
+          access: 'write',
+          onlyGrant: true,
+        ),
+      ]));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing,
+          reason: 'an un-acked flag would reopen the dialog on every '
+              'rebuild');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'no text inherits the missing-Material underline, on the panel or '
+        'in either dialog', (tester) async {
+      // The same guard settings_drawer_host_test.dart:526-546 uses — this
+      // bug has shipped twice in this codebase.
+      void expectNoUnderline() {
+        final painted = tester.widgetList<RichText>(find.byType(RichText));
+        expect(painted, isNotEmpty);
+        for (final rich in painted) {
+          final style = (rich.text as TextSpan).style;
+          expect(
+              style?.decoration ?? TextDecoration.none, TextDecoration.none,
+              reason: 'decoration leaked into "${rich.text.toPlainText()}"');
+        }
+      }
+
+      final (client, conn, _) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: false,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      expectNoUnderline(); // The panel itself.
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      expectNoUnderline(); // kConnectAccountMessage's dialog.
+
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pumpAndSettle();
+      expectNoUnderline(); // kReduceAccessMessage's dialog.
+
+      await conn.disconnect();
+    });
   });
 }
