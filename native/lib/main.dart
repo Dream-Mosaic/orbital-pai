@@ -49,14 +49,22 @@ class HenryApp extends StatelessWidget {
 }
 
 class HenryHome extends StatefulWidget {
-  const HenryHome({super.key});
+  const HenryHome({super.key, this.connection});
+
+  /// The one connection, injectable so a test can build the REAL home — and
+  /// therefore the real `_openPanel` wiring below — against a fake socket.
+  /// Null (production) constructs one, which dials the configured server.
+  /// Whatever ends up here is owned by this widget and disposed with it.
+  final AppConnection? connection;
 
   @override
   State<HenryHome> createState() => _HenryHomeState();
 }
 
 class _HenryHomeState extends State<HenryHome> {
-  final AppConnection _conn = AppConnection();
+  // Assigned in initState() rather than inline, because a field initializer
+  // cannot read `widget`.
+  late final AppConnection _conn;
 
   // Assigned in initState(), NOT via `late final ... = VoiceController(...)`:
   // that lazy form would defer construction to build()'s first read, which
@@ -73,6 +81,7 @@ class _HenryHomeState extends State<HenryHome> {
   @override
   void initState() {
     super.initState();
+    _conn = widget.connection ?? AppConnection();
     _vc = VoiceController(connection: _conn);
     // Registered before connect() so the first sweep opens the badges topic
     // alongside the conversation, rather than as a second round trip.

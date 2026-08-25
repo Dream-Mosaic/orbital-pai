@@ -23,6 +23,12 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Test-only: webview_flutter re-exports WebViewPlatform but NOT the
+  # PlatformWebViewController/PlatformWebViewWidget classes a stand-in has to
+  # extend, so test/support/fake_webview_platform.dart reaches for the
+  # interface package directly. Declared rather than leaned on transitively so
+  # `depend_on_referenced_packages` stays honest.
+  webview_flutter_platform_interface: ^2.15.1
 
 # record 5.2.1's own constraint (`record_linux: '>=0.5.0 <1.0.0'`) resolves to
 # record_linux 0.7.2, which predates several record_platform_interface
