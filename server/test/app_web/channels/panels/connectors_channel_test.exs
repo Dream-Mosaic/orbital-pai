@@ -280,6 +280,18 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       ref = push(sock, "set_default", %{})
       assert_reply ref, :error, %{reason: "bad_request"}
 
+      # STANDING RULE: in Elixir, a "wrong type is rejected" test must use a
+      # value that CROSS-TYPE-EQUALS a real one, or it proves nothing — a
+      # string, nil, or unrelated number only tests the Enum.find MISS, not
+      # the is_integer/1 guard. `3 == 3.0` is true, so without the guard,
+      # Enum.find(&(&1.id == id)) matches a float id via `==` and silently
+      # sets that account default. (Same trick bit the Voice Lock phase's
+      # "non-integer id is rejected" test, which used "1" — never `==` an
+      # integer — until it was rewritten to `fact.id * 1.0`.)
+      ref = push(sock, "set_default", %{"account_id" => valid.id * 1.0})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute Repo.get(Account, valid.id).is_default
+
       ref = push(sock, "set_default", %{"account_id" => valid.id})
       assert_reply ref, :ok
       assert_push "state", _
