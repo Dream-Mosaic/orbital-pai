@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/panels/books_client.dart';
 
-import 'support/fake_socket.dart';
+import '../support/fake_socket.dart';
 
 /// Pushed straight behind the join reply, exactly what BooksChannel does
 /// (`send(self(), :push_state)` in `join/2`).
