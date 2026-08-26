@@ -102,12 +102,16 @@ void main() {
 
     // A wrong implementation might default a missing `key` to '' and keep the
     // row instead of dropping it — that would leave three books, not two, and
-    // the middle one would not equal 'list:3' or 'garden'.
+    // the middle one would not equal 'list:3' or 'garden'. The bad row is
+    // otherwise well-formed (valid kind/icon/label) and drops ONLY `key`, so
+    // this pins the actual predicate ("has a key") rather than merely
+    // "rejects a row missing everything" — a filter checking any other field
+    // (e.g. `m['icon'] is String`) would wrongly keep this row.
     test('a malformed row is dropped, its siblings land', () {
       final s = BooksState.fromJson({
         'books': [
           {'key': 'list:3', 'label': 'Groceries', 'kind': 'list', 'icon': 'shopping-cart'},
-          {'label': 'no key at all'},
+          {'label': 'Sneaky Extra Book', 'kind': 'list', 'icon': 'shopping-cart'},
           {'key': 'garden', 'label': 'Garden', 'kind': 'garden', 'icon': 'sun'},
         ],
         'current_key': 'list:3',
@@ -117,6 +121,89 @@ void main() {
       });
 
       expect(s.books.map((b) => b.key), ['list:3', 'garden']);
+    });
+
+    // The item filter is a `num id && String text` AND — each bad row below
+    // isolates exactly one half (the other field, and `checked`, stay
+    // well-formed) so a mutation dropping either half of the guard is
+    // caught, not just a mutation dropping both.
+    test('a malformed list item is dropped, its siblings land', () {
+      final s = BooksState.fromJson({
+        'books': const [],
+        'current_key': 'list:3',
+        'clear_confirm': '',
+        'list': {
+          'id': 3,
+          'name': 'Groceries',
+          'household': false,
+          'items': [
+            {'id': 9, 'text': 'milk', 'checked': false},
+            {'text': 'no id', 'checked': false},
+            {'id': 7, 'checked': true},
+          ],
+        },
+        'garden': null,
+      });
+
+      expect(s.list!.items.map((i) => i.id), [9]);
+    });
+
+    // The active-plant filter requires only an id (name/household/meta/notes
+    // all default), so this bad row keeps every other field well-formed and
+    // drops ONLY `id`, pinning that one guard specifically.
+    test('a malformed active-plant row is dropped, its siblings land', () {
+      final s = BooksState.fromJson({
+        'books': const [],
+        'current_key': 'garden',
+        'clear_confirm': '',
+        'list': null,
+        'garden': {
+          'active': [
+            {
+              'id': 4,
+              'name': 'Tomatoes',
+              'household': true,
+              'meta': 'Roma · back bed',
+              'notes': const [],
+            },
+            {
+              'name': 'Ghost',
+              'household': false,
+              'meta': 'no id',
+              'notes': const [],
+            },
+          ],
+          'past': const [],
+        },
+      });
+
+      expect(s.garden!.active.map((p) => p.id), [4]);
+    });
+
+    // Same guard, same fixture shape, but inside a past season's plant list
+    // (PastSeason._plants) rather than active — a separate code path with its
+    // own copy of the `id is num` check.
+    test('a malformed past-season plant row is dropped, its siblings land', () {
+      final s = BooksState.fromJson({
+        'books': const [],
+        'current_key': 'garden',
+        'clear_confirm': '',
+        'list': null,
+        'garden': {
+          'active': const [],
+          'past': [
+            {
+              'season': '2025',
+              'plants': [
+                {'id': 2, 'name': 'Beans', 'household': false},
+                {'name': 'Ghost', 'household': false},
+              ],
+            },
+          ],
+        },
+      });
+
+      expect(s.garden!.past.single.plants.map((p) => p.id), [2]);
     });
 
     // A wrong implementation might do `j['past'] as List? ?? []`, which
