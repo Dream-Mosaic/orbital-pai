@@ -884,6 +884,68 @@ void main() {
 
       await conn.disconnect();
     });
+
+    testWidgets(
+        'the garden add-note field scrolls clear of the keyboard when '
+        "pushed below the fold by several plant cards — both halves apply "
+        "here too (books_panel.dart's bottomInset AND the field's own "
+        'scrollPadding)', (tester) async {
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(360, 800);
+      addTearDown(tester.view.resetPhysicalSize);
+
+      // Enough plants, each with a meta line and a notes summary (like a
+      // real card), that the LAST one's add-note field starts out well past
+      // the fold — otherwise this could pass without either fix ever
+      // running.
+      final manyPlants = List.generate(
+        8,
+        (i) => _plant(
+          id: i + 1,
+          name: 'Plant number $i',
+          meta: 'Meta line long enough to take its own row',
+          notes: [_note(body: 'Check-in $i', noted: 'Jul $i')],
+        ),
+      );
+      final frame = _gardenFrame(active: manyPlants);
+      final (client, conn, _) = await openedClient(tester, frame);
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MeridianDrawer(
+          title: 'Books',
+          animation: const AlwaysStoppedAnimation<double>(1),
+          onClose: () {},
+          child: BooksPanelView(client: client),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      final lastFieldKey = BooksGardenBody.noteFieldKey(8);
+      final unfocused = tester.getRect(find.byKey(lastFieldKey));
+      expect(unfocused.bottom, greaterThan(800 - 300),
+          reason: 'sanity: the field must start out behind the keyboard '
+              'line, or this test could pass without either fix ever '
+              'running');
+
+      await tester.showKeyboard(find.byKey(lastFieldKey));
+      await tester.pumpAndSettle();
+
+      final box = tester.getRect(find.byKey(lastFieldKey));
+      expect(box.bottom, lessThanOrEqualTo(800 - 300),
+          reason: 'the garden add-note field must scroll clear of the '
+              'keyboard, not sit behind it');
+      final headerBottom =
+          tester.getRect(find.byType(SingleChildScrollView)).top;
+      expect(box.top, greaterThanOrEqualTo(headerBottom),
+          reason: 'the field must not be scrolled so far that its top ends '
+              'up clipped under the drawer header');
+
+      await conn.disconnect();
+    });
   });
 
   group('garden body', () {
@@ -906,20 +968,54 @@ void main() {
       await conn.disconnect();
     });
 
-    testWidgets('meta renders when non-empty and is absent entirely when blank',
-        (tester) async {
+    testWidgets(
+        "active plants render in the server's own order, not sorted or "
+        'reversed', (tester) async {
+      // The correct (server-given) order below — 2, 3, 1 — is neither
+      // ascending (1, 2, 3) nor descending (3, 2, 1), so `.reversed`, a
+      // sort-ascending, and a sort-descending mutation on `garden.active`
+      // would all move at least one plant. The OTHER multi-plant fixtures
+      // in this group only ever use 2 plants, which cannot distinguish a
+      // correct render from a reversed one (any permutation of 2 elements
+      // IS its own reversal) — this is the dedicated order fixture.
       final frame = _gardenFrame(active: [
-        _plant(id: 1, name: 'Tomatoes', meta: 'Roma · back bed · 5 plants'),
-        _plant(id: 2, name: 'Basil', meta: ''),
+        _plant(id: 201, name: 'Plant 2'),
+        _plant(id: 202, name: 'Plant 3'),
+        _plant(id: 203, name: 'Plant 1'),
       ]);
       final (client, conn, _) = await openedClient(tester, frame);
       await pumpPanel(tester, client);
 
+      final plant2Y = tester.getTopLeft(find.text('Plant 2')).dy;
+      final plant3Y = tester.getTopLeft(find.text('Plant 3')).dy;
+      final plant1Y = tester.getTopLeft(find.text('Plant 1')).dy;
+      expect(plant2Y, lessThan(plant3Y));
+      expect(plant3Y, lessThan(plant1Y));
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'meta renders the correct PER-PLANT value when non-empty, and is '
+        'absent entirely when blank', (tester) async {
+      final frame = _gardenFrame(active: [
+        _plant(id: 1, name: 'Tomatoes', meta: 'Roma · back bed · 5 plants'),
+        _plant(id: 2, name: 'Basil', meta: 'Sweet basil · pot 4'),
+        _plant(id: 3, name: 'Mint', meta: ''),
+      ]);
+      final (client, conn, _) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      // Two DIFFERENT non-blank values, each tied to its own plant — a
+      // hardcoded meta string (pinning only the presence guard, not the
+      // actual value) would satisfy just one of these.
       expect(find.text('Roma · back bed · 5 plants'), findsOneWidget);
+      expect(find.text('Sweet basil · pot 4'), findsOneWidget);
       expect(find.byKey(BooksGardenBody.metaKey(1)), findsOneWidget);
+      expect(find.byKey(BooksGardenBody.metaKey(2)), findsOneWidget);
       // Blank meta must not render even an empty Text — the key itself must
       // be absent, not just empty-looking.
-      expect(find.byKey(BooksGardenBody.metaKey(2)), findsNothing);
+      expect(find.byKey(BooksGardenBody.metaKey(3)), findsNothing);
 
       await conn.disconnect();
     });
@@ -957,11 +1053,13 @@ void main() {
         await conn.disconnect();
       });
 
-      testWidgets('expanding reveals every note with its noted date',
+      testWidgets(
+          'expanding reveals every note, oldest first, with its noted date',
           (tester) async {
         final frame = _gardenFrame(active: [
           _plant(id: 1, name: 'Tomatoes', notes: [
             _note(body: 'Watered', noted: 'Jul 1'),
+            _note(body: 'Fed', noted: 'Jul 10'),
             _note(body: 'Staked and watered again', noted: 'Jul 15'),
           ]),
         ]);
@@ -973,6 +1071,8 @@ void main() {
 
         expect(find.text('Watered'), findsOneWidget);
         expect(find.text('Jul 1'), findsOneWidget);
+        expect(find.text('Fed'), findsOneWidget);
+        expect(find.text('Jul 10'), findsOneWidget);
         // The latest note now appears twice: once as the (still-visible)
         // summary line, once again as its own row in the expanded list —
         // proving the summary doesn't disappear and the list isn't missing
@@ -980,13 +1080,50 @@ void main() {
         expect(find.text('Staked and watered again'), findsNWidgets(2));
         expect(find.text('Jul 15'), findsOneWidget);
 
+        // Order within the expanded list itself: oldest first, not
+        // reversed. 'Watered' and 'Fed' each appear exactly once (neither
+        // is the latest note shown twice), so their positions unambiguously
+        // pin the list's own order.
+        final wateredY = tester.getTopLeft(find.text('Watered')).dy;
+        final fedY = tester.getTopLeft(find.text('Fed')).dy;
+        expect(wateredY, lessThan(fedY));
+
+        await conn.disconnect();
+      });
+
+      testWidgets(
+          "expanding one plant's notes does not expand another plant's",
+          (tester) async {
+        final frame = _gardenFrame(active: [
+          _plant(id: 1, name: 'Tomatoes', notes: [
+            _note(body: 'Watered', noted: 'Jul 1'),
+            _note(body: 'Staked and watered again', noted: 'Jul 15'),
+          ]),
+          _plant(id: 2, name: 'Basil', notes: [
+            _note(body: 'Pinched', noted: 'Jun 1'),
+            _note(body: 'Trimmed again', noted: 'Jun 20'),
+          ]),
+        ]);
+        final (client, conn, _) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.notesToggleKey(1)));
+        await tester.pumpAndSettle();
+
+        // Tomatoes expanded: its non-summary note is visible.
+        expect(find.text('Watered'), findsOneWidget);
+        // Basil was never toggled: its non-summary note ('Pinched') must
+        // stay hidden — a single shared expansion flag (rather than
+        // per-plant state) would leak it open too.
+        expect(find.text('Pinched'), findsNothing);
+
         await conn.disconnect();
       });
     });
 
     testWidgets(
-        "the add-note placeholder interpolates the plant's name, and "
-        'submitting pushes add_note', (tester) async {
+        "the add-note placeholder interpolates the plant's name; "
+        'submitting pushes add_note and clears the field', (tester) async {
       final frame = _gardenFrame(active: [_plant(id: 7, name: 'Tomatoes')]);
       final (client, conn, fake) = await openedClient(tester, frame);
       await pumpPanel(tester, client);
@@ -994,6 +1131,7 @@ void main() {
       final field = tester
           .widget<TextField>(find.byKey(BooksGardenBody.noteFieldKey(7)));
       expect(field.decoration?.hintText, 'Check in on Tomatoes…');
+      expect(find.text('Note'), findsOneWidget);
 
       await tester.enterText(
           find.byKey(BooksGardenBody.noteFieldKey(7)), 'Looking healthy');
@@ -1005,6 +1143,14 @@ void main() {
         'add_note',
         {'plant_id': 7, 'body': 'Looking healthy'},
       ]);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(BooksGardenBody.noteFieldKey(7)))
+            .controller!
+            .text,
+        isEmpty,
+        reason: 'the field must clear after a successful submit',
+      );
 
       await conn.disconnect();
     });
@@ -1025,6 +1171,55 @@ void main() {
       await conn.disconnect();
     });
 
+    testWidgets(
+        'submitting a note via the keyboard (not the button) also pushes '
+        'add_note', (tester) async {
+      // `onSubmitted` is a SEPARATE wire on TextField from the button's
+      // onPressed — a mutation that drops it leaves every button-driven
+      // test green (same rationale as books_panel.dart's own new_list /
+      // add_item keyboard-submit tests above).
+      final frame = _gardenFrame(active: [_plant(id: 7, name: 'Tomatoes')]);
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      await tester.enterText(
+          find.byKey(BooksGardenBody.noteFieldKey(7)), 'Looking healthy');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:books:henry',
+        'add_note',
+        {'plant_id': 7, 'body': 'Looking healthy'},
+      ]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        "a note submitted on a non-first plant is attributed to THAT "
+        "plant, not the first one's", (tester) async {
+      final frame = _gardenFrame(active: [
+        _plant(id: 10, name: 'Basil'),
+        _plant(id: 20, name: 'Tomatoes'),
+      ]);
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      await tester.enterText(
+          find.byKey(BooksGardenBody.noteFieldKey(20)), 'Looking healthy');
+      await tester.tap(find.byKey(BooksGardenBody.noteButtonKey(20)));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:books:henry',
+        'add_note',
+        {'plant_id': 20, 'body': 'Looking healthy'},
+      ]);
+
+      await conn.disconnect();
+    });
+
     group('Archive', () {
       testWidgets(
           'opens a confirm reading "Move <name> to past seasons?"; '
@@ -1032,6 +1227,8 @@ void main() {
         final frame = _gardenFrame(active: [_plant(id: 4, name: 'Tomatoes')]);
         final (client, conn, fake) = await openedClient(tester, frame);
         await pumpPanel(tester, client);
+
+        expect(find.text('Archive'), findsOneWidget);
 
         await tester.tap(find.byKey(BooksGardenBody.archiveKey(4)));
         await tester.pumpAndSettle();
@@ -1059,6 +1256,53 @@ void main() {
 
         expect(
             lastPush(fake), ['panel:books:henry', 'archive_plant', {'id': 4}]);
+
+        await conn.disconnect();
+      });
+
+      testWidgets(
+          'dismissing the confirm via the barrier (not Cancel) pushes '
+          'nothing', (tester) async {
+        final frame = _gardenFrame(active: [_plant(id: 4, name: 'Tomatoes')]);
+        final (client, conn, fake) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.archiveKey(4)));
+        await tester.pumpAndSettle();
+
+        // Dismiss by tapping the barrier, NOT the Cancel button — the
+        // default barrierDismissible: true pops with no value (null), which
+        // only an explicit `ok ?? false` (not e.g. `ok ?? true`) turns into
+        // "don't act." The Cancel-button test above pops an EXPLICIT
+        // false, so it cannot catch a mutant that only mishandles the null
+        // (dismissed) case.
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+
+        expect(anyPushOf(fake, 'archive_plant'), isFalse,
+            reason: 'a barrier dismissal must not count as confirmation — '
+                'this is a destructive action');
+
+        await conn.disconnect();
+      });
+
+      testWidgets(
+          'archiving a non-first plant is attributed to THAT plant, not '
+          "the first one's", (tester) async {
+        final frame = _gardenFrame(active: [
+          _plant(id: 4, name: 'Tomatoes'),
+          _plant(id: 5, name: 'Basil'),
+        ]);
+        final (client, conn, fake) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.archiveKey(5)));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('OK'));
+        await tester.pumpAndSettle();
+
+        expect(
+            lastPush(fake), ['panel:books:henry', 'archive_plant', {'id': 5}]);
 
         await conn.disconnect();
       });
@@ -1099,15 +1343,23 @@ void main() {
 
       testWidgets(
           'present and collapsed when non-empty; expanding reveals seasons '
-          "in the server's order, each with its plants and a working Revive",
+          "in the server's order, a season's own plants in the server's "
+          'order, the shared badge, and a working Revive on each',
           (tester) async {
-        // The correct (server-given) order below — 2, 3, 1 — is neither
-        // ascending (1, 2, 3) nor descending (3, 2, 1) nor any order a
-        // two-season fixture could produce by accident; a sorting or
-        // reversing bug in the render would move at least one season.
+        // The correct (server-given) SEASON order below — 2, 3, 1 — is
+        // neither ascending (1, 2, 3) nor descending (3, 2, 1) nor any
+        // order a two-season fixture could produce by accident; a sorting
+        // or reversing bug in the render would move at least one season.
+        // Season 3 additionally carries two plants (Kale, then Arugula) to
+        // pin that a season's OWN plant order is server-given too, and
+        // Kale is household so the shared badge gets exercised on an
+        // archived row (not just an active one).
         final frame = _gardenFrame(past: [
           _season(season: 'Season 2', plants: [_plant(id: 101, name: 'Mint')]),
-          _season(season: 'Season 3', plants: [_plant(id: 102, name: 'Kale')]),
+          _season(season: 'Season 3', plants: [
+            _plant(id: 102, name: 'Kale', household: true),
+            _plant(id: 104, name: 'Arugula'),
+          ]),
           _season(
               season: 'Season 1', plants: [_plant(id: 103, name: 'Chives')]),
         ]);
@@ -1118,19 +1370,30 @@ void main() {
         // Collapsed: none of the season content is in the tree yet.
         expect(find.text('Mint'), findsNothing);
         expect(find.text('Season 2'), findsNothing);
+        expect(find.text('shared'), findsNothing);
 
         await tester.tap(find.byKey(BooksGardenBody.pastSeasonsToggleKey));
         await tester.pumpAndSettle();
 
         expect(find.text('Mint'), findsOneWidget);
         expect(find.text('Kale'), findsOneWidget);
+        expect(find.text('Arugula'), findsOneWidget);
         expect(find.text('Chives'), findsOneWidget);
+        // Kale is the only household plant among these four archived rows
+        // — both "always show" and "never show" would fail this.
+        expect(find.text('shared'), findsOneWidget);
+        expect(find.text('Revive'), findsNWidgets(4));
 
         final season2Y = tester.getTopLeft(find.text('Season 2')).dy;
         final season3Y = tester.getTopLeft(find.text('Season 3')).dy;
         final season1Y = tester.getTopLeft(find.text('Season 1')).dy;
         expect(season2Y, lessThan(season3Y));
         expect(season3Y, lessThan(season1Y));
+
+        // Within Season 3: Kale (server-given first) above Arugula.
+        final kaleY = tester.getTopLeft(find.text('Kale')).dy;
+        final arugulaY = tester.getTopLeft(find.text('Arugula')).dy;
+        expect(kaleY, lessThan(arugulaY));
 
         await tester.tap(find.byKey(BooksGardenBody.reviveKey(102)));
         await tester.pump();
