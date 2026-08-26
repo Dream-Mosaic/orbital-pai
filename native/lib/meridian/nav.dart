@@ -3,8 +3,9 @@ import 'hero_icon.dart';
 import 'tokens.dart';
 
 /// The five bottom-nav stations, in the web's source order
-/// (conversation_live.ex:904-941). **This order is fixed**: phases B–D swap a
-/// webview for a native screen, never the shape of the nav (parent spec §7).
+/// (conversation_live.ex:904-941). **This order is fixed**: phases B–D
+/// swapped a webview for a native screen one station at a time, never the
+/// shape of the nav (parent spec §7). All five are native now.
 enum MeridianTab { settings, reminders, books, connectors, search }
 
 extension MeridianTabInfo on MeridianTab {
@@ -26,7 +27,7 @@ extension MeridianTabInfo on MeridianTab {
       };
 
   /// The `phx-value-modal` the web's nav button carries — also the `?panel=`
-  /// value the webview loads.
+  /// value the now-retired native webview used to load.
   String get modal => switch (this) {
         MeridianTab.settings => 'settings',
         MeridianTab.reminders => 'reminders',

@@ -7,7 +7,6 @@ import 'meridian/books_panel.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
 import 'meridian/nav.dart';
-import 'meridian/panel_webview.dart';
 import 'meridian/reminders_panel.dart';
 import 'meridian/search_panel.dart';
 import 'meridian/settings_drawer_host.dart';
@@ -22,7 +21,6 @@ import 'panels/settings_client.dart';
 import 'panels/voice_lock_client.dart';
 import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
-import 'web_url.dart';
 
 void main() {
   // The bundled Space Grotesk / Inter are SIL OFL; surface their attribution in
@@ -132,91 +130,79 @@ class _HenryHomeState extends State<HenryHome> {
     super.dispose();
   }
 
-  /// Every station is native now; the webview fallthrough below is dead code,
-  /// kept only until the follow-up commit deletes it and turns this into an
-  /// exhaustive switch. The drawer is a transparent route, so the
-  /// conversation keeps running and rendering behind the scrim — mic, orb and
-  /// thread all untouched.
+  /// Every station is native. A `switch` over the enum, with no default arm,
+  /// so a sixth station is a compile error here rather than a silent
+  /// fallthrough to a screen that no longer exists. The drawer is a
+  /// transparent route, so the conversation keeps running and rendering
+  /// behind the scrim — mic, orb and thread all untouched.
   void _openPanel(MeridianTab tab) {
-    if (tab == MeridianTab.reminders) {
-      _reminders.open();
-      Navigator.of(context)
-          .push(meridianDrawerRoute(
-            title: tab.label,
-            child: RemindersPanelView(client: _reminders),
-          ))
-          // whenComplete, not a then: a back gesture, a scrim tap and the ✕ all
-          // have to leave the topic, or the server keeps pushing state at a
-          // panel nobody is looking at.
-          .whenComplete(_reminders.close);
-      return;
-    }
+    switch (tab) {
+      case MeridianTab.reminders:
+        _reminders.open();
+        Navigator.of(context)
+            .push(meridianDrawerRoute(
+              title: tab.label,
+              child: RemindersPanelView(client: _reminders),
+            ))
+            // whenComplete, not a then: a back gesture, a scrim tap and the ✕
+            // all have to leave the topic, or the server keeps pushing state
+            // at a panel nobody is looking at.
+            .whenComplete(_reminders.close);
 
-    if (tab == MeridianTab.connectors) {
-      _connectors.open();
-      Navigator.of(context)
-          .push(meridianDrawerRoute(
-            title: tab.label,
-            child: ConnectorsPanelView(client: _connectors),
-          ))
-          // whenComplete, not a then: a back gesture, a scrim tap and the ✕ all
-          // have to leave the topic, or the server keeps pushing state at a
-          // panel nobody is looking at.
-          .whenComplete(_connectors.close);
-      return;
-    }
+      case MeridianTab.connectors:
+        _connectors.open();
+        Navigator.of(context)
+            .push(meridianDrawerRoute(
+              title: tab.label,
+              child: ConnectorsPanelView(client: _connectors),
+            ))
+            // whenComplete, not a then: a back gesture, a scrim tap and the ✕
+            // all have to leave the topic, or the server keeps pushing state
+            // at a panel nobody is looking at.
+            .whenComplete(_connectors.close);
 
-    if (tab == MeridianTab.settings) {
-      _settings.open();
-      Navigator.of(context)
-          .push(meridianHostedDrawerRoute(
-            builder: (context, animation, onClose) => SettingsDrawerHost(
-              animation: animation,
-              onClose: onClose,
-              settings: _settings,
-              memory: _memory,
-              voiceLock: _voiceLock,
-            ),
-          ))
-          // The drawer can be dismissed from ANY layer (✕, scrim, or back),
-          // so all three clients have to close here rather than each owning
-          // its own whenComplete — whichever ones were NOT visible at
-          // dismissal time are still open and would otherwise leak their
-          // topic.
-          .whenComplete(() {
-        _voiceLock.close();
-        _memory.close();
-        _settings.close();
-      });
-      return;
-    }
+      case MeridianTab.settings:
+        _settings.open();
+        Navigator.of(context)
+            .push(meridianHostedDrawerRoute(
+              builder: (context, animation, onClose) => SettingsDrawerHost(
+                animation: animation,
+                onClose: onClose,
+                settings: _settings,
+                memory: _memory,
+                voiceLock: _voiceLock,
+              ),
+            ))
+            // The drawer can be dismissed from ANY layer (✕, scrim, or back),
+            // so all three clients have to close here rather than each owning
+            // its own whenComplete — whichever ones were NOT visible at
+            // dismissal time are still open and would otherwise leak their
+            // topic.
+            .whenComplete(() {
+          _voiceLock.close();
+          _memory.close();
+          _settings.close();
+        });
 
-    if (tab == MeridianTab.search) {
-      // No channel: nothing to open or close.
-      Navigator.of(context).push(meridianDrawerRoute(
-        title: tab.label,
-        child: const SearchPanelView(),
-      ));
-      return;
-    }
+      case MeridianTab.search:
+        // No channel: nothing to open or close.
+        Navigator.of(context).push(meridianDrawerRoute(
+          title: tab.label,
+          child: const SearchPanelView(),
+        ));
 
-    if (tab == MeridianTab.books) {
-      _books.open();
-      Navigator.of(context)
-          .push(meridianDrawerRoute(
-            title: tab.label,
-            child: BooksPanelView(client: _books),
-          ))
-          // whenComplete, not a then: a back gesture, a scrim tap and the ✕ all
-          // have to leave the topic, or the server keeps pushing state at a
-          // panel nobody is looking at.
-          .whenComplete(_books.close);
-      return;
+      case MeridianTab.books:
+        _books.open();
+        Navigator.of(context)
+            .push(meridianDrawerRoute(
+              title: tab.label,
+              child: BooksPanelView(client: _books),
+            ))
+            // whenComplete, not a then: a back gesture, a scrim tap and the ✕
+            // all have to leave the topic, or the server keeps pushing state
+            // at a panel nobody is looking at.
+            .whenComplete(_books.close);
     }
-
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => PanelWebViewScreen(tab: tab, url: kPanelUrl(tab)),
-    ));
   }
 
   /// PorcupineSpikeScreen lost its home when the debug AppBar was deleted; it is

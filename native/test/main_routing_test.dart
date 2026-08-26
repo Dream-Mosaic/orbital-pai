@@ -7,7 +7,6 @@ import 'package:henry_wall/meridian/connectors_panel.dart';
 import 'package:henry_wall/meridian/drawer.dart';
 import 'package:henry_wall/meridian/hero_icon.dart';
 import 'package:henry_wall/meridian/nav.dart';
-import 'package:henry_wall/meridian/panel_webview.dart';
 import 'package:henry_wall/meridian/reminders_panel.dart';
 import 'package:henry_wall/meridian/search_panel.dart';
 import 'package:henry_wall/meridian/settings_drawer_host.dart';
@@ -18,7 +17,6 @@ import 'package:henry_wall/panels/settings_client.dart';
 import 'package:henry_wall/panels/voice_lock_client.dart';
 
 import 'support/fake_socket.dart';
-import 'support/fake_webview_platform.dart';
 
 /// The PRODUCTION station wiring — `main.dart`'s `_openPanel` — driven through
 /// a real [HenryHome] on a fake socket.
@@ -59,10 +57,6 @@ void main() {
   }
 
   Future<(AppConnection, FakeSocket)> pumpHome(WidgetTester tester) async {
-    // Registered for EVERY test, not only the Books one: it is what makes
-    // `expect(find.byType(PanelWebViewScreen), findsNothing)` a real check
-    // rather than a tautology. See fake_webview_platform.dart.
-    FakeWebViewPlatform.register();
     phone(tester);
     // Only the two panels whose CONTENT a test drives (the Settings layer
     // rows) need a state frame; every other station is asserted on its
@@ -104,20 +98,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
   }
 
-  /// Pop whatever station is showing, drawer or webview alike.
+  /// Pop whatever station is showing.
   ///
-  /// Straight at the Navigator rather than through a control, because the
-  /// webview screen has no ✕ and a covered route's widgets stay findable
-  /// (Overlay parks them under a TickerMode, not an Offstage) — so a
-  /// control-shaped dismissal silently taps the wrong screen.
+  /// Straight at the Navigator rather than through a control: every station
+  /// is a `_drawerRoute` now (drawer.dart), all sharing the same 300ms
+  /// `transitionDuration`/`reverseTransitionDuration`, so one generic pop
+  /// dismisses any of them without needing to know which control a given
+  /// station's content exposes.
   Future<void> popTop(WidgetTester tester) async {
     tester.firstState<NavigatorState>(find.byType(Navigator)).pop();
     await tester.pump();
-    // The webview station is an opaque MaterialPageRoute, whose reverse
-    // transition is longer than the drawer's 300ms slide and whose entry is
-    // torn down a frame after that; the trailing pump is that frame.
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400)); // past the 300ms slide
   }
 
   List<String> leftTopics(FakeSocket fake) => fake.textFrames
@@ -129,20 +120,13 @@ void main() {
       fake.joinedTopics.where((t) => t == topic).length;
 
   /// The claim every native station makes: tapping it opens the drawer with
-  /// ITS panel inside, and does not fall through to the webview.
+  /// ITS panel inside — not another station's.
   Future<void> expectNativeStation(
     WidgetTester tester,
     MeridianTab tab,
     Type panel,
   ) async {
     await tapStation(tester, tab);
-    // Webview first, deliberately: a lost branch falls THROUGH to the
-    // fallthrough, so this is the assertion that names the actual regression.
-    // Ordering it first also keeps the two below provable in their own right —
-    // they are what fires when a branch pushes nothing at all.
-    expect(find.byType(PanelWebViewScreen), findsNothing,
-        reason: '${tab.label} is native; it must not reach _openPanel\'s '
-            'webview fallthrough');
     expect(find.byType(MeridianDrawer), findsOneWidget,
         reason: '${tab.label} must open the native drawer');
     expect(find.byType(panel), findsOneWidget,
@@ -152,24 +136,21 @@ void main() {
 
   // ---- routing: which screen each station opens ----
 
-  testWidgets('Reminders opens the native panel, not the webview',
-      (tester) async {
+  testWidgets('Reminders opens the native panel', (tester) async {
     final (conn, _) = await pumpHome(tester);
     await expectNativeStation(
         tester, MeridianTab.reminders, RemindersPanelView);
     await conn.disconnect();
   });
 
-  testWidgets('Connectors opens the native panel, not the webview',
-      (tester) async {
+  testWidgets('Connectors opens the native panel', (tester) async {
     final (conn, _) = await pumpHome(tester);
     await expectNativeStation(
         tester, MeridianTab.connectors, ConnectorsPanelView);
     await conn.disconnect();
   });
 
-  testWidgets('Settings opens the native drawer host, not the webview',
-      (tester) async {
+  testWidgets('Settings opens the native drawer host', (tester) async {
     final (conn, _) = await pumpHome(tester);
     await expectNativeStation(
         tester, MeridianTab.settings, SettingsDrawerHost);
@@ -189,8 +170,7 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('Books opens the native panel, not the webview',
-      (tester) async {
+  testWidgets('Books opens the native panel', (tester) async {
     final (conn, _) = await pumpHome(tester);
     await expectNativeStation(tester, MeridianTab.books, BooksPanelView);
     await conn.disconnect();
@@ -298,10 +278,7 @@ void main() {
     for (final tab in MeridianTab.values) {
       await tapStation(tester, tab);
       // Without this the loop could tap five dead icons and still "pass".
-      expect(
-          find.byType(MeridianDrawer).evaluate().length +
-              find.byType(PanelWebViewScreen).evaluate().length,
-          1,
+      expect(find.byType(MeridianDrawer).evaluate().length, 1,
           reason: 'sanity: ${tab.label} put exactly one screen up');
       await popTop(tester);
     }
