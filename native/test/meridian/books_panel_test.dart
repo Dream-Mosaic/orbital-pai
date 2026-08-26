@@ -7,6 +7,7 @@ import 'package:henry_wall/meridian/books_garden.dart';
 import 'package:henry_wall/meridian/books_panel.dart';
 import 'package:henry_wall/meridian/drawer.dart';
 import 'package:henry_wall/meridian/hero_icon.dart';
+import 'package:henry_wall/meridian/tokens.dart';
 import 'package:henry_wall/panels/books_client.dart';
 
 import '../support/fake_socket.dart';
@@ -175,16 +176,29 @@ void main() {
   });
 
   testWidgets(
-      "the header renders the CURRENT BOOK's own label, not the list's name "
-      '(a hardcoded "Groceries" would pass the count-of-2 assertion above '
-      'without actually being wired to the book)', (tester) async {
-    // Deliberately distinct strings so a header bound to the wrong field —
-    // or hardcoded outright — shows up as a mismatch rather than a
-    // coincidence: books_client.dart makes no promise that BookRef.label
-    // and ListBody.name agree.
+      "the header renders the CURRENT BOOK's own label AND icon — not "
+      "books.first's, not the list's name, and not a hardcoded value",
+      (tester) async {
+    // A DECOY book listed FIRST (garden/sun/"Garden"), with the actual
+    // current book second (list:3/clipboard-document-list/"Groceries
+    // List") — distinct from BOTH the decoy's label/icon AND the list's own
+    // name. This single fixture catches four independent wrong
+    // implementations at once:
+    //   - Text(currentBook.label)  -> Text(state.books.first.label)
+    //   - Text(currentBook.label)  -> Text('Groceries')  (hardcoded)
+    //   - _iconFor(currentBook.icon) -> _iconFor(state.books.first.icon)
+    //   - _iconFor(currentBook.icon) -> HeroIcon.shoppingCart (hardcoded)
+    // A single-book fixture (the prior version of this test) cannot
+    // distinguish "keyed off currentKey" from "always books.first", since
+    // with one book they're the same book.
     final frame = _stateFrame(
       books: [
-        _book(key: 'list:3', label: 'Groceries List', kind: 'list', icon: 'shopping-cart'),
+        _book(key: 'garden', label: 'Garden', kind: 'garden', icon: 'sun'),
+        _book(
+            key: 'list:3',
+            label: 'Groceries List',
+            kind: 'list',
+            icon: 'clipboard-document-list'),
       ],
       currentKey: 'list:3',
       list: {'id': 3, 'name': 'Groceries', 'household': false, 'items': const []},
@@ -193,23 +207,43 @@ void main() {
     final (client, conn, _) = await openedClient(tester, frame);
     await pumpPanel(tester, client);
 
+    final header = find.byKey(BooksPanelView.headerKey);
+
     expect(
-      find.descendant(
-          of: find.byKey(BooksPanelView.headerKey),
-          matching: find.text('Groceries List')),
+      find.descendant(of: header, matching: find.text('Groceries List')),
       findsOneWidget,
-      reason: 'the header must show the BOOK label',
+      reason: "the header must show the CURRENT book's label",
     );
     expect(
-      find.descendant(
-          of: find.byKey(BooksPanelView.headerKey),
-          matching: find.text('Groceries')),
+      find.descendant(of: header, matching: find.text('Garden')),
+      findsNothing,
+      reason: "the header must not show books.first's label",
+    );
+    expect(
+      find.descendant(of: header, matching: find.text('Groceries')),
       findsNothing,
       reason: 'the header must not show the LIST name',
     );
     // And the list card, outside the header, carries the list's own name.
     expect(find.text('Groceries'), findsOneWidget,
         reason: 'the list card shows its own name, once, outside the header');
+
+    expect(
+      find.descendant(
+          of: header, matching: findHero(HeroIcon.clipboardDocumentList)),
+      findsOneWidget,
+      reason: "the header must show the CURRENT book's icon",
+    );
+    expect(
+      find.descendant(of: header, matching: findHero(HeroIcon.sun)),
+      findsNothing,
+      reason: "the header must not show books.first's icon",
+    );
+    expect(
+      find.descendant(of: header, matching: findHero(HeroIcon.shoppingCart)),
+      findsNothing,
+      reason: 'the header icon must not be hardcoded to shoppingCart',
+    );
 
     await conn.disconnect();
   });
@@ -245,6 +279,7 @@ void main() {
       expect(find.byKey(BooksPanelView.bookRowKey('list:3')), findsOneWidget);
       expect(find.byKey(BooksPanelView.bookRowKey('garden')), findsOneWidget);
       expect(find.text('Garden'), findsOneWidget);
+      expect(find.text('➕ New list…'), findsOneWidget);
       expect(find.byKey(BooksPanelView.newListFieldKey), findsOneWidget);
       expect(find.byKey(BooksPanelView.createButtonKey), findsOneWidget);
 
@@ -322,6 +357,36 @@ void main() {
     await conn.disconnect();
   });
 
+  testWidgets(
+      'the current book row is styled distinctly from a non-current row, '
+      'in both directions', (tester) async {
+    final (client, conn, _) = await openedClient(tester, _groceriesFrame());
+    await pumpPanel(tester, client);
+    await tester.tap(find.byKey(BooksPanelView.switchBookToggleKey));
+    await tester.pumpAndSettle();
+
+    final currentLabel = tester.widget<Text>(find.descendant(
+        of: find.byKey(BooksPanelView.bookRowKey('list:3')),
+        matching: find.text('Groceries')));
+    final otherLabel = tester.widget<Text>(find.descendant(
+        of: find.byKey(BooksPanelView.bookRowKey('garden')),
+        matching: find.text('Garden')));
+
+    // Asserted both ways: a style that is unconditionally "current" (every
+    // row tinted/bold) or unconditionally "not current" (every row plain)
+    // would each satisfy only ONE of these two checks.
+    expect(currentLabel.style?.color, M.you,
+        reason: 'the current row must be tinted');
+    expect(currentLabel.style?.fontWeight, FontWeight.w600,
+        reason: 'the current row must be bold');
+    expect(otherLabel.style?.color, isNot(M.you),
+        reason: 'a non-current row must NOT be tinted');
+    expect(otherLabel.style?.fontWeight, isNot(FontWeight.w600),
+        reason: 'a non-current row must NOT be bold');
+
+    await conn.disconnect();
+  });
+
   group('Create', () {
     testWidgets('with text pushes new_list with that name', (tester) async {
       final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
@@ -336,6 +401,13 @@ void main() {
 
       expect(lastPush(fake),
           ['panel:books:henry', 'new_list', {'name': 'Snacks'}]);
+      expect(
+          tester
+              .widget<TextField>(find.byKey(BooksPanelView.newListFieldKey))
+              .controller!
+              .text,
+          isEmpty,
+          reason: 'a successful create clears the field');
 
       await conn.disconnect();
     });
@@ -486,6 +558,30 @@ void main() {
 
     expect(lastPush(fake),
         ['panel:books:henry', 'add_item', {'list_id': 3, 'text': 'bread'}]);
+    expect(
+        tester
+            .widget<TextField>(find.byKey(BooksPanelView.addItemFieldKey))
+            .controller!
+            .text,
+        isEmpty,
+        reason: 'a successful add clears the field');
+
+    await conn.disconnect();
+  });
+
+  testWidgets('a blank add-item submission pushes nothing', (tester) async {
+    // The twin of Create's blank-text test — Create has one, add-item
+    // never did, so `.trim()`'s removal (or deleting the empty-check
+    // entirely) on THIS field went unpinned.
+    final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
+    await pumpPanel(tester, client);
+
+    await tester.enterText(find.byKey(BooksPanelView.addItemFieldKey), '   ');
+    await tester.tap(find.text('Add'));
+    await tester.pump();
+
+    expect(anyPushOf(fake, 'add_item'), isFalse,
+        reason: 'whitespace-only text must not push');
 
     await conn.disconnect();
   });
@@ -559,6 +655,60 @@ void main() {
 
       await conn.disconnect();
     });
+
+    testWidgets(
+        'dismissing the confirm via the barrier (not Cancel) pushes nothing',
+        (tester) async {
+      // The same rationale (and pattern) as books_garden.dart's Archive
+      // barrier-dismiss test: `_confirm`'s `showDialog<bool>` defaults
+      // barrierDismissible to true, so a barrier tap or back gesture pops
+      // NULL, not an explicit false. The Cancel-button test above pops an
+      // explicit false, so it cannot catch a mutant that only mishandles
+      // the null (dismissed) case — e.g. `return ok ?? true;`.
+      final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(BooksPanelView.deleteListKey(3)));
+      await tester.pumpAndSettle();
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(anyPushOf(fake, 'delete_list'), isFalse,
+          reason: 'a barrier dismissal must not count as confirmation — '
+              'this is a destructive action');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'the delete control is keyed on the ACTUAL list id, and its push '
+        'carries that id — not a hardcoded 3', (tester) async {
+      final frame = _stateFrame(
+        books: [
+          _book(key: 'list:7', label: 'Chores', kind: 'list', icon: 'clipboard-document-list'),
+        ],
+        currentKey: 'list:7',
+        list: {'id': 7, 'name': 'Chores', 'household': false, 'items': const []},
+        garden: null,
+      );
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      expect(find.byKey(BooksPanelView.deleteListKey(3)), findsNothing,
+          reason: 'no list with id 3 exists in this fixture');
+      expect(find.byKey(BooksPanelView.deleteListKey(7)), findsOneWidget);
+
+      await tester.tap(find.byKey(BooksPanelView.deleteListKey(7)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(
+          lastPush(fake), ['panel:books:henry', 'delete_list', {'list_id': 7}]);
+
+      await conn.disconnect();
+    });
   });
 
   group('Clear ↻', () {
@@ -599,6 +749,31 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(lastPush(fake), ['panel:books:henry', 'clear_book', {}]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'dismissing the confirm via the barrier (not Cancel) pushes nothing',
+        (tester) async {
+      // Same rationale as the delete-list barrier-dismiss test above, and
+      // books_garden.dart's Archive one: the Cancel-button test pops an
+      // explicit false, which cannot catch a mutant that mishandles only
+      // the null (barrier-dismissed) case, e.g. `return ok ?? true;`. This
+      // is the panel's other destructive control gated by the same
+      // `_confirm`.
+      final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.text('Clear ↻'));
+      await tester.pumpAndSettle();
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(anyPushOf(fake, 'clear_book'), isFalse,
+          reason: 'a barrier dismissal must not count as confirmation — '
+              'this is the panel\'s most destructive control');
 
       await conn.disconnect();
     });
