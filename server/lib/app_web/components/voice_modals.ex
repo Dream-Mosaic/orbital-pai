@@ -3,6 +3,7 @@ defmodule AppWeb.VoiceModals do
   use AppWeb, :html
 
   alias App.Google.Connectors
+  alias AppWeb.BookFormat
   alias AppWeb.ReminderFormat
 
   @doc """
@@ -162,7 +163,7 @@ defmodule AppWeb.VoiceModals do
           <span class="flex-1 font-semibold">{list.name}</span>
           <span :if={list.household} class="badge badge-sm badge-accent">shared</span>
           <button
-            :if={done_count(list) > 0}
+            :if={BookFormat.done_count(list) > 0}
             class="btn btn-ghost btn-xs"
             phx-click="clear_list_checked"
             phx-value-id={list.id}
@@ -181,7 +182,7 @@ defmodule AppWeb.VoiceModals do
         </div>
 
         <ul class="space-y-1">
-          <li :for={item <- sorted_items(list)} class="flex items-center gap-2">
+          <li :for={item <- BookFormat.sorted_items(list)} class="flex items-center gap-2">
             <input
               type="checkbox"
               class="checkbox checkbox-xs"
@@ -212,9 +213,6 @@ defmodule AppWeb.VoiceModals do
     """
   end
 
-  defp sorted_items(list), do: Enum.sort_by(list.items, &(&1.checked_at != nil))
-  defp done_count(list), do: Enum.count(list.items, &(&1.checked_at != nil))
-
   @doc """
   Garden modal contents: Active plant cards (name, meta line, latest note expandable to the
   full check-in log, an add-note field, an Archive button) + a collapsible Past Seasons
@@ -243,14 +241,16 @@ defmodule AppWeb.VoiceModals do
           </button>
         </div>
 
-        <p :if={plant_meta(plant) != ""} class="text-xs opacity-60">{plant_meta(plant)}</p>
+        <p :if={BookFormat.plant_meta(plant) != ""} class="text-xs opacity-60">
+          {BookFormat.plant_meta(plant)}
+        </p>
 
         <details :if={plant.notes != []} class="text-sm">
-          <summary class="cursor-pointer opacity-70">{latest_note_line(plant)}</summary>
+          <summary class="cursor-pointer opacity-70">{BookFormat.latest_note_line(plant)}</summary>
           <ul class="mt-1 space-y-1">
             <li :for={note <- plant.notes} class="flex items-center gap-2">
               <span class="flex-1">{note.body}</span>
-              <span class="text-xs opacity-60 font-mono">{fmt_noted(note)}</span>
+              <span class="text-xs opacity-60 font-mono">{BookFormat.fmt_noted(note)}</span>
             </li>
           </ul>
         </details>
@@ -275,7 +275,7 @@ defmodule AppWeb.VoiceModals do
       <details :if={@garden.archived_by_season != %{}}>
         <summary class="cursor-pointer text-sm font-semibold opacity-70">Past seasons</summary>
         <div
-          :for={{season, plants} <- seasons_desc(@garden.archived_by_season)}
+          :for={{season, plants} <- BookFormat.seasons_desc(@garden.archived_by_season)}
           class="mt-2 space-y-1"
         >
           <label class="text-xs opacity-60">{season}</label>
@@ -293,33 +293,6 @@ defmodule AppWeb.VoiceModals do
     </div>
     """
   end
-
-  # most recent season first ("Summer 2026" and "2026" sort fine as strings within a year;
-  # exact cross-format ordering is cosmetic)
-  defp seasons_desc(by_season), do: Enum.sort_by(by_season, fn {season, _} -> season end, :desc)
-
-  # "Roma · back bed · 5 plants · planted Jul 11" — only the fields that exist.
-  defp plant_meta(plant) do
-    [
-      plant.species,
-      plant.location,
-      plant.count && "#{plant.count} plants",
-      plant.planted_on && "planted #{Calendar.strftime(plant.planted_on, "%b %-d")}"
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" · ")
-  end
-
-  # notes come preloaded oldest-first (Garden.garden/1), so the latest is the last.
-  defp latest_note_line(plant) do
-    case List.last(plant.notes) do
-      nil -> "Notes"
-      note -> note.body
-    end
-  end
-
-  defp fmt_noted(%{noted_on: %Date{} = d}), do: Calendar.strftime(d, "%b %-d")
-  defp fmt_noted(%{inserted_at: dt}), do: Calendar.strftime(dt, "%b %-d")
 
   @doc """
   Books modal contents: a remembered picker — a header row showing the current book's icon,
@@ -346,7 +319,7 @@ defmodule AppWeb.VoiceModals do
         <button
           type="button"
           phx-click="clear_book"
-          data-confirm={clear_confirm_text(@current_book)}
+          data-confirm={BookFormat.clear_confirm(@current_book)}
           class="btn btn-ghost btn-xs"
           aria-label="clear book"
         >
@@ -398,12 +371,6 @@ defmodule AppWeb.VoiceModals do
     </div>
     """
   end
-
-  defp clear_confirm_text(%{kind: :garden}),
-    do: "Close out this season? Active plants move to Past seasons — nothing is deleted."
-
-  defp clear_confirm_text(%{label: label}),
-    do: "Clear everything off #{label}? The list stays, just empty."
 
   @doc "Connectors modal contents: Google connection rows + inline grant step when @grant is set."
   attr :google_accounts, :list, required: true
