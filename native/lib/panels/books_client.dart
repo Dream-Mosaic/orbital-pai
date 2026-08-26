@@ -53,8 +53,8 @@ class ListItem {
 }
 
 /// The currently-selected list book's full body.
-class ListBody {
-  const ListBody({
+class ListBookBody {
+  const ListBookBody({
     required this.id,
     this.name = '',
     this.household = false,
@@ -68,7 +68,7 @@ class ListBody {
   /// Server-ordered (`BookFormat.sorted_items/1`); never re-sort here.
   final List<ListItem> items;
 
-  static ListBody fromJson(Map<String, dynamic> j) => ListBody(
+  static ListBookBody fromJson(Map<String, dynamic> j) => ListBookBody(
         id: (j['id'] as num).toInt(),
         name: j['name'] as String? ?? '',
         household: j['household'] == true,
@@ -209,7 +209,7 @@ class BooksState {
   final String clearConfirm;
 
   /// Non-null only when the current book is a list.
-  final ListBody? list;
+  final ListBookBody? list;
 
   /// Non-null only when the current book is the garden.
   final GardenBody? garden;
@@ -233,9 +233,9 @@ class BooksState {
           .toList(growable: false)
       : const [];
 
-  static ListBody? _list(Object? raw) =>
+  static ListBookBody? _list(Object? raw) =>
       raw is Map && raw['id'] is num
-          ? ListBody.fromJson(raw.cast<String, dynamic>())
+          ? ListBookBody.fromJson(raw.cast<String, dynamic>())
           : null;
 
   static GardenBody? _garden(Object? raw) =>

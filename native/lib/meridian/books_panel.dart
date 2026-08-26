@@ -1,7 +1,4 @@
-// `ListBody` collides with Flutter's own widget of the same name
-// (flutter/src/widgets/basic.dart, re-exported via material.dart) — hidden
-// here so books_client.dart's `ListBody` (the current list's body) wins.
-import 'package:flutter/material.dart' hide ListBody;
+import 'package:flutter/material.dart';
 
 import '../panels/books_client.dart';
 import 'books_garden.dart';
@@ -299,7 +296,7 @@ class _BooksPanelViewState extends State<BooksPanelView> {
     return const SizedBox.shrink();
   }
 
-  Widget _listBody(ListBody list, double bottomInset) {
+  Widget _listBody(ListBookBody list, double bottomInset) {
     final doneCount = list.items.where((i) => i.checked).length;
     return _card(
       child: Column(
@@ -342,7 +339,7 @@ class _BooksPanelViewState extends State<BooksPanelView> {
             ],
           ),
           const SizedBox(height: 4),
-          // Server-ordered (ListBody.items) — never re-sort here.
+          // Server-ordered (ListBookBody.items) — never re-sort here.
           for (final item in list.items) _itemRow(item),
           if (list.items.isEmpty)
             Padding(
@@ -389,7 +386,7 @@ class _BooksPanelViewState extends State<BooksPanelView> {
         ),
       );
 
-  Widget _addItemRow(ListBody list, double bottomInset) => Row(
+  Widget _addItemRow(ListBookBody list, double bottomInset) => Row(
         children: [
           Expanded(
             child: TextField(
