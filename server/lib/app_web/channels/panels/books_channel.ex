@@ -86,16 +86,27 @@ defmodule AppWeb.Panels.BooksChannel do
 
   def handle_in("toggle_item", %{"id" => id}, socket) when is_integer(id) do
     case own_item(socket, id) do
-      nil -> {:reply, {:error, %{reason: "bad_request"}}, socket}
-      %{checked_at: nil} = item -> Lists.check_item(item) && {:reply, :ok, socket}
-      item -> Lists.uncheck_item(item) && {:reply, :ok, socket}
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      %{checked_at: nil} = item ->
+        Lists.check_item(item)
+        {:reply, :ok, socket}
+
+      item ->
+        Lists.uncheck_item(item)
+        {:reply, :ok, socket}
     end
   end
 
   def handle_in("clear_done", %{"list_id" => id}, socket) when is_integer(id) do
     case own_list(socket, id) do
-      nil -> {:reply, {:error, %{reason: "bad_request"}}, socket}
-      list -> Lists.clear_checked(list) && {:reply, :ok, socket}
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      list ->
+        Lists.clear_checked(list)
+        {:reply, :ok, socket}
     end
   end
 

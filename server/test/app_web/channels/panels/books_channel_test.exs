@@ -205,6 +205,40 @@ defmodule AppWeb.Panels.BooksChannelTest do
     assert_reply ref, :error, %{reason: "bad_request"}
   end
 
+  test "writes are authorised by the TOKEN's user, not the topic suffix",
+       %{socket: socket, alice: alice, bob: bob} do
+    mine = list!(alice, "Apples")
+    theirs = list!(bob, "Bob's Errands")
+    {:ok, their_item} = Lists.add_item(theirs, "secret")
+
+    # Alice's token, Bob's id in the topic — the same client-reachable state as
+    # "the state is the TOKEN's user, not the topic's" above, now exercised
+    # against the WRITE path. The `list writes` describe block's setup always
+    # joins a user's OWN topic, which is exactly why this gap needs its own
+    # top-level test: an implementation that authorises by the (attacker-
+    # controlled) topic suffix instead of the token would pass every test in
+    # that block.
+    {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{bob.id}", %{})
+    assert_push "state", %{}
+
+    ref = push(sock, "add_item", %{"list_id" => theirs.id, "text" => "milk"})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    ref = push(sock, "toggle_item", %{"id" => their_item.id})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    assert [%{text: "secret", checked_at: nil}] = Lists.with_items(theirs).items
+    refute_push "state", %{}, 100
+
+    # Load-bearing: without this half, an implementation that denies EVERY
+    # write (regardless of ownership) would also pass the assertions above.
+    # Alice's OWN list must still be actionable from this same socket/topic.
+    ref = push(sock, "add_item", %{"list_id" => mine.id, "text" => "eggs"})
+    assert_reply ref, :ok
+    assert_push "state", %{list: %{items: [%{text: "eggs"}]}}
+    assert Enum.map(Lists.with_items(mine).items, & &1.text) == ["eggs"]
+  end
+
   test "a user deleted between connect and join does not crash the channel",
        %{socket: socket, alice: alice} do
     # The socket already authenticated as Alice at connect/2 (setup, above).
