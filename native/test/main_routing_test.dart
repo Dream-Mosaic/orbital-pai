@@ -10,6 +10,7 @@ import 'package:henry_wall/meridian/nav.dart';
 import 'package:henry_wall/meridian/reminders_panel.dart';
 import 'package:henry_wall/meridian/search_panel.dart';
 import 'package:henry_wall/meridian/settings_drawer_host.dart';
+import 'package:henry_wall/panels/books_client.dart';
 import 'package:henry_wall/panels/connectors_client.dart';
 import 'package:henry_wall/panels/memory_client.dart';
 import 'package:henry_wall/panels/reminders_client.dart';
@@ -87,7 +88,9 @@ void main() {
   Future<void> tapStation(WidgetTester tester, MeridianTab tab) async {
     await tester.tap(findHero(tab.icon), warnIfMissed: false);
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400)); // past the 300ms slide
+    // Past MeridianDrawer.slide, derived rather than a bare literal so the
+    // coupling to the route's actual transition duration stays explicit.
+    await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
   }
 
   /// Dismiss the open drawer via its ✕, which pops the route and so runs the
@@ -95,7 +98,7 @@ void main() {
   Future<void> dismissDrawer(WidgetTester tester) async {
     await tester.tap(findHero(HeroIcon.xMark));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
   }
 
   /// Pop whatever station is showing.
@@ -108,7 +111,7 @@ void main() {
   Future<void> popTop(WidgetTester tester) async {
     tester.firstState<NavigatorState>(find.byType(Navigator)).pop();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400)); // past the 300ms slide
+    await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
   }
 
   List<String> leftTopics(FakeSocket fake) => fake.textFrames
@@ -228,6 +231,14 @@ void main() {
     final (conn, fake) = await pumpHome(tester);
     await expectClosesItsOwnTopic(
         tester, fake, MeridianTab.settings, SettingsClient.topic);
+    await conn.disconnect();
+  });
+
+  testWidgets('dismissing Books leaves its topic, so a reopen refetches',
+      (tester) async {
+    final (conn, fake) = await pumpHome(tester);
+    await expectClosesItsOwnTopic(
+        tester, fake, MeridianTab.books, BooksClient.topic);
     await conn.disconnect();
   });
 
