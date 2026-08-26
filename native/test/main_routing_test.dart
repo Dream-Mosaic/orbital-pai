@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/main.dart';
+import 'package:henry_wall/meridian/books_panel.dart';
 import 'package:henry_wall/meridian/connectors_panel.dart';
 import 'package:henry_wall/meridian/drawer.dart';
 import 'package:henry_wall/meridian/hero_icon.dart';
@@ -188,21 +189,10 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('Books is still the webview station', (tester) async {
-    // The last `PanelWebViewScreen` fallthrough. When Books goes native this
-    // test fails, which is the point: the day the fallthrough is dead, delete
-    // it here and in _openPanel together.
-    final (conn, fake) = await pumpHome(tester);
-    final before = List<String>.from(fake.joinedTopics);
-
-    await tapStation(tester, MeridianTab.books);
-
-    expect(find.byType(PanelWebViewScreen), findsOneWidget);
-    expect(tester.widget<PanelWebViewScreen>(find.byType(PanelWebViewScreen)).tab,
-        MeridianTab.books);
-    expect(find.byType(MeridianDrawer), findsNothing);
-    expect(fake.joinedTopics, before);
-
+  testWidgets('Books opens the native panel, not the webview',
+      (tester) async {
+    final (conn, _) = await pumpHome(tester);
+    await expectNativeStation(tester, MeridianTab.books, BooksPanelView);
     await conn.disconnect();
   });
 

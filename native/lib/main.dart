@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
 import 'connection/app_connection.dart';
+import 'meridian/books_panel.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
 import 'meridian/nav.dart';
@@ -13,6 +14,7 @@ import 'meridian/settings_drawer_host.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
 import 'panels/badges_client.dart';
+import 'panels/books_client.dart';
 import 'panels/connectors_client.dart';
 import 'panels/memory_client.dart';
 import 'panels/reminders_client.dart';
@@ -77,6 +79,7 @@ class _HenryHomeState extends State<HenryHome> {
   late final MemoryClient _memory;
   late final VoiceLockClient _voiceLock;
   late final ConnectorsClient _connectors;
+  late final BooksClient _books;
 
   @override
   void initState() {
@@ -109,12 +112,15 @@ class _HenryHomeState extends State<HenryHome> {
     );
     // Registers nothing until the Connectors drawer opens.
     _connectors = ConnectorsClient(connection: _conn);
+    // Registers nothing until the Books drawer opens.
+    _books = BooksClient(connection: _conn);
     // The connection owns connect + rejoin; consumers just open channels.
     _conn.connect();
   }
 
   @override
   void dispose() {
+    _books.dispose();
     _connectors.dispose();
     _voiceLock.dispose();
     _memory.dispose();
@@ -126,10 +132,11 @@ class _HenryHomeState extends State<HenryHome> {
     super.dispose();
   }
 
-  /// Reminders, Settings, Connectors and Search are native now; Books still
-  /// loads `/?panel=<name>` in a webview until its own spec retires it. The
-  /// drawer is a transparent route, so the conversation keeps running and
-  /// rendering behind the scrim — mic, orb and thread all untouched.
+  /// Every station is native now; the webview fallthrough below is dead code,
+  /// kept only until the follow-up commit deletes it and turns this into an
+  /// exhaustive switch. The drawer is a transparent route, so the
+  /// conversation keeps running and rendering behind the scrim — mic, orb and
+  /// thread all untouched.
   void _openPanel(MeridianTab tab) {
     if (tab == MeridianTab.reminders) {
       _reminders.open();
@@ -190,6 +197,20 @@ class _HenryHomeState extends State<HenryHome> {
         title: tab.label,
         child: const SearchPanelView(),
       ));
+      return;
+    }
+
+    if (tab == MeridianTab.books) {
+      _books.open();
+      Navigator.of(context)
+          .push(meridianDrawerRoute(
+            title: tab.label,
+            child: BooksPanelView(client: _books),
+          ))
+          // whenComplete, not a then: a back gesture, a scrim tap and the ✕ all
+          // have to leave the topic, or the server keeps pushing state at a
+          // panel nobody is looking at.
+          .whenComplete(_books.close);
       return;
     }
 
