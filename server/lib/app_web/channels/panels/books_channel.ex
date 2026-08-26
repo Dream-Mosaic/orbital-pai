@@ -124,6 +124,94 @@ defmodule AppWeb.Panels.BooksChannel do
     end
   end
 
+  # ---- inbound: garden writes ----
+  #
+  # Same rule as the list writes: every one of these broadcasts, so the
+  # subscription does the re-push.
+  def handle_in("add_note", %{"plant_id" => id, "body" => body}, socket)
+      when is_integer(id) and is_binary(body) do
+    with %{} = plant <- own_plant(socket, id, :active),
+         trimmed when trimmed != "" <- String.trim(body) do
+      Garden.add_note(plant, trimmed)
+      {:reply, :ok, socket}
+    else
+      _ -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+    end
+  end
+
+  def handle_in("archive_plant", %{"id" => id}, socket) when is_integer(id) do
+    case own_plant(socket, id, :active) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      plant ->
+        Garden.archive_plant(plant)
+        {:reply, :ok, socket}
+    end
+  end
+
+  def handle_in("revive_plant", %{"id" => id}, socket) when is_integer(id) do
+    case own_plant(socket, id, :archived) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      plant ->
+        Garden.revive_plant(plant)
+        {:reply, :ok, socket}
+    end
+  end
+
+  # ---- inbound: book-level writes ----
+
+  # No argument on purpose. This is the most destructive control on the panel,
+  # and the book it acts on is the one the SERVER has stored — a client-supplied
+  # key would let a stale panel empty the wrong list. Same as the web
+  # (conversation_live.ex:280 reads its own assign).
+  def handle_in("clear_book", _payload, socket) do
+    user = Users.get(socket.assigns.user_id)
+    books = Books.for_user(user)
+    # Books.clear/1 returns {:error, :not_found} when the list was deleted
+    # between resolve and click (books.ex:90-98). Ignore the outcome rather than
+    # hard-matching :ok — a MatchError here kills the panel, and the next push
+    # re-resolves to a fallback anyway. conversation_live.ex:276-279 explains it.
+    Books.clear(current_book(books, user))
+    {:reply, :ok, socket}
+  end
+
+  # THIS ONE PUSHES. update_prefs/2 has no broadcast at all (users.ex:86-88).
+  def handle_in("select_book", %{"key" => key}, socket) when is_binary(key) do
+    user = Users.get(socket.assigns.user_id)
+
+    case Books.resolve(key, user) do
+      :not_found ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      {:ok, _book} ->
+        {:ok, _updated} = Users.update_prefs(user, %{books_last_book: key})
+        {:reply, :ok, push_state(socket)}
+    end
+  end
+
+  # SO DOES THIS ONE. find_or_create_list/2 is the only mutating function in
+  # App.Lists without a broadcast (lists.ex:19-43), and update_prefs/2 has none
+  # either — so BOTH halves of this handler are silent. Ride it and creating a
+  # list looks like a dead button.
+  def handle_in("new_list", %{"name" => name}, socket) when is_binary(name) do
+    user = Users.get(socket.assigns.user_id)
+
+    case String.trim(name) do
+      "" ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      trimmed ->
+        # Personal, never household: the web's own new-list form does the same
+        # (conversation_live.ex:263). Sharing a list is a voice affordance.
+        list = Lists.find_or_create_list(%{user_id: user.id, household: false}, trimmed)
+        {:ok, _updated} = Users.update_prefs(user, %{books_last_book: "list:#{list.id}"})
+        {:reply, :ok, push_state(socket)}
+    end
+  end
+
   # A client bug — or a probe — must not crash the channel and drop the panel.
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
@@ -232,6 +320,23 @@ defmodule AppWeb.Panels.BooksChannel do
     |> Lists.list_visible()
     |> Enum.flat_map(& &1.items)
     |> Enum.find(&(&1.id == id))
+  end
+
+  # Plants are resolved out of the user's own VISIBLE garden (own + household,
+  # garden.ex:42) — never Repo.get/2. `which` keeps archive and revive honest:
+  # archiving an archived plant is a no-op in the context (garden.ex:92) and
+  # reviving an active one is meaningless, so each looks only where it makes
+  # sense, exactly as the web does (conversation_live.ex:301, :312-316).
+  defp own_plant(socket, id, which) do
+    g = Garden.garden(socket.assigns.user_id)
+
+    pool =
+      case which do
+        :active -> g.active
+        :archived -> Enum.flat_map(g.archived_by_season, fn {_season, ps} -> ps end)
+      end
+
+    Enum.find(pool, &(&1.id == id))
   end
 
   defp item(i), do: %{id: i.id, text: i.text, checked: i.checked_at != nil}

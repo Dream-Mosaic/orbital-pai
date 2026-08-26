@@ -255,6 +255,39 @@ defmodule AppWeb.Panels.BooksChannelTest do
     assert_reply ref, :error, %{reason: "bad_request"}
   end
 
+  test "garden and book-level writes are authorised by the TOKEN's user, not the topic suffix",
+       %{socket: socket, alice: alice, bob: bob} do
+    mine = list!(alice, "Apples")
+    {:ok, theirs} = Garden.add_plant(%{user_id: bob.id, household: false}, %{name: "Kale"})
+    their_list = list!(bob, "Bob's Errands")
+
+    # Alice's token, Bob's id in the topic — the same client-reachable state as
+    # "writes are authorised by the TOKEN's user" above, now exercised against
+    # a garden write and the two non-broadcasting book-level writes. The
+    # "garden writes" and "the two writes that do NOT broadcast" describe
+    # blocks' setups always join a user's OWN topic, which is exactly why this
+    # gap needs its own top-level test: an implementation that authorises by
+    # the (attacker-controlled) topic suffix instead of the token would pass
+    # every test in those blocks.
+    {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{bob.id}", %{})
+    assert_push "state", %{}
+
+    ref = push(sock, "archive_plant", %{"id" => theirs.id})
+    assert_reply ref, :error, %{reason: "bad_request"}
+    assert [%{name: "Kale"}] = Garden.garden(bob.id).active
+
+    ref = push(sock, "select_book", %{"key" => "list:#{their_list.id}"})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    # Load-bearing: without this half, an implementation that denies EVERY
+    # write (regardless of ownership) would also pass the assertions above.
+    # Alice's OWN write must still succeed from this same socket/topic.
+    ref = push(sock, "select_book", %{"key" => "list:#{mine.id}"})
+    assert_reply ref, :ok
+    assert_push "state", %{current_key: key, list: %{name: "Apples"}}
+    assert key == "list:#{mine.id}"
+  end
+
   describe "list writes" do
     setup %{socket: socket, alice: alice} do
       list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
@@ -342,6 +375,168 @@ defmodule AppWeb.Panels.BooksChannelTest do
       ref = push(sock, "add_item", %{"list_id" => shared.id, "text" => "bread"})
       assert_reply ref, :ok
       assert [%{text: "bread"}] = Lists.with_items(shared).items
+    end
+  end
+
+  describe "garden writes" do
+    setup %{socket: socket, alice: alice} do
+      {:ok, plant} =
+        Garden.add_plant(%{user_id: alice.id, household: false}, %{name: "Tomatoes"})
+
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "garden"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+      %{sock: sock, plant: plant, alice: u}
+    end
+
+    test "add_note appends a dated note", %{sock: sock, plant: plant} do
+      ref = push(sock, "add_note", %{"plant_id" => plant.id, "body" => "  sprouting  "})
+      assert_reply ref, :ok
+      assert_push "state", %{garden: %{active: [%{notes: [%{body: "sprouting"}]}]}}
+    end
+
+    test "add_note with a blank body is bad_request and writes nothing",
+         %{sock: sock, plant: plant} do
+      ref = push(sock, "add_note", %{"plant_id" => plant.id, "body" => "  "})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute_push "state", %{}, 100
+    end
+
+    test "archive_plant moves it into past seasons, revive_plant brings it back",
+         %{sock: sock, plant: plant} do
+      ref = push(sock, "archive_plant", %{"id" => plant.id})
+      assert_reply ref, :ok
+      assert_push "state", %{garden: %{active: [], past: [%{plants: [%{name: "Tomatoes"}]}]}}
+
+      ref = push(sock, "revive_plant", %{"id" => plant.id})
+      assert_reply ref, :ok
+      assert_push "state", %{garden: %{active: [%{name: "Tomatoes"}], past: []}}
+    end
+
+    test "another user's plant is bad_request and stays active", %{sock: sock, bob: bob} do
+      {:ok, theirs} = Garden.add_plant(%{user_id: bob.id, household: false}, %{name: "Kale"})
+
+      for {event, payload} <- [
+            {"add_note", %{"plant_id" => theirs.id, "body" => "x"}},
+            {"archive_plant", %{"id" => theirs.id}},
+            {"revive_plant", %{"id" => theirs.id}}
+          ] do
+        ref = push(sock, event, payload)
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      assert [%{name: "Kale"}] = Garden.garden(bob.id).active
+    end
+  end
+
+  describe "clear_book" do
+    test "on a list book it empties the items and KEEPS the list",
+         %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, _} = Lists.add_item(list, "milk")
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+
+      ref = push(sock, "clear_book", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{list: %{name: "Apples", items: []}}
+      assert Lists.list_visible(u.id) |> Enum.map(& &1.name) == ["Apples"]
+    end
+
+    test "on the garden book it closes out the season", %{socket: socket, alice: alice} do
+      # A list book must also exist, so the FIRST book (lists name-sorted, then
+      # garden last) is NOT the garden — with zero lists, `List.first(books)`
+      # and the correct `current_book/2` resolution are indistinguishable.
+      _list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, _} = Garden.add_plant(%{user_id: alice.id, household: false}, %{name: "Peas"})
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "garden"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+
+      ref = push(sock, "clear_book", %{})
+      assert_reply ref, :ok
+      assert_push "state", %{garden: %{active: [], past: [%{plants: [%{name: "Peas"}]}]}}
+    end
+
+    test "on a list deleted mid-flight it is a no-op, not a crash",
+         %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+
+      {:ok, _} = Lists.delete_list(list)
+      assert_push "state", %{}
+
+      ref = push(sock, "clear_book", %{})
+      assert_reply ref, :ok
+    end
+  end
+
+  describe "the two writes that do NOT broadcast" do
+    test "select_book switches the current book — the handler must push it itself",
+         %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "garden"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{current_key: "garden"}
+
+      ref = push(sock, "select_book", %{"key" => "list:#{list.id}"})
+      assert_reply ref, :ok
+      # NOTHING broadcasts here (users.ex:86-88). Without the handler's own
+      # push_state this assertion times out — that is the point of the test.
+      assert_push "state", %{current_key: key, list: %{name: "Apples"}}
+      assert key == "list:#{list.id}"
+    end
+
+    test "select_book survives a restart — the choice is persisted",
+         %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{alice.id}", %{})
+      assert_push "state", %{}
+
+      ref = push(sock, "select_book", %{"key" => "list:#{list.id}"})
+      assert_reply ref, :ok
+      assert_push "state", %{}
+
+      assert Users.get(alice.id).books_last_book == "list:#{list.id}"
+    end
+
+    test "select_book on a key that is not this user's is bad_request",
+         %{socket: socket, alice: alice, bob: bob} do
+      theirs = Lists.find_or_create_list(%{user_id: bob.id, household: false}, "Bob's")
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{alice.id}", %{})
+      assert_push "state", %{}
+
+      ref = push(sock, "select_book", %{"key" => "list:#{theirs.id}"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      assert Users.get(alice.id).books_last_book == nil
+    end
+
+    test "new_list creates it, makes it current, and the handler must push it itself",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{alice.id}", %{})
+      assert_push "state", %{current_key: "garden"}
+
+      ref = push(sock, "new_list", %{"name" => "  Camping  "})
+      assert_reply ref, :ok
+      # find_or_create_list/2 is the ONE mutating function in App.Lists with no
+      # broadcast (lists.ex:19-43); nothing rides here either.
+      assert_push "state", %{current_key: key, books: books, list: %{name: "Camping"}}
+      assert Enum.map(books, & &1.label) == ["Camping", "Garden"]
+      assert String.starts_with?(key, "list:")
+    end
+
+    test "new_list with a blank name is bad_request and creates nothing",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{alice.id}", %{})
+      assert_push "state", %{}
+
+      ref = push(sock, "new_list", %{"name" => "   "})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute_push "state", %{}, 100
+      assert Lists.list_visible(alice.id) == []
     end
   end
 end
