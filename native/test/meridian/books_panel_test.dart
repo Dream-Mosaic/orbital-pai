@@ -5,9 +5,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/books_garden.dart';
 import 'package:henry_wall/meridian/books_panel.dart';
+import 'package:henry_wall/meridian/drawer.dart';
+import 'package:henry_wall/meridian/hero_icon.dart';
 import 'package:henry_wall/panels/books_client.dart';
 
 import '../support/fake_socket.dart';
+
+/// heroicons are SVGs, not IconData, so `find.byIcon` does not apply — the
+/// same predicate six sibling test files already use (nav_test.dart,
+/// drawer_test.dart, orb_bezel_test.dart, etc).
+Finder findHero(HeroIcon icon) =>
+    find.byWidgetPredicate((w) => w is HeroIconView && w.icon == icon);
 
 Map<String, Object?> _book({
   required String key,
@@ -166,6 +174,46 @@ void main() {
     await conn.disconnect();
   });
 
+  testWidgets(
+      "the header renders the CURRENT BOOK's own label, not the list's name "
+      '(a hardcoded "Groceries" would pass the count-of-2 assertion above '
+      'without actually being wired to the book)', (tester) async {
+    // Deliberately distinct strings so a header bound to the wrong field —
+    // or hardcoded outright — shows up as a mismatch rather than a
+    // coincidence: books_client.dart makes no promise that BookRef.label
+    // and ListBody.name agree.
+    final frame = _stateFrame(
+      books: [
+        _book(key: 'list:3', label: 'Groceries List', kind: 'list', icon: 'shopping-cart'),
+      ],
+      currentKey: 'list:3',
+      list: {'id': 3, 'name': 'Groceries', 'household': false, 'items': const []},
+      garden: null,
+    );
+    final (client, conn, _) = await openedClient(tester, frame);
+    await pumpPanel(tester, client);
+
+    expect(
+      find.descendant(
+          of: find.byKey(BooksPanelView.headerKey),
+          matching: find.text('Groceries List')),
+      findsOneWidget,
+      reason: 'the header must show the BOOK label',
+    );
+    expect(
+      find.descendant(
+          of: find.byKey(BooksPanelView.headerKey),
+          matching: find.text('Groceries')),
+      findsNothing,
+      reason: 'the header must not show the LIST name',
+    );
+    // And the list card, outside the header, carries the list's own name.
+    expect(find.text('Groceries'), findsOneWidget,
+        reason: 'the list card shows its own name, once, outside the header');
+
+    await conn.disconnect();
+  });
+
   group('Switch book starts collapsed', () {
     // A wrong implementation might always render the picker (e.g. drop the
     // `if (_switchExpanded)` guard and rely on scroll to hide it) — that
@@ -236,6 +284,44 @@ void main() {
     await conn.disconnect();
   });
 
+  testWidgets(
+      'the book picker renders in the SERVER\'s order, not re-sorted by '
+      'label or key', (tester) async {
+    // Given order: list:2 (Zeta, current), list:5 (Alpha), list:1 (Mango).
+    // Chosen so every plausible re-sort disagrees with it:
+    //   ascending label:  Alpha, Mango, Zeta   (list:5, list:1, list:2)
+    //   descending label: Zeta, Mango, Alpha   (list:2, list:1, list:5)
+    //   ascending key:    list:1, list:2, list:5
+    //   descending key:   list:5, list:2, list:1
+    // None of those four match the given list:2, list:5, list:1 — a
+    // re-sort under ANY of them would move at least one row.
+    final frame = _stateFrame(
+      books: [
+        _book(key: 'list:2', label: 'Zeta', kind: 'list', icon: 'shopping-cart'),
+        _book(key: 'list:5', label: 'Alpha', kind: 'list', icon: 'shopping-cart'),
+        _book(key: 'list:1', label: 'Mango', kind: 'list', icon: 'shopping-cart'),
+      ],
+      currentKey: 'list:2',
+      list: {'id': 2, 'name': 'Zeta', 'household': false, 'items': const []},
+      garden: null,
+    );
+    final (client, conn, _) = await openedClient(tester, frame);
+    await pumpPanel(tester, client);
+    await tester.tap(find.byKey(BooksPanelView.switchBookToggleKey));
+    await tester.pumpAndSettle();
+
+    double topOf(String key) =>
+        tester.getTopLeft(find.byKey(BooksPanelView.bookRowKey(key))).dy;
+    final y2 = topOf('list:2');
+    final y5 = topOf('list:5');
+    final y1 = topOf('list:1');
+
+    expect(y2, lessThan(y5), reason: 'list:2 must render before list:5');
+    expect(y5, lessThan(y1), reason: 'list:5 must render before list:1');
+
+    await conn.disconnect();
+  });
+
   group('Create', () {
     testWidgets('with text pushes new_list with that name', (tester) async {
       final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
@@ -269,6 +355,29 @@ void main() {
 
       await conn.disconnect();
     });
+
+    // Every other Create test drives the button. `onSubmitted` is a
+    // SEPARATE wire on TextField — a mutation that sets it to null (submit
+    // via the keyboard's "done" key does nothing) leaves every button-driven
+    // test green, so this drives the field itself via the IME action
+    // instead of tapping Create.
+    testWidgets('submitting via the keyboard (not the button) also pushes '
+        'new_list', (tester) async {
+      final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
+      await pumpPanel(tester, client);
+      await tester.tap(find.byKey(BooksPanelView.switchBookToggleKey));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(BooksPanelView.newListFieldKey), 'Snacks');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+
+      expect(lastPush(fake),
+          ['panel:books:henry', 'new_list', {'name': 'Snacks'}]);
+
+      await conn.disconnect();
+    });
   });
 
   testWidgets(
@@ -291,6 +400,37 @@ void main() {
     await tester.pump();
 
     expect(lastPush(fake), ['panel:books:henry', 'toggle_item', {'id': 9}]);
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
+      'items render in the SERVER\'s order, not re-sorted by id or text',
+      (tester) async {
+    // Given order: id 5 "Bananas", id 2 "Apples", id 9 "Carrots". Chosen so
+    // every plausible re-sort disagrees with it:
+    //   ascending id:    2, 5, 9   -> Apples, Bananas, Carrots
+    //   descending id:   9, 5, 2   -> Carrots, Bananas, Apples
+    //   ascending text:  Apples, Bananas, Carrots
+    //   descending text: Carrots, Bananas, Apples
+    // None of those four put Bananas first — only the server's own order
+    // (preserved verbatim) does.
+    final frame = _groceriesFrame(items: [
+      _item(id: 5, text: 'Bananas'),
+      _item(id: 2, text: 'Apples'),
+      _item(id: 9, text: 'Carrots'),
+    ]);
+    final (client, conn, _) = await openedClient(tester, frame);
+    await pumpPanel(tester, client);
+
+    double topOf(int id) =>
+        tester.getTopLeft(find.byKey(BooksPanelView.itemCheckboxKey(id))).dy;
+    final y5 = topOf(5);
+    final y2 = topOf(2);
+    final y9 = topOf(9);
+
+    expect(y5, lessThan(y2), reason: 'Bananas (5) must render before Apples (2)');
+    expect(y2, lessThan(y9), reason: 'Apples (2) must render before Carrots (9)');
 
     await conn.disconnect();
   });
@@ -342,6 +482,26 @@ void main() {
     await tester.enterText(
         find.byKey(BooksPanelView.addItemFieldKey), 'bread');
     await tester.tap(find.text('Add'));
+    await tester.pump();
+
+    expect(lastPush(fake),
+        ['panel:books:henry', 'add_item', {'list_id': 3, 'text': 'bread'}]);
+
+    await conn.disconnect();
+  });
+
+  testWidgets(
+      'submitting the add-item field via the keyboard (not the button) also '
+      'pushes add_item', (tester) async {
+    // Same rationale as the new-list keyboard-submit test above: every other
+    // add-item test drives the "Add" button, so a null `onSubmitted` on this
+    // field would otherwise go undetected.
+    final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
+    await pumpPanel(tester, client);
+
+    await tester.enterText(
+        find.byKey(BooksPanelView.addItemFieldKey), 'bread');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
     expect(lastPush(fake),
@@ -402,11 +562,12 @@ void main() {
   });
 
   group('Clear ↻', () {
-    testWidgets("shows the server's clear_confirm string verbatim",
-        (tester) async {
+    testWidgets(
+        "shows the server's clear_confirm string verbatim; cancelling pushes "
+        'nothing', (tester) async {
       const confirm =
           "Clear everything off Groceries? The list stays, just empty.";
-      final (client, conn, _) =
+      final (client, conn, fake) =
           await openedClient(tester, _groceriesFrame(clearConfirm: confirm));
       await pumpPanel(tester, client);
 
@@ -417,6 +578,13 @@ void main() {
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
+
+      // The twin of the delete-list cancel assertion below — this is the
+      // panel's most destructive control, and a mutation that shows the
+      // dialog but ignores its answer (always clearing) must be caught here,
+      // not just at the confirming path.
+      expect(anyPushOf(fake, 'clear_book'), isFalse,
+          reason: 'dismissing the confirm dialog must push nothing');
 
       await conn.disconnect();
     });
@@ -518,14 +686,67 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('a household list shows the shared badge', (tester) async {
-    final (client, conn, _) =
-        await openedClient(tester, _groceriesFrame(household: true));
+  testWidgets(
+      'each book icon string maps to its OWN HeroIcon, and an unrecognised '
+      'one falls back to bookOpen', (tester) async {
+    final frame = _stateFrame(
+      books: [
+        _book(key: 'list:1', label: 'Chores', kind: 'list', icon: 'clipboard-document-list'),
+        _book(key: 'list:2', label: 'Groceries', kind: 'list', icon: 'shopping-cart'),
+        _book(key: 'garden', label: 'Garden', kind: 'garden', icon: 'sun'),
+        _book(key: 'list:3', label: 'Mystery', kind: 'list', icon: 'nonsense-icon'),
+      ],
+      currentKey: 'list:2',
+      list: {'id': 2, 'name': 'Groceries', 'household': false, 'items': const []},
+      garden: null,
+    );
+    final (client, conn, _) = await openedClient(tester, frame);
     await pumpPanel(tester, client);
 
-    expect(find.text('shared'), findsOneWidget);
+    // Before expanding: only the header's own icon is on screen — the
+    // current book, 'shopping-cart'. A collapsed-`_iconFor` mutation (e.g.
+    // always bookOpen) is already visible here.
+    expect(findHero(HeroIcon.shoppingCart), findsOneWidget);
+    expect(findHero(HeroIcon.bookOpen), findsNothing);
+
+    await tester.tap(find.byKey(BooksPanelView.switchBookToggleKey));
+    await tester.pumpAndSettle();
+
+    expect(findHero(HeroIcon.clipboardDocumentList), findsOneWidget,
+        reason: "Chores' icon");
+    expect(findHero(HeroIcon.sun), findsOneWidget, reason: "Garden's icon");
+    expect(findHero(HeroIcon.bookOpen), findsOneWidget,
+        reason: "Mystery's unrecognised icon must fall back to bookOpen, "
+            'and only ONE row may do so');
+    // shoppingCart now appears twice: the header AND the Groceries row.
+    expect(findHero(HeroIcon.shoppingCart), findsNWidgets(2));
 
     await conn.disconnect();
+  });
+
+  group('the shared badge', () {
+    // Two SEPARATE states, not one — the same trap as the Clear done gate:
+    // asserting only the household:true case would pass under an "always
+    // show shared" implementation.
+    testWidgets('is absent for a non-household list', (tester) async {
+      final (client, conn, _) =
+          await openedClient(tester, _groceriesFrame(household: false));
+      await pumpPanel(tester, client);
+
+      expect(find.text('shared'), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('appears for a household list', (tester) async {
+      final (client, conn, _) =
+          await openedClient(tester, _groceriesFrame(household: true));
+      await pumpPanel(tester, client);
+
+      expect(find.text('shared'), findsOneWidget);
+
+      await conn.disconnect();
+    });
   });
 
   testWidgets('a later state push re-renders live', (tester) async {
@@ -540,6 +761,129 @@ void main() {
     expect(find.text('Clear done'), findsOneWidget);
 
     await conn.disconnect();
+  });
+
+  group('keyboard avoidance (both halves — see memory_panel_test.dart)', () {
+    // Ported from memory_panel_test.dart:323-394's two scenarios (a deep
+    // field pushed below the fold by content, and a short/landscape
+    // viewport that covers even an early field) — that file's own comments
+    // explain the FakeViewPadding-is-physical gotcha and the
+    // devicePixelRatio pin this borrows verbatim. Both of memory_panel's
+    // halves apply equally here: books_panel.dart's own bottomInset
+    // Padding, AND each TextField's scrollPadding — removing EITHER lets a
+    // focused field land (or stay) behind the keyboard.
+    testWidgets(
+        'the add-item field scrolls clear of the keyboard when pushed below '
+        'the fold by a long item list', (tester) async {
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(360, 800);
+      addTearDown(tester.view.resetPhysicalSize);
+
+      // Enough items that the add-item field's UNSCROLLED position is
+      // already well past the fold — otherwise this could pass by accident
+      // on a short list that never needed to scroll in the first place.
+      final manyItems = List.generate(
+        16,
+        (i) => _item(id: i + 1, text: 'Item number $i, long enough for a full line'),
+      );
+      final frame = _groceriesFrame(items: manyItems);
+      final (client, conn, _) = await openedClient(tester, frame);
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MeridianDrawer(
+          title: 'Books',
+          animation: const AlwaysStoppedAnimation<double>(1),
+          onClose: () {},
+          child: BooksPanelView(client: client),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Sanity: confirm the hazard is real before the fix gets credit for
+      // solving it.
+      final unfocused =
+          tester.getRect(find.byKey(BooksPanelView.addItemFieldKey));
+      expect(unfocused.bottom, greaterThan(800 - 300),
+          reason: 'sanity: the field must start out behind the keyboard '
+              'line, or this test could pass without the fix ever running');
+
+      await tester.showKeyboard(find.byKey(BooksPanelView.addItemFieldKey));
+      await tester.pumpAndSettle();
+
+      final box = tester.getRect(find.byKey(BooksPanelView.addItemFieldKey));
+      expect(box.bottom, lessThanOrEqualTo(800 - 300),
+          reason: 'the field must scroll clear of the keyboard, not sit '
+              'behind it');
+      // The drawer's fixed header sits directly above its own
+      // SingleChildScrollView, so that scroll view's top IS the header's
+      // bottom — an over-eager correction that scrolls too far would clip
+      // the field's top underneath the header while still satisfying the
+      // bottom assertion above.
+      final headerBottom =
+          tester.getRect(find.byType(SingleChildScrollView)).top;
+      expect(box.top, greaterThanOrEqualTo(headerBottom),
+          reason: 'the field must not be scrolled so far that its top ends '
+              'up clipped under the drawer header');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'the new-list field also scrolls clear of the keyboard under a '
+        'short (landscape) viewport', (tester) async {
+      // The new-list field sits near the TOP of the panel (right behind the
+      // header, once "Switch book" is expanded) — on a tall portrait phone
+      // it never comes close to a keyboard. The realistic scenario where it
+      // does is a short landscape viewport, same rationale as
+      // memory_panel_test.dart's summary-field test.
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.physicalSize = const Size(800, 380);
+      addTearDown(tester.view.resetPhysicalSize);
+
+      final (client, conn, _) = await openedClient(tester, _groceriesFrame());
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 220);
+      addTearDown(tester.view.resetViewInsets);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MeridianDrawer(
+          title: 'Books',
+          animation: const AlwaysStoppedAnimation<double>(1),
+          onClose: () {},
+          child: BooksPanelView(client: client),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(BooksPanelView.switchBookToggleKey));
+      await tester.pumpAndSettle();
+
+      final unfocused =
+          tester.getRect(find.byKey(BooksPanelView.newListFieldKey));
+      expect(unfocused.bottom, greaterThan(380 - 220),
+          reason: 'sanity: the field must start out behind the keyboard '
+              'line, or this test could pass without the fix ever running');
+
+      await tester.showKeyboard(find.byKey(BooksPanelView.newListFieldKey));
+      await tester.pumpAndSettle();
+
+      final box = tester.getRect(find.byKey(BooksPanelView.newListFieldKey));
+      expect(box.bottom, lessThanOrEqualTo(380 - 220),
+          reason: 'the new-list field must scroll clear of the keyboard '
+              'too, not sit behind it');
+      final headerBottom =
+          tester.getRect(find.byType(SingleChildScrollView)).top;
+      expect(box.top, greaterThanOrEqualTo(headerBottom),
+          reason: 'the new-list field must not be scrolled so far that its '
+              'top ends up clipped under the drawer header');
+
+      await conn.disconnect();
+    });
   });
 
   group('garden body', () {

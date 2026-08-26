@@ -23,7 +23,7 @@ import 'tokens.dart';
 ///
 /// **The one intentional divergence from the web:** the web nests a second
 /// `<details>` inside "Switch book" for "➕ New list…"
-/// (`voice_modals.ex:374-388`) — two taps to reach a text field, on a phone,
+/// (`voice_modals.ex:346-361`) — two taps to reach a text field, on a phone,
 /// inside a drawer. This view FLATTENS that inner disclosure: expanding
 /// "Switch book" shows every book AND the create row (label, field, button)
 /// in one tap. The form is still hidden behind the outer, collapsed
@@ -34,6 +34,13 @@ class BooksPanelView extends StatefulWidget {
   const BooksPanelView({super.key, required this.client});
 
   final BooksClient client;
+
+  /// So a test can scope a find to the header row specifically — the current
+  /// book's label and the current list's own name can coincide (the web sets
+  /// a list book's label FROM its list name), so a bare `find.text` cannot
+  /// tell "the header renders the book's label" apart from "the header
+  /// renders the list's name" without this.
+  static const Key headerKey = ValueKey('books-header');
 
   /// The "Switch book" summary row — toggles the expanded picker + create row.
   static const Key switchBookToggleKey = ValueKey('books-switch-toggle');
@@ -131,6 +138,7 @@ class _BooksPanelViewState extends State<BooksPanelView> {
 
   Widget _header(BuildContext context, BooksState state, BookRef currentBook) =>
       _card(
+        key: BooksPanelView.headerKey,
         child: Row(
           children: [
             HeroIconView(_iconFor(currentBook.icon), size: 16, color: M.inkDim),
@@ -412,7 +420,9 @@ class _BooksPanelViewState extends State<BooksPanelView> {
         _ => HeroIcon.bookOpen,
       };
 
-  Widget _card({Widget? child, EdgeInsetsGeometry? padding}) => Container(
+  Widget _card({Key? key, Widget? child, EdgeInsetsGeometry? padding}) =>
+      Container(
+        key: key,
         padding: padding ?? const EdgeInsets.all(12),
         decoration: BoxDecoration(
           border: Border.all(color: M.hairline),
