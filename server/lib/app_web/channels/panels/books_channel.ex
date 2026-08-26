@@ -63,8 +63,57 @@ defmodule AppWeb.Panels.BooksChannel do
     {:ok, socket}
   end
 
-  # A client bug — or a probe — must not crash the channel and drop the panel.
+  # ---- inbound: the list writes ----
+  #
+  # None of these pushes `state`. Every context call below ends in
+  # `Lists.broadcast_changed/2`, PubSub delivers a broadcast to its sender, and
+  # join/2 subscribed us — so the re-push is the SUBSCRIPTION's job. See the
+  # moduledoc for the two writes where that is not true.
+  #
+  # Every id is client-supplied and is resolved against this user's VISIBLE set
+  # (own rows + household rows), never `Repo.get/2`.
   @impl true
+  def handle_in("add_item", %{"list_id" => id, "text" => text}, socket)
+      when is_integer(id) and is_binary(text) do
+    with %{} = list <- own_list(socket, id),
+         trimmed when trimmed != "" <- String.trim(text) do
+      Lists.add_item(list, trimmed)
+      {:reply, :ok, socket}
+    else
+      _ -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+    end
+  end
+
+  def handle_in("toggle_item", %{"id" => id}, socket) when is_integer(id) do
+    case own_item(socket, id) do
+      nil -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+      %{checked_at: nil} = item -> Lists.check_item(item) && {:reply, :ok, socket}
+      item -> Lists.uncheck_item(item) && {:reply, :ok, socket}
+    end
+  end
+
+  def handle_in("clear_done", %{"list_id" => id}, socket) when is_integer(id) do
+    case own_list(socket, id) do
+      nil -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+      list -> Lists.clear_checked(list) && {:reply, :ok, socket}
+    end
+  end
+
+  def handle_in("delete_list", %{"list_id" => id}, socket) when is_integer(id) do
+    case own_list(socket, id) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      list ->
+        # The stored pref may now name a deleted list; nothing needs to clean it
+        # up, because state/1 re-resolves the key on every push and a stale one
+        # falls back. Same as the web (conversation_live.ex:246).
+        Lists.delete_list(list)
+        {:reply, :ok, socket}
+    end
+  end
+
+  # A client bug — or a probe — must not crash the channel and drop the panel.
   def handle_in(_event, _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
@@ -158,6 +207,21 @@ defmodule AppWeb.Panels.BooksChannel do
   end
 
   defp list_body(_book, _uid), do: nil
+
+  # VISIBLE, not owned: list_visible/1 is `user_id == ^uid or household == true`
+  # (lists.ex:53), so a household list belonging to the other user is reachable
+  # — that is the product's sharing rule, not a leak.
+  defp own_list(socket, id),
+    do: Enum.find(Lists.list_visible(socket.assigns.user_id), &(&1.id == id))
+
+  # Items are reached only THROUGH a visible list, so an item on someone else's
+  # personal list is simply not in the search space.
+  defp own_item(socket, id) do
+    socket.assigns.user_id
+    |> Lists.list_visible()
+    |> Enum.flat_map(& &1.items)
+    |> Enum.find(&(&1.id == id))
+  end
 
   defp item(i), do: %{id: i.id, text: i.text, checked: i.checked_at != nil}
 

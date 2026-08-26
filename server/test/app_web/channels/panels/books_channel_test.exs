@@ -220,4 +220,94 @@ defmodule AppWeb.Panels.BooksChannelTest do
     ref = push(sock, "nonsense", %{})
     assert_reply ref, :error, %{reason: "bad_request"}
   end
+
+  describe "list writes" do
+    setup %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+      %{sock: sock, list: list, alice: u}
+    end
+
+    test "add_item appends and the panel sees it", %{sock: sock, list: list} do
+      ref = push(sock, "add_item", %{"list_id" => list.id, "text" => "  milk  "})
+      assert_reply ref, :ok
+      assert_push "state", %{list: %{items: [%{text: "milk", checked: false}]}}
+    end
+
+    test "add_item with a blank text is bad_request and writes nothing",
+         %{sock: sock, list: list} do
+      ref = push(sock, "add_item", %{"list_id" => list.id, "text" => "   "})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      refute_push "state", %{}, 100
+      assert Lists.with_items(list).items == []
+    end
+
+    test "toggle_item checks, then unchecks", %{sock: sock, list: list} do
+      {:ok, item} = Lists.add_item(list, "milk")
+      assert_push "state", %{}
+
+      ref = push(sock, "toggle_item", %{"id" => item.id})
+      assert_reply ref, :ok
+      assert_push "state", %{list: %{items: [%{checked: true}]}}
+
+      ref = push(sock, "toggle_item", %{"id" => item.id})
+      assert_reply ref, :ok
+      assert_push "state", %{list: %{items: [%{checked: false}]}}
+    end
+
+    test "clear_done removes only the checked items", %{sock: sock, list: list} do
+      {:ok, milk} = Lists.add_item(list, "milk")
+      {:ok, _eggs} = Lists.add_item(list, "eggs")
+      {:ok, _} = Lists.check_item(milk)
+
+      ref = push(sock, "clear_done", %{"list_id" => list.id})
+      assert_reply ref, :ok
+      assert_push "state", %{list: %{items: [%{text: "eggs"}]}}
+    end
+
+    test "delete_list removes it and the panel falls back to another book",
+         %{sock: sock, list: list} do
+      ref = push(sock, "delete_list", %{"list_id" => list.id})
+      assert_reply ref, :ok
+      assert_push "state", %{current_key: "garden", books: books, list: nil}
+      assert Enum.map(books, & &1.label) == ["Garden"]
+    end
+
+    test "another user's list is bad_request and is NOT deleted",
+         %{sock: sock, bob: bob} do
+      theirs = Lists.find_or_create_list(%{user_id: bob.id, household: false}, "Bob's")
+
+      for {event, payload} <- [
+            {"add_item", %{"list_id" => theirs.id, "text" => "x"}},
+            {"clear_done", %{"list_id" => theirs.id}},
+            {"delete_list", %{"list_id" => theirs.id}}
+          ] do
+        ref = push(sock, event, payload)
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      refute_push "state", %{}, 100
+      assert Lists.list_visible(bob.id) |> Enum.map(& &1.name) == ["Bob's"]
+    end
+
+    test "another user's ITEM is bad_request and stays unchecked", %{sock: sock, bob: bob} do
+      theirs = Lists.find_or_create_list(%{user_id: bob.id, household: false}, "Bob's")
+      {:ok, item} = Lists.add_item(theirs, "secret")
+
+      ref = push(sock, "toggle_item", %{"id" => item.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      assert [%{checked_at: nil}] = Lists.with_items(theirs).items
+    end
+
+    test "a HOUSEHOLD list owned by someone else IS actionable — visible, not owned",
+         %{sock: sock, bob: bob} do
+      shared = Lists.find_or_create_list(%{user_id: bob.id, household: true}, "Household")
+
+      ref = push(sock, "add_item", %{"list_id" => shared.id, "text" => "bread"})
+      assert_reply ref, :ok
+      assert [%{text: "bread"}] = Lists.with_items(shared).items
+    end
+  end
 end
