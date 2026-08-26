@@ -168,27 +168,40 @@ defmodule AppWeb.Panels.BooksChannel do
   # key would let a stale panel empty the wrong list. Same as the web
   # (conversation_live.ex:280 reads its own assign).
   def handle_in("clear_book", _payload, socket) do
-    user = Users.get(socket.assigns.user_id)
-    books = Books.for_user(user)
-    # Books.clear/1 returns {:error, :not_found} when the list was deleted
-    # between resolve and click (books.ex:90-98). Ignore the outcome rather than
-    # hard-matching :ok — a MatchError here kills the panel, and the next push
-    # re-resolves to a fallback anyway. conversation_live.ex:276-279 explains it.
-    Books.clear(current_book(books, user))
-    {:reply, :ok, socket}
+    # Same nil-user guard as state/1 (Users.get/1 can return nil — see its own
+    # doc): every branch below dereferences the user, so an unguarded nil
+    # crashes the channel with a BadMapError instead of replying bad_request.
+    case Users.get(socket.assigns.user_id) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      user ->
+        books = Books.for_user(user)
+        # Books.clear/1 returns {:error, :not_found} when the list was deleted
+        # between resolve and click (books.ex:90-98). Ignore the outcome rather
+        # than hard-matching :ok — a MatchError here kills the panel, and the
+        # next push re-resolves to a fallback anyway. conversation_live.ex:276-279
+        # explains it.
+        Books.clear(current_book(books, user))
+        {:reply, :ok, socket}
+    end
   end
 
   # THIS ONE PUSHES. update_prefs/2 has no broadcast at all (users.ex:86-88).
   def handle_in("select_book", %{"key" => key}, socket) when is_binary(key) do
-    user = Users.get(socket.assigns.user_id)
-
-    case Books.resolve(key, user) do
-      :not_found ->
+    case Users.get(socket.assigns.user_id) do
+      nil ->
         {:reply, {:error, %{reason: "bad_request"}}, socket}
 
-      {:ok, _book} ->
-        {:ok, _updated} = Users.update_prefs(user, %{books_last_book: key})
-        {:reply, :ok, push_state(socket)}
+      user ->
+        case Books.resolve(key, user) do
+          :not_found ->
+            {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+          {:ok, _book} ->
+            {:ok, _updated} = Users.update_prefs(user, %{books_last_book: key})
+            {:reply, :ok, push_state(socket)}
+        end
     end
   end
 
@@ -197,18 +210,23 @@ defmodule AppWeb.Panels.BooksChannel do
   # either — so BOTH halves of this handler are silent. Ride it and creating a
   # list looks like a dead button.
   def handle_in("new_list", %{"name" => name}, socket) when is_binary(name) do
-    user = Users.get(socket.assigns.user_id)
-
-    case String.trim(name) do
-      "" ->
+    case Users.get(socket.assigns.user_id) do
+      nil ->
         {:reply, {:error, %{reason: "bad_request"}}, socket}
 
-      trimmed ->
-        # Personal, never household: the web's own new-list form does the same
-        # (conversation_live.ex:263). Sharing a list is a voice affordance.
-        list = Lists.find_or_create_list(%{user_id: user.id, household: false}, trimmed)
-        {:ok, _updated} = Users.update_prefs(user, %{books_last_book: "list:#{list.id}"})
-        {:reply, :ok, push_state(socket)}
+      user ->
+        case String.trim(name) do
+          "" ->
+            {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+          trimmed ->
+            # Personal, never household: the web's own new-list form does the
+            # same (conversation_live.ex:263). Sharing a list is a voice
+            # affordance.
+            list = Lists.find_or_create_list(%{user_id: user.id, household: false}, trimmed)
+            {:ok, _updated} = Users.update_prefs(user, %{books_last_book: "list:#{list.id}"})
+            {:reply, :ok, push_state(socket)}
+        end
     end
   end
 

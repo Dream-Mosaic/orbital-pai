@@ -253,6 +253,18 @@ defmodule AppWeb.Panels.BooksChannelTest do
     # The channel process must still be alive and answering, not crashed.
     ref = push(sock, "nonsense", %{})
     assert_reply ref, :error, %{reason: "bad_request"}
+
+    # The three book-level handlers (clear_book, select_book, new_list) each
+    # independently call Users.get/1 and dereference the result — a nil user
+    # must reply bad_request, not crash the channel with a BadMapError.
+    ref = push(sock, "clear_book", %{})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    ref = push(sock, "select_book", %{"key" => "garden"})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    ref = push(sock, "new_list", %{"name" => "Camping"})
+    assert_reply ref, :error, %{reason: "bad_request"}
   end
 
   test "garden and book-level writes are authorised by the TOKEN's user, not the topic suffix",
@@ -427,6 +439,39 @@ defmodule AppWeb.Panels.BooksChannelTest do
 
       assert [%{name: "Kale"}] = Garden.garden(bob.id).active
     end
+
+    test "revive_plant on an ACTIVE plant is bad_request", %{sock: sock, plant: plant} do
+      # own_plant/3 looks only in the ARCHIVED pool for a revive; a plant that
+      # is still active is not in the search space, exactly like archiving an
+      # already-archived one below. Merging the two pools would let this
+      # through.
+      ref = push(sock, "revive_plant", %{"id" => plant.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      assert [%{name: "Tomatoes"}] = Garden.garden(plant.user_id).active
+    end
+
+    test "archive_plant on an ALREADY-ARCHIVED plant is bad_request", %{sock: sock, alice: alice} do
+      {:ok, dormant} = Garden.add_plant(%{user_id: alice.id, household: false}, %{name: "Basil"})
+      {:ok, dormant} = Garden.archive_plant(dormant)
+
+      ref = push(sock, "archive_plant", %{"id" => dormant.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      assert Garden.garden(alice.id).archived_by_season
+             |> Enum.flat_map(fn {_season, ps} -> ps end)
+             |> Enum.any?(&(&1.id == dormant.id))
+    end
+
+    test "a HOUSEHOLD plant owned by someone else IS actionable — visible, not owned",
+         %{sock: sock, bob: bob} do
+      {:ok, shared} = Garden.add_plant(%{user_id: bob.id, household: true}, %{name: "Mint"})
+
+      ref = push(sock, "add_note", %{"plant_id" => shared.id, "body" => "watered"})
+      assert_reply ref, :ok
+
+      assert %{notes: [%{body: "watered"}]} =
+               Enum.find(Garden.garden(bob.id).active, &(&1.id == shared.id))
+    end
   end
 
   describe "clear_book" do
@@ -459,9 +504,22 @@ defmodule AppWeb.Panels.BooksChannelTest do
       assert_push "state", %{garden: %{active: [], past: [%{plants: [%{name: "Peas"}]}]}}
     end
 
-    test "on a list deleted mid-flight it is a no-op, not a crash",
+    test "a stale (already-deleted) list preference falls back instead of crashing",
          %{socket: socket, alice: alice} do
+      # NOT a mid-flight race: `Books.clear/1`'s `{:error, :not_found}` arm
+      # only fires for a list deleted BETWEEN `Books.for_user/1` and
+      # `Books.clear/1` inside the SAME handle_in call — a window this test
+      # cannot reach deterministically (no hook exists to pause the handler
+      # mid-call). Deleting the list up front instead exercises the channel's
+      # real defence for a stale pref: `current_book/2` re-resolves
+      # `books_last_book` via `Books.resolve/2` on every call, so a deleted
+      # list is simply absent from `Books.for_user/1`'s result and the pref
+      # falls back BEFORE `Books.clear/1` ever sees the stale id — here, to
+      # the household "Groceries" list (current_book/2's household-groceries
+      # priority), which is the one that actually gets cleared.
       list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      groceries = Lists.find_or_create_list(%{user_id: alice.id, household: true}, "Groceries")
+      {:ok, _} = Lists.add_item(groceries, "milk")
       {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
       {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
       assert_push "state", %{}
@@ -471,6 +529,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
 
       ref = push(sock, "clear_book", %{})
       assert_reply ref, :ok
+      assert_push "state", %{list: %{name: "Groceries", items: []}}
     end
   end
 
@@ -515,7 +574,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
     end
 
     test "new_list creates it, makes it current, and the handler must push it itself",
-         %{socket: socket, alice: alice} do
+         %{socket: socket, alice: alice, bob: bob} do
       {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{alice.id}", %{})
       assert_push "state", %{current_key: "garden"}
 
@@ -523,9 +582,15 @@ defmodule AppWeb.Panels.BooksChannelTest do
       assert_reply ref, :ok
       # find_or_create_list/2 is the ONE mutating function in App.Lists with no
       # broadcast (lists.ex:19-43); nothing rides here either.
-      assert_push "state", %{current_key: key, books: books, list: %{name: "Camping"}}
+      assert_push "state",
+                  %{current_key: key, books: books, list: %{name: "Camping", household: false}}
+
       assert Enum.map(books, & &1.label) == ["Camping", "Garden"]
       assert String.starts_with?(key, "list:")
+
+      # Personal, never household (conversation_live.ex:263) — a household
+      # list would be visible to every other user, so Bob must NOT see it.
+      refute Enum.any?(Lists.list_visible(bob.id), &(&1.name == "Camping"))
     end
 
     test "new_list with a blank name is bad_request and creates nothing",
