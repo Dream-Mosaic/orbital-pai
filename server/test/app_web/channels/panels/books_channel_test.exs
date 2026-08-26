@@ -2,7 +2,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
   # async: false — SQLite is single-writer and these tests write lists/plants.
   use AppWeb.ChannelCase, async: false
 
-  alias App.{Garden, Lists, Users}
+  alias App.{Garden, Lists, Repo, Users}
 
   setup do
     Application.put_env(:app, :allowed_users, [
@@ -201,6 +201,22 @@ defmodule AppWeb.Panels.BooksChannelTest do
        %{socket: socket, alice: alice} do
     {:ok, _reply, sock} = join!(socket, alice)
     assert_push "state", %{}
+    ref = push(sock, "nonsense", %{})
+    assert_reply ref, :error, %{reason: "bad_request"}
+  end
+
+  test "a user deleted between connect and join does not crash the channel",
+       %{socket: socket, alice: alice} do
+    # The socket already authenticated as Alice at connect/2 (setup, above).
+    # Deleting the row here — after connect, before join — is the cheapest
+    # honest way to put a live socket.assigns.user_id behind a Users.get/1
+    # that returns nil, the same race state/1's guard defends against.
+    {:ok, _} = Repo.delete(alice)
+
+    {:ok, _reply, sock} = join!(socket, alice)
+    refute_push "state", _, 200
+
+    # The channel process must still be alive and answering, not crashed.
     ref = push(sock, "nonsense", %{})
     assert_reply ref, :error, %{reason: "bad_request"}
   end

@@ -75,27 +75,45 @@ defmodule AppWeb.Panels.BooksChannel do
 
   @doc false
   # Public so Tasks 2 and 3's handlers can push after a non-broadcasting write.
+  # `state/1` returns nil for a deleted user (see its own guard below); a nil
+  # user means nothing to push, not a crash.
   def push_state(socket) do
-    push(socket, "state", state(socket.assigns.user_id))
-    socket
+    case state(socket.assigns.user_id) do
+      nil ->
+        socket
+
+      payload ->
+        push(socket, "state", payload)
+        socket
+    end
   end
 
   @doc false
+  # Same nil guard as SettingsChannel's/VoiceLockChannel's: Users.get/1 can
+  # return nil (no user-deletion path exists today, so this is defence-in-
+  # depth, not a live bug) — Books.for_user/1 has no clause for a nil user
+  # (it immediately dereferences user.id), so guard it here rather than let a
+  # bad :user_id crash the channel between join and its first push_state.
   def state(uid) do
-    # The pref lives on the user row (`books_last_book`), and the socket carries
-    # only the id — so re-read the user on every push or `select_book` would
-    # render the value it replaced.
-    user = Users.get(uid)
-    books = Books.for_user(user)
-    current = current_book(books, user)
+    case Users.get(uid) do
+      nil ->
+        nil
 
-    %{
-      books: Enum.map(books, &book/1),
-      current_key: current.key,
-      clear_confirm: BookFormat.clear_confirm(current),
-      list: list_body(current, uid),
-      garden: garden_body(current, uid)
-    }
+      user ->
+        # The pref lives on the user row (`books_last_book`), and the socket
+        # carries only the id — so re-read the user on every push or
+        # `select_book` would render the value it replaced.
+        books = Books.for_user(user)
+        current = current_book(books, user)
+
+        %{
+          books: Enum.map(books, &book/1),
+          current_key: current.key,
+          clear_confirm: BookFormat.clear_confirm(current),
+          list: list_body(current, uid),
+          garden: garden_body(current, uid)
+        }
+    end
   end
 
   # conversation_live.ex:584-600, verbatim. Fallback priority is the HOUSEHOLD
