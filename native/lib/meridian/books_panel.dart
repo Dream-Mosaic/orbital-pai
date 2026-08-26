@@ -4,17 +4,17 @@
 import 'package:flutter/material.dart' hide ListBody;
 
 import '../panels/books_client.dart';
+import 'books_garden.dart';
 import 'hero_icon.dart';
 import 'tokens.dart';
 
 /// The Books drawer's contents — the port of `books_panel/1` (and, for the
-/// current list's body, `lists_panel/1`) in
-/// `lib/app_web/components/voice_modals.ex` (~157-214, ~297-373): a header
-/// showing the current book's icon/label plus a type-aware "Clear ↻", a
-/// "Switch book" disclosure listing every book, and the current book's body.
-///
-/// **The garden body is Task 6.** `state.garden` renders `SizedBox.shrink()`
-/// here — see the `// Task 6` marker below.
+/// current list's body, `lists_panel/1`, and for the garden book,
+/// `garden_panel/1` in `books_garden.dart`) in
+/// `lib/app_web/components/voice_modals.ex` (~157-214, ~216-295, ~297-373): a
+/// header showing the current book's icon/label plus a type-aware
+/// "Clear ↻", a "Switch book" disclosure listing every book, and the current
+/// book's body.
 ///
 /// Server-authoritative, same pattern as the other panels: every write pushes
 /// and the UI re-renders from the next `state`. `state.books` and
@@ -271,8 +271,16 @@ class _BooksPanelViewState extends State<BooksPanelView> {
     final list = state.list;
     if (list != null) return _listBody(list, bottomInset);
     if (currentBook.kind == 'garden') {
-      // Task 6: the garden body (active plants + past seasons) lands here.
-      return const SizedBox.shrink();
+      final garden = state.garden;
+      // Defensive, same rationale as the :list branch below: the server
+      // pairs kind == 'garden' with a non-null `garden`, but a stale render
+      // mid-transition should not crash the drawer.
+      if (garden == null) return const SizedBox.shrink();
+      return BooksGardenBody(
+        garden: garden,
+        client: widget.client,
+        bottomInset: bottomInset,
+      );
     }
     if (currentBook.kind == 'list') {
       return Text(

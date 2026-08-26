@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart' hide ListBody;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
+import 'package:henry_wall/meridian/books_garden.dart';
 import 'package:henry_wall/meridian/books_panel.dart';
 import 'package:henry_wall/panels/books_client.dart';
 
@@ -70,6 +71,45 @@ String _groceriesFrame({
             ],
       },
       garden: null,
+    );
+
+Map<String, Object?> _note({required String body, required String noted}) =>
+    {'body': body, 'noted': noted};
+
+Map<String, Object?> _plant({
+  required int id,
+  required String name,
+  bool household = false,
+  String meta = '',
+  List<Map<String, Object?>> notes = const [],
+}) =>
+    {
+      'id': id,
+      'name': name,
+      'household': household,
+      'meta': meta,
+      'notes': notes,
+    };
+
+Map<String, Object?> _season({
+  required String season,
+  required List<Map<String, Object?>> plants,
+}) =>
+    {'season': season, 'plants': plants};
+
+/// A garden-current-book fixture: `active`/`past` default empty so each test
+/// only supplies what it needs.
+String _gardenFrame({
+  List<Map<String, Object?>> active = const [],
+  List<Map<String, Object?>> past = const [],
+}) =>
+    _stateFrame(
+      books: [
+        _book(key: 'garden', label: 'Garden', kind: 'garden', icon: 'sun'),
+      ],
+      currentKey: 'garden',
+      list: null,
+      garden: {'active': active, 'past': past},
     );
 
 void main() {
@@ -415,7 +455,8 @@ void main() {
     await conn.disconnect();
   });
 
-  testWidgets('the garden body renders SizedBox.shrink() (Task 6)',
+  testWidgets(
+      'an empty garden renders its own empty state, not the list body copy',
       (tester) async {
     final frame = _stateFrame(
       books: [
@@ -429,7 +470,10 @@ void main() {
     await pumpPanel(tester, client);
 
     expect(tester.takeException(), isNull);
-    // Nothing from lists_panel/garden_panel copy should have leaked in.
+    expect(
+        find.text('Nothing growing yet — just say what you planted.'),
+        findsOneWidget);
+    // Nothing from lists_panel copy should have leaked in.
     expect(find.text('Nothing on it yet.'), findsNothing);
     expect(find.text('That list is gone — pick another book above.'),
         findsNothing);
@@ -496,5 +540,262 @@ void main() {
     expect(find.text('Clear done'), findsOneWidget);
 
     await conn.disconnect();
+  });
+
+  group('garden body', () {
+    testWidgets(
+        'one card per active plant; the shared badge appears only for the '
+        'household one', (tester) async {
+      final frame = _gardenFrame(active: [
+        _plant(id: 1, name: 'Basil'),
+        _plant(id: 2, name: 'Tomatoes', household: true),
+      ]);
+      final (client, conn, _) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      expect(find.text('Basil'), findsOneWidget);
+      expect(find.text('Tomatoes'), findsOneWidget);
+      // A wrong implementation that always shows the badge would find two;
+      // one that never shows it would find none.
+      expect(find.text('shared'), findsOneWidget);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('meta renders when non-empty and is absent entirely when blank',
+        (tester) async {
+      final frame = _gardenFrame(active: [
+        _plant(id: 1, name: 'Tomatoes', meta: 'Roma · back bed · 5 plants'),
+        _plant(id: 2, name: 'Basil', meta: ''),
+      ]);
+      final (client, conn, _) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      expect(find.text('Roma · back bed · 5 plants'), findsOneWidget);
+      expect(find.byKey(BooksGardenBody.metaKey(1)), findsOneWidget);
+      // Blank meta must not render even an empty Text — the key itself must
+      // be absent, not just empty-looking.
+      expect(find.byKey(BooksGardenBody.metaKey(2)), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    group('notes disclosure', () {
+      testWidgets(
+          'appears only when the plant has notes, with the LAST note as its '
+          'summary — never the first note, and never the literal "Notes" '
+          'empty-summary fallback', (tester) async {
+        final frame = _gardenFrame(active: [
+          _plant(id: 1, name: 'Tomatoes', notes: [
+            _note(body: 'Watered', noted: 'Jul 1'),
+            _note(body: 'Staked and watered again', noted: 'Jul 15'),
+          ]),
+          _plant(id: 2, name: 'Basil'), // no notes at all
+        ]);
+        final (client, conn, _) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        // Tomatoes: disclosure present, collapsed, summary = LAST note —
+        // not the first (a wrong implementation might use notes.first).
+        expect(find.byKey(BooksGardenBody.notesToggleKey(1)), findsOneWidget);
+        expect(find.text('Staked and watered again'), findsOneWidget);
+        expect(find.text('Watered'), findsNothing);
+
+        // Basil: no notes — no disclosure at all. `latest_note_line/1`'s
+        // "Notes" fallback (book_format.ex:37-42) only fires for an empty
+        // notes list, but garden_panel/1 gates the whole <details> on
+        // `plant.notes != []` (voice_modals.ex:248) — so that fallback can
+        // never actually reach the screen on the web either. This asserts
+        // the disclosure is simply absent, not present-with-"Notes".
+        expect(find.byKey(BooksGardenBody.notesToggleKey(2)), findsNothing);
+        expect(find.text('Notes'), findsNothing);
+
+        await conn.disconnect();
+      });
+
+      testWidgets('expanding reveals every note with its noted date',
+          (tester) async {
+        final frame = _gardenFrame(active: [
+          _plant(id: 1, name: 'Tomatoes', notes: [
+            _note(body: 'Watered', noted: 'Jul 1'),
+            _note(body: 'Staked and watered again', noted: 'Jul 15'),
+          ]),
+        ]);
+        final (client, conn, _) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.notesToggleKey(1)));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Watered'), findsOneWidget);
+        expect(find.text('Jul 1'), findsOneWidget);
+        // The latest note now appears twice: once as the (still-visible)
+        // summary line, once again as its own row in the expanded list —
+        // proving the summary doesn't disappear and the list isn't missing
+        // its last entry.
+        expect(find.text('Staked and watered again'), findsNWidgets(2));
+        expect(find.text('Jul 15'), findsOneWidget);
+
+        await conn.disconnect();
+      });
+    });
+
+    testWidgets(
+        "the add-note placeholder interpolates the plant's name, and "
+        'submitting pushes add_note', (tester) async {
+      final frame = _gardenFrame(active: [_plant(id: 7, name: 'Tomatoes')]);
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      final field = tester
+          .widget<TextField>(find.byKey(BooksGardenBody.noteFieldKey(7)));
+      expect(field.decoration?.hintText, 'Check in on Tomatoes…');
+
+      await tester.enterText(
+          find.byKey(BooksGardenBody.noteFieldKey(7)), 'Looking healthy');
+      await tester.tap(find.byKey(BooksGardenBody.noteButtonKey(7)));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:books:henry',
+        'add_note',
+        {'plant_id': 7, 'body': 'Looking healthy'},
+      ]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('a blank add-note submission pushes nothing', (tester) async {
+      final frame = _gardenFrame(active: [_plant(id: 7, name: 'Tomatoes')]);
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      await tester.enterText(
+          find.byKey(BooksGardenBody.noteFieldKey(7)), '   ');
+      await tester.tap(find.byKey(BooksGardenBody.noteButtonKey(7)));
+      await tester.pump();
+
+      expect(anyPushOf(fake, 'add_note'), isFalse,
+          reason: 'whitespace-only note body must not push');
+
+      await conn.disconnect();
+    });
+
+    group('Archive', () {
+      testWidgets(
+          'opens a confirm reading "Move <name> to past seasons?"; '
+          'cancelling pushes nothing', (tester) async {
+        final frame = _gardenFrame(active: [_plant(id: 4, name: 'Tomatoes')]);
+        final (client, conn, fake) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.archiveKey(4)));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Move Tomatoes to past seasons?'), findsOneWidget);
+
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(anyPushOf(fake, 'archive_plant'), isFalse);
+
+        await conn.disconnect();
+      });
+
+      testWidgets('confirming pushes archive_plant with the plant id',
+          (tester) async {
+        final frame = _gardenFrame(active: [_plant(id: 4, name: 'Tomatoes')]);
+        final (client, conn, fake) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        await tester.tap(find.byKey(BooksGardenBody.archiveKey(4)));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('OK'));
+        await tester.pumpAndSettle();
+
+        expect(
+            lastPush(fake), ['panel:books:henry', 'archive_plant', {'id': 4}]);
+
+        await conn.disconnect();
+      });
+    });
+
+    testWidgets(
+        '"Nothing growing yet — just say what you planted." shows only '
+        'when active is empty', (tester) async {
+      final (emptyClient, emptyConn, _) =
+          await openedClient(tester, _gardenFrame());
+      await pumpPanel(tester, emptyClient);
+      expect(find.text('Nothing growing yet — just say what you planted.'),
+          findsOneWidget);
+      await emptyConn.disconnect();
+
+      final (client, conn, _) = await openedClient(
+        tester,
+        _gardenFrame(active: [_plant(id: 1, name: 'Tomatoes')]),
+      );
+      await pumpPanel(tester, client);
+      expect(find.text('Nothing growing yet — just say what you planted.'),
+          findsNothing);
+      await conn.disconnect();
+    });
+
+    group('Past seasons', () {
+      testWidgets('absent when past is empty', (tester) async {
+        final (client, conn, _) = await openedClient(
+          tester,
+          _gardenFrame(active: [_plant(id: 1, name: 'Tomatoes')]),
+        );
+        await pumpPanel(tester, client);
+
+        expect(find.text('Past seasons'), findsNothing);
+
+        await conn.disconnect();
+      });
+
+      testWidgets(
+          'present and collapsed when non-empty; expanding reveals seasons '
+          "in the server's order, each with its plants and a working Revive",
+          (tester) async {
+        // The correct (server-given) order below — 2, 3, 1 — is neither
+        // ascending (1, 2, 3) nor descending (3, 2, 1) nor any order a
+        // two-season fixture could produce by accident; a sorting or
+        // reversing bug in the render would move at least one season.
+        final frame = _gardenFrame(past: [
+          _season(season: 'Season 2', plants: [_plant(id: 101, name: 'Mint')]),
+          _season(season: 'Season 3', plants: [_plant(id: 102, name: 'Kale')]),
+          _season(
+              season: 'Season 1', plants: [_plant(id: 103, name: 'Chives')]),
+        ]);
+        final (client, conn, fake) = await openedClient(tester, frame);
+        await pumpPanel(tester, client);
+
+        expect(find.text('Past seasons'), findsOneWidget);
+        // Collapsed: none of the season content is in the tree yet.
+        expect(find.text('Mint'), findsNothing);
+        expect(find.text('Season 2'), findsNothing);
+
+        await tester.tap(find.byKey(BooksGardenBody.pastSeasonsToggleKey));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Mint'), findsOneWidget);
+        expect(find.text('Kale'), findsOneWidget);
+        expect(find.text('Chives'), findsOneWidget);
+
+        final season2Y = tester.getTopLeft(find.text('Season 2')).dy;
+        final season3Y = tester.getTopLeft(find.text('Season 3')).dy;
+        final season1Y = tester.getTopLeft(find.text('Season 1')).dy;
+        expect(season2Y, lessThan(season3Y));
+        expect(season3Y, lessThan(season1Y));
+
+        await tester.tap(find.byKey(BooksGardenBody.reviveKey(102)));
+        await tester.pump();
+
+        expect(lastPush(fake),
+            ['panel:books:henry', 'revive_plant', {'id': 102}]);
+
+        await conn.disconnect();
+      });
+    });
   });
 }
