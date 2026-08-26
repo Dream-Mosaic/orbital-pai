@@ -250,7 +250,8 @@ void main() {
     final pushCases = <_PushCase>[
       _PushCase('selectBook', (c) => c.selectBook('list:3'), 'select_book', {'key': 'list:3'}),
       _PushCase('newList', (c) => c.newList('Snacks'), 'new_list', {'name': 'Snacks'}),
-      _PushCase('clearBook', (c) => c.clearBook(), 'clear_book', const {}),
+      _PushCase('clearBook', (c) => c.clearBook('garden'), 'clear_book',
+          {'key': 'garden'}),
       _PushCase('toggleItem', (c) => c.toggleItem(9), 'toggle_item', {'id': 9}),
       _PushCase(
         'addItem',

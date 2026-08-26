@@ -257,7 +257,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
     # The three book-level handlers (clear_book, select_book, new_list) each
     # independently call Users.get/1 and dereference the result — a nil user
     # must reply bad_request, not crash the channel with a BadMapError.
-    ref = push(sock, "clear_book", %{})
+    ref = push(sock, "clear_book", %{"key" => "garden"})
     assert_reply ref, :error, %{reason: "bad_request"}
 
     ref = push(sock, "select_book", %{"key" => "garden"})
@@ -483,7 +483,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
       {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
       assert_push "state", %{}
 
-      ref = push(sock, "clear_book", %{})
+      ref = push(sock, "clear_book", %{"key" => "list:#{list.id}"})
       assert_reply ref, :ok
       assert_push "state", %{list: %{name: "Apples", items: []}}
       assert Lists.list_visible(u.id) |> Enum.map(& &1.name) == ["Apples"]
@@ -499,9 +499,55 @@ defmodule AppWeb.Panels.BooksChannelTest do
       {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
       assert_push "state", %{}
 
-      ref = push(sock, "clear_book", %{})
+      ref = push(sock, "clear_book", %{"key" => "garden"})
       assert_reply ref, :ok
       assert_push "state", %{garden: %{active: [], past: [%{plants: [%{name: "Peas"}]}]}}
+    end
+
+    test "a key naming a book that is no longer current destroys NOTHING and replies stale",
+         %{socket: socket, alice: alice} do
+      # The panel's `clear_confirm` is a SNAPSHOT. If the current book changes
+      # from another surface — the web calling select_book, which broadcasts
+      # nothing (users.ex:86-88) — an open panel still shows the OLD book's
+      # dialog. Without the key check the server would clear whatever is current
+      # NOW, i.e. a different book than the sentence the user just consented to.
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, _} = Lists.add_item(list, "milk")
+      {:ok, _} = Garden.add_plant(%{user_id: alice.id, household: false}, %{name: "Peas"})
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{current_key: key}
+      assert key == "list:#{list.id}"
+
+      # Another surface switches the book. This channel is never told.
+      {:ok, _} = Users.update_prefs(u, %{books_last_book: "garden"})
+
+      # The panel still believes it is showing Apples, and says so.
+      ref = push(sock, "clear_book", %{"key" => "list:#{list.id}"})
+      assert_reply ref, :error, %{reason: "stale"}
+
+      # NEITHER book was touched. Ignoring the key would have closed the season.
+      assert [%{text: "milk"}] = Lists.with_items(list).items
+      assert [%{name: "Peas"}] = Garden.garden(u.id).active
+
+      # And the panel is corrected, so the next dialog matches reality.
+      assert_push "state", %{current_key: "garden"}
+    end
+
+    test "a missing or non-binary key is bad_request and destroys nothing",
+         %{socket: socket, alice: alice} do
+      list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
+      {:ok, _} = Lists.add_item(list, "milk")
+      {:ok, u} = Users.update_prefs(alice, %{books_last_book: "list:#{list.id}"})
+      {:ok, _reply, sock} = subscribe_and_join(socket, "panel:books:#{u.id}", %{})
+      assert_push "state", %{}
+
+      for payload <- [%{}, %{"key" => 3}, %{"key" => nil}] do
+        ref = push(sock, "clear_book", payload)
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      assert [%{text: "milk"}] = Lists.with_items(list).items
     end
 
     test "a stale (already-deleted) list preference falls back instead of crashing",
@@ -527,7 +573,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
       {:ok, _} = Lists.delete_list(list)
       assert_push "state", %{}
 
-      ref = push(sock, "clear_book", %{})
+      ref = push(sock, "clear_book", %{"key" => "list:#{groceries.id}"})
       assert_reply ref, :ok
       assert_push "state", %{list: %{name: "Groceries", items: []}}
     end

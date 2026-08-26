@@ -163,11 +163,25 @@ defmodule AppWeb.Panels.BooksChannel do
 
   # ---- inbound: book-level writes ----
 
-  # No argument on purpose. This is the most destructive control on the panel,
-  # and the book it acts on is the one the SERVER has stored — a client-supplied
-  # key would let a stale panel empty the wrong list. Same as the web
-  # (conversation_live.ex:280 reads its own assign).
-  def handle_in("clear_book", _payload, socket) do
+  # The `key` is a PRECONDITION, never the target. The server still resolves the
+  # book itself, exactly as it always did; the client's key only says which book
+  # the user was LOOKING AT when they consented.
+  #
+  # An earlier version took no argument, on the reasoning that a server-derived
+  # target cannot be steered by a stale client. That reasoning was backwards,
+  # and it shipped a real bug: `clear_confirm` is a SNAPSHOT pushed with `state`,
+  # while the target was re-resolved from the shared `books_last_book` pref at
+  # tap time — and `Users.update_prefs/2` broadcasts nothing (users.ex:86-88),
+  # so a `select_book` on the WEB never reaches an open native panel. The user
+  # then read "Clear everything off Groceries?" and closed out the GARDEN
+  # season instead.
+  #
+  # The web is not a precedent for the old shape: `conversation_live.ex:280`
+  # reads its OWN session assign, so its dialog and its action come from one
+  # self-consistent snapshot. This channel reads a pref another surface can
+  # change underneath it. Consent is bound to what the user read, so the read
+  # has to be part of the request.
+  def handle_in("clear_book", %{"key" => key}, socket) when is_binary(key) do
     # Same nil-user guard as state/1 (Users.get/1 can return nil — see its own
     # doc): every branch below dereferences the user, so an unguarded nil
     # crashes the channel with a BadMapError instead of replying bad_request.
@@ -176,14 +190,21 @@ defmodule AppWeb.Panels.BooksChannel do
         {:reply, {:error, %{reason: "bad_request"}}, socket}
 
       user ->
-        books = Books.for_user(user)
-        # Books.clear/1 returns {:error, :not_found} when the list was deleted
-        # between resolve and click (books.ex:90-98). Ignore the outcome rather
-        # than hard-matching :ok — a MatchError here kills the panel, and the
-        # next push re-resolves to a fallback anyway. conversation_live.ex:276-279
-        # explains it.
-        Books.clear(current_book(books, user))
-        {:reply, :ok, socket}
+        current = current_book(Books.for_user(user), user)
+
+        if current.key == key do
+          # Books.clear/1 returns {:error, :not_found} when the list was deleted
+          # between resolve and click (books.ex:90-98). Ignore the outcome rather
+          # than hard-matching :ok — a MatchError here kills the panel, and the
+          # next push re-resolves to a fallback anyway. conversation_live.ex:276-279
+          # explains it.
+          Books.clear(current)
+          {:reply, :ok, socket}
+        else
+          # Destroy NOTHING, and push the truth so the panel corrects itself and
+          # the user can re-read a dialog that matches reality.
+          {:reply, {:error, %{reason: "stale"}}, push_state(socket)}
+        end
     end
   end
 

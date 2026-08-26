@@ -92,8 +92,15 @@ class _BooksPanelViewState extends State<BooksPanelView> {
     _addItemCtrl.clear();
   }
 
-  Future<void> _clearBook(BuildContext context, String question) async {
-    if (await _confirm(context, question)) widget.client.clearBook();
+  /// [question] and [key] MUST come from the same [BooksState] snapshot: the
+  /// sentence the user reads and the book they are consenting to destroy have
+  /// to be the same book. The server re-checks the key and refuses with `stale`
+  /// if the current book moved underneath us (the web can switch it, and that
+  /// write broadcasts nothing), then pushes fresh state so the next dialog is
+  /// honest.
+  Future<void> _clearBook(
+      BuildContext context, String question, String key) async {
+    if (await _confirm(context, question)) widget.client.clearBook(key);
   }
 
   Future<void> _deleteList(BuildContext context, int id, String name) async {
@@ -152,7 +159,9 @@ class _BooksPanelViewState extends State<BooksPanelView> {
             ),
             _ghostTextButton(
               'Clear ↻',
-              onTap: () => _clearBook(context, state.clearConfirm),
+              // Both arguments from `state` — the same snapshot, deliberately.
+              onTap: () =>
+                  _clearBook(context, state.clearConfirm, state.currentKey),
             ),
           ],
         ),

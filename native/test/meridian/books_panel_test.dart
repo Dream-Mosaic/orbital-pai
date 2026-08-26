@@ -748,7 +748,48 @@ void main() {
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
 
-      expect(lastPush(fake), ['panel:books:henry', 'clear_book', {}]);
+      // Pins that a key is sent at all, and its value on this fixture. It does
+      // NOT pin WHICH field it came from: here books.first.key == currentKey,
+      // so a `state.books.first.key` binding passes too. The next test exists
+      // precisely to separate them — don't delete it as a duplicate.
+      expect(lastPush(fake),
+          ['panel:books:henry', 'clear_book', {'key': 'list:3'}]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'the key is the CURRENT book, not books.first — a decoy sits first',
+        (tester) async {
+      // Same decoy shape as the header test: garden listed FIRST, list:3
+      // current. books.first.key ('garden') and currentKey ('list:3') now
+      // DISAGREE, so a binding to the wrong one is visible. Getting this wrong
+      // is not cosmetic — the key is the precondition guarding the panel's most
+      // destructive control, and sending 'garden' while the dialog said
+      // Groceries would make the server refuse a legitimate clear forever.
+      final frame = _stateFrame(
+        books: [
+          _book(key: 'garden', label: 'Garden', kind: 'garden', icon: 'sun'),
+          _book(
+              key: 'list:3',
+              label: 'Groceries List',
+              kind: 'list',
+              icon: 'clipboard-document-list'),
+        ],
+        currentKey: 'list:3',
+        list: {'id': 3, 'name': 'Groceries', 'household': false, 'items': const []},
+        garden: null,
+      );
+      final (client, conn, fake) = await openedClient(tester, frame);
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.text('Clear ↻'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(lastPush(fake),
+          ['panel:books:henry', 'clear_book', {'key': 'list:3'}]);
 
       await conn.disconnect();
     });

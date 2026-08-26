@@ -289,7 +289,15 @@ class BooksClient extends ChangeNotifier {
   /// No book argument on purpose: the server acts on the book it has stored
   /// as current, because this is the panel's most destructive control. A
   /// client-supplied key would let a stale panel empty the wrong list.
-  void clearBook() => _push('clear_book', const {});
+  /// Clear the current book. [key] is the key of the book the user was LOOKING
+  /// AT when they confirmed — it is a precondition, not a target: the server
+  /// resolves the book itself and refuses with `stale` if the two disagree.
+  ///
+  /// Pass the key from the SAME state snapshot that produced the confirmation
+  /// text you showed. The pref is shared with the web, `update_prefs` broadcasts
+  /// nothing, and this is the panel's most destructive control — so consent has
+  /// to name what it consented to.
+  void clearBook(String key) => _push('clear_book', {'key': key});
 
   void toggleItem(int id) => _push('toggle_item', {'id': id});
 
