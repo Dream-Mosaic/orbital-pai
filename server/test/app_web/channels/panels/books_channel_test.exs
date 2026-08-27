@@ -28,6 +28,27 @@ defmodule AppWeb.Panels.BooksChannelTest do
     u
   end
 
+  # F5 (final review): a write this file makes can broadcast MORE re-pushes than a test asserts on
+  # — a household write also lands on the shared household topic this channel subscribes to, and
+  # `clear_book` on the garden closes both a personal AND a household season, so it broadcasts
+  # three times (see the moduledoc's "Duplicate pushes are expected"). A test that stops asserting
+  # once its own state has settled leaves the channel process still working through the REST of
+  # those re-pushes when the test function returns. `Phoenix.ChannelTest` links the channel to the
+  # test process, and ExUnit's own test runner ends that process with a hard `exit(:shutdown)` —
+  # not a graceful stop — the instant the test body returns (`ex_unit/runner.ex`'s
+  # `spawn_test_monitor/4`). If the channel is still mid-query when that signal lands, it dies
+  # mid-`Ecto` call; for SQLite (one shared sandbox connection, single writer) that abrupt kill can
+  # strand the connection's lock, which then surfaces as "Database busy" in a LATER, unrelated
+  # test's `setup` — not in the test that actually caused it. `push/3` is sent from THIS process,
+  # so Erlang's per-sender FIFO ordering guarantees this unrecognised event lands in the channel's
+  # mailbox AFTER every broadcast already in flight; blocking on its reply proves the channel has
+  # fully drained — including any trailing duplicate this test's own assertions did not wait for —
+  # before the test ends.
+  defp drain!(sock) do
+    ref = push(sock, "__test_drain__", %{})
+    assert_reply ref, :error, %{reason: "bad_request"}
+  end
+
   test "join pushes books name-sorted with the garden last", %{socket: socket, alice: alice} do
     list!(alice, "Zucchini")
     list!(alice, "Apples")
@@ -387,6 +408,11 @@ defmodule AppWeb.Panels.BooksChannelTest do
       ref = push(sock, "add_item", %{"list_id" => shared.id, "text" => "bread"})
       assert_reply ref, :ok
       assert [%{text: "bread"}] = Lists.with_items(shared).items
+
+      # add_item on a HOUSEHOLD list broadcasts on "lists:household" too, which this channel
+      # (alice's) is subscribed to — a re-push this test never asserts on. drain!/1 (see its doc)
+      # waits for it so the channel isn't still mid-query when the test process exits.
+      drain!(sock)
     end
   end
 
@@ -460,6 +486,10 @@ defmodule AppWeb.Panels.BooksChannelTest do
       assert Garden.garden(alice.id).archived_by_season
              |> Enum.flat_map(fn {_season, ps} -> ps end)
              |> Enum.any?(&(&1.id == dormant.id))
+
+      # add_plant and archive_plant each broadcast (this channel's own topic) and neither re-push
+      # is asserted above — drain!/1 (see its doc) waits for both before the test ends.
+      drain!(sock)
     end
 
     test "a HOUSEHOLD plant owned by someone else IS actionable — visible, not owned",
@@ -471,6 +501,11 @@ defmodule AppWeb.Panels.BooksChannelTest do
 
       assert %{notes: [%{body: "watered"}]} =
                Enum.find(Garden.garden(bob.id).active, &(&1.id == shared.id))
+
+      # Both add_plant and add_note broadcast on "garden:household", which this channel (alice's)
+      # is subscribed to — two re-pushes this test never asserts on. drain!/1 (see its doc) waits
+      # for both before the test ends.
+      drain!(sock)
     end
   end
 
@@ -502,6 +537,13 @@ defmodule AppWeb.Panels.BooksChannelTest do
       ref = push(sock, "clear_book", %{"key" => "garden"})
       assert_reply ref, :ok
       assert_push "state", %{garden: %{active: [], past: [%{plants: [%{name: "Peas"}]}]}}
+
+      # Closing the garden book closes BOTH the personal and household seasons (books.ex), and the
+      # household close alone broadcasts twice (its own topic + "garden:household") — three
+      # re-pushes total, all carrying the same settled state, so the assert above can match the
+      # FIRST one and return while the other two are still in flight. drain!/1 (see its doc) waits
+      # for the channel to actually finish before the test ends.
+      drain!(sock)
     end
 
     test "a key naming a book that is no longer current destroys NOTHING and replies stale",
@@ -576,6 +618,12 @@ defmodule AppWeb.Panels.BooksChannelTest do
       ref = push(sock, "clear_book", %{"key" => "list:#{groceries.id}"})
       assert_reply ref, :ok
       assert_push "state", %{list: %{name: "Groceries", items: []}}
+
+      # Groceries is a HOUSEHOLD list, so clearing it broadcasts twice (its own topic +
+      # "lists:household") — the assert above can match the first, identical re-push and return
+      # while the second is still in flight. drain!/1 (see its doc) waits for the channel to
+      # actually finish before the test ends.
+      drain!(sock)
     end
   end
 
