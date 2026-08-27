@@ -64,14 +64,142 @@ class Connection {
       );
 }
 
+/// One option of a `"choice"` [FormField] — e.g. {"value": "read", "label":
+/// "read"} for the access-level picker.
+class FieldOption {
+  const FieldOption({required this.value, this.label = ''});
+
+  /// The wire value; pushed verbatim as part of `grant_url`'s `fields` map.
+  final String value;
+  final String label;
+
+  static FieldOption fromJson(Map<String, dynamic> j) => FieldOption(
+        value: j['value'] as String,
+        label: j['label'] as String? ?? '',
+      );
+}
+
+/// One field of a [ConnectorSpec]'s form, e.g. the account picker or the
+/// access-level choice.
+///
+/// [type] is a free-form string the server can extend without a client
+/// release — Home Assistant and CouchDB are queued providers whose forms will
+/// need field types this client has never seen (see
+/// `connectors_channel.ex`'s moduledoc). An unrecognized [type] MUST still
+/// parse here: rendering it is Task 4's problem, and dropping the whole
+/// connector over one unfamiliar field would hide a server capability behind
+/// a client that simply hadn't caught up yet.
+class FormField {
+  const FormField({
+    required this.name,
+    this.label = '',
+    this.type = '',
+    this.required = false,
+    this.options = const [],
+  });
+
+  /// The key this field's value is pushed under inside `grant_url`'s `fields`
+  /// map. A field without one cannot be acted on, so the catalog parser drops
+  /// the whole field rather than keep an unaddressable one.
+  final String name;
+  final String label;
+
+  /// "account_select" | "choice" | anything a future provider adds. Never
+  /// validated against a known set — see the class doc.
+  final String type;
+  final bool required;
+
+  /// Only meaningful for a "choice"-shaped field; empty for anything else.
+  final List<FieldOption> options;
+
+  static FormField fromJson(Map<String, dynamic> j) => FormField(
+        name: j['name'] as String,
+        label: j['label'] as String? ?? '',
+        type: j['type'] as String? ?? '',
+        required: j['required'] == true,
+        options: _options(j['options']),
+      );
+
+  // A value-less option cannot be selected (there would be nothing to push),
+  // so drop just that option — filtered, not cast, same discipline as every
+  // list below.
+  static List<FieldOption> _options(Object? raw) => raw is List
+      ? raw
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .where((m) => m['value'] is String)
+          .map(FieldOption.fromJson)
+          .toList(growable: false)
+      : const [];
+}
+
+/// One entry of the connectors catalog: describes how to ADD or CHANGE a
+/// connector, as opposed to [Connection] which describes one already granted.
+///
+/// `kind` says how the flow completes ("oauth_redirect" is the only one
+/// implemented server-side today); `fields` is the form this client renders.
+/// A new provider (Home Assistant, CouchDB — see `IDEAS.md`) is meant to show
+/// up here with no Dart change, which is the whole reason the shape is
+/// generic rather than baking in "account" and "level" by name.
+class ConnectorSpec {
+  const ConnectorSpec({
+    required this.key,
+    this.label = '',
+    this.provider = '',
+    this.kind = '',
+    this.fields = const [],
+  });
+
+  /// "calendar" | "gmail" — the handle [ConnectorsClient.grantUrl] pushes.
+  final String key;
+  final String label;
+
+  /// "google" today; the field that will distinguish Home Assistant/CouchDB
+  /// entries once they exist.
+  final String provider;
+
+  /// "oauth_redirect" is the only flow this client knows how to complete
+  /// (open the returned URL in the system browser). An unrecognized kind
+  /// still parses — same reasoning as [FormField.type] — a future provider's
+  /// flow just isn't renderable yet.
+  final String kind;
+  final List<FormField> fields;
+
+  static ConnectorSpec fromJson(Map<String, dynamic> j) => ConnectorSpec(
+        key: j['key'] as String,
+        label: j['label'] as String? ?? '',
+        provider: j['provider'] as String? ?? '',
+        kind: j['kind'] as String? ?? '',
+        fields: _fields(j['fields']),
+      );
+
+  // name is the handle grant_url's `fields` map keys off of, so a field
+  // without one cannot be rendered into anything actionable — drop just that
+  // field, the rest of the form still lands.
+  static List<FormField> _fields(Object? raw) => raw is List
+      ? raw
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .where((m) => m['name'] is String)
+          .map(FormField.fromJson)
+          .toList(growable: false)
+      : const [];
+}
+
 /// The Connectors drawer's state, as the server rendered it.
 class ConnectorsState {
-  const ConnectorsState({required this.connections});
+  const ConnectorsState({required this.connections, this.catalog = const []});
 
   final List<Connection> connections;
 
-  static ConnectorsState fromJson(Map<String, dynamic> j) =>
-      ConnectorsState(connections: _connections(j['connections']));
+  /// What CAN be added/changed, independent of [connections] (what already
+  /// IS). Server-ordered (`Connectors.all/0`); never re-sort here.
+  final List<ConnectorSpec> catalog;
+
+  static ConnectorsState fromJson(Map<String, dynamic> j) => ConnectorsState(
+        connections: _connections(j['connections']),
+        catalog: _catalog(j['catalog']),
+      );
 
   // account_id and connector are the two handles a write pushes, so a row
   // missing either cannot be acted on — drop just that row rather than letting
@@ -84,6 +212,20 @@ class ConnectorsState {
           .map((m) => m.cast<String, dynamic>())
           .where((m) => m['account_id'] is num && m['connector'] is String)
           .map(Connection.fromJson)
+          .toList(growable: false)
+      : const [];
+
+  // key is the handle grant_url pushes, so an entry without one cannot be
+  // acted on — drop just that entry, its siblings still land. This is the
+  // ONLY filter here: everything else (label, provider, kind, fields, and any
+  // field's type) is free-form and must survive even when unfamiliar — see
+  // ConnectorSpec's and FormField's class docs.
+  static List<ConnectorSpec> _catalog(Object? raw) => raw is List
+      ? raw
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .where((m) => m['key'] is String)
+          .map(ConnectorSpec.fromJson)
           .toList(growable: false)
       : const [];
 }
@@ -104,27 +246,56 @@ class ConnectorsClient extends ChangeNotifier {
   ConnectorsState? _state;
   bool _open = false;
   bool _disposed = false;
-  bool _needsWeb = false;
+
+  // ---- reply correlation ----
+  //
+  // PhoenixChannel.push (phoenix_channel.dart) returns void. The real per-push
+  // ref lives one layer down, in PhoenixSocket's `_pendingRefs` — it is what
+  // routes each phx_reply back to the channel that sent the matching push —
+  // but that ref never crosses back out through `push`'s void return, so a
+  // caller at this level has no ref to key a Future (or a map of Futures) by.
+  // A queue keyed by ref is therefore not buildable from here without
+  // widening PhoenixChannel's API, which is out of scope for this change.
+  //
+  // What IS true, and enough on its own: this topic's handlers
+  // (`set_default`/`disconnect`/`grant_url` in connectors_channel.ex) all
+  // reply synchronously and inline from `handle_in`, so replies land on the
+  // wire in the same order the requests were sent. A SINGLE slot recording
+  // which request is outstanding is therefore a correct correlation
+  // mechanism, on one condition: at most one request may be in flight at a
+  // time. That is exactly what the UI already guarantees by construction (a
+  // form submit or a Disconnect tap, never both at once) — but trusting that
+  // from the outside would make correlation correct by accident. So `_push`
+  // ENFORCES it instead of assuming it: a second push while `_pending` is
+  // still set is dropped, the same way a push before the join reply is
+  // dropped. With that guard in place, a reply can only ever be interpreted
+  // as the answer to the one request that could have produced it — a `url`
+  // meant for `grant_url` can never be read as the answer to a `disconnect`,
+  // or vice versa, because the second request is never sent while the first
+  // is still outstanding. See the "a second push while one is pending is
+  // dropped" test for the failure mode this closes off.
+  String? _pending;
+
+  /// The URL the server just replied with for a `grant_url` push, or for a
+  /// `disconnect` that deferred a reduction to Google's consent screen (see
+  /// `ConnectorsChannel.handle_in("disconnect", ...)`). The native client's
+  /// job is to open this in the system browser; nothing local changes until
+  /// that flow completes server-side.
+  String? _oauthUrl;
 
   ConnectorsState? get state => _state;
   bool get isOpen => _open;
 
-  /// The server refused the last `disconnect` because that account holds
-  /// another connector, so reducing it needs Google's consent page.
-  ///
-  /// A FLAG rather than a Future, because PhoenixChannel.push returns void:
-  /// there is no ref to correlate a reply with, and this topic answers two
-  /// events. The `needs_web` REASON is unambiguous though — only the
-  /// disconnect handler produces it — and a transport failure produces no
-  /// reply at all, so this stays false for one. That is the distinction the
-  /// view needs: a sentence about the browser, not a generic error.
-  bool get needsWeb => _needsWeb;
+  /// See [_pending]'s doc for why this is surfaced as a plain nullable field
+  /// rather than a Future: there is nothing here to await against per-call,
+  /// only "the most recent reply that carried a url".
+  String? get oauthUrl => _oauthUrl;
 
-  /// The view calls this once it has shown the explanation, so a later
-  /// rebuild does not show it again.
-  void ackNeedsWeb() {
-    if (!_needsWeb) return;
-    _needsWeb = false;
+  /// The view calls this once it has opened [oauthUrl] in the system browser,
+  /// so a later rebuild does not reopen it.
+  void ackOauthUrl() {
+    if (_oauthUrl == null) return;
+    _oauthUrl = null;
     _notify();
   }
 
@@ -142,7 +313,8 @@ class ConnectorsClient extends ChangeNotifier {
     _sub = null;
     _channel = null;
     _state = null;
-    _needsWeb = false;
+    _pending = null;
+    _oauthUrl = null;
     _notify();
   }
 
@@ -151,14 +323,36 @@ class ConnectorsClient extends ChangeNotifier {
   /// Push a disconnect. The payload carries NO `only_grant`: the server
   /// re-derives it, and a client that volunteers one is only offering a stale
   /// answer to a question it cannot answer.
+  ///
+  /// The reply is either a bare `:ok` (the account was deleted; a fresh
+  /// `state` follows) or `{:ok, %{url: ...}}` (this account holds more than
+  /// just [connector], so the reduction needs Google's consent screen — see
+  /// [oauthUrl]).
   void disconnect({required int accountId, required String connector}) =>
       _push('disconnect', {'account_id': accountId, 'connector': connector});
+
+  /// Ask the server for the URL that starts (or changes) a connector grant.
+  /// [fields] mirrors the catalog entry's [ConnectorSpec.fields] by name —
+  /// today that is `{"account": <id>|"new", "level": "none"|"read"|"write"}`
+  /// for Google, but this method does not know that shape; it only forwards
+  /// whatever the caller built from the catalog. [oauthUrl] carries the
+  /// reply.
+  void grantUrl({
+    required String connector,
+    required Map<String, Object?> fields,
+  }) =>
+      _push('grant_url', {'connector': connector, 'fields': fields});
 
   bool _push(String event, Map<String, dynamic> payload) {
     final ch = _channel;
     // Phoenix answers a frame on a topic it has not joined with "unmatched
     // topic", so a write between open() and the join reply is silently lost.
     if (ch == null || !ch.isJoined) return false;
+    // See the "reply correlation" doc above _pending: at most one request may
+    // be outstanding on this topic, or a later reply could be misread as the
+    // answer to an earlier request. Enforced here, not merely assumed.
+    if (_pending != null) return false;
+    _pending = event;
     ch.push(event, payload);
     return true;
   }
@@ -167,6 +361,10 @@ class ConnectorsClient extends ChangeNotifier {
   /// straight behind its join reply and `messages` is unbuffered.
   void _adopt(PhoenixChannel ch) {
     _channel = ch;
+    // A fresh channel means any request pending on the OLD one will never see
+    // its reply (that stream is gone) — holding the slot open would wedge
+    // every future push behind a reply that can no longer arrive.
+    _pending = null;
     unawaited(_sub?.cancel());
     _sub = ch.messages.listen(_onMessage);
   }
@@ -177,10 +375,20 @@ class ConnectorsClient extends ChangeNotifier {
       _notify();
       return;
     }
-    if (m.event != 'phx_reply' || m.replyStatus == 'ok') return;
+    if (m.event != 'phx_reply') return;
+    // Whatever this reply answers, it resolves the one outstanding request —
+    // see the correlation doc above _pending.
+    final answered = _pending;
+    _pending = null;
+    if (m.replyStatus != 'ok') return;
+    // Only these two handlers can ever produce a url (connectors_channel.ex);
+    // guarding on `answered` means an :ok `set_default` reply — which echoes
+    // no url — cannot accidentally pick one up from a stray payload shape.
+    if (answered != 'disconnect' && answered != 'grant_url') return;
     final resp = m.json?['response'];
-    if (resp is Map && resp['reason'] == 'needs_web') {
-      _needsWeb = true;
+    final url = resp is Map ? resp['url'] : null;
+    if (url is String) {
+      _oauthUrl = url;
       _notify();
     }
   }
