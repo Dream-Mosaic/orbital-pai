@@ -26,8 +26,18 @@ extension MeridianTabInfo on MeridianTab {
         MeridianTab.search => HeroIcon.magnifyingGlass,
       };
 
-  /// The `phx-value-modal` the web's nav button carries — also the `?panel=`
-  /// value the now-retired native webview used to load.
+  /// The `phx-value-modal` the web's nav button carries, and the `?panel=`
+  /// value that selects a drawer on the server.
+  ///
+  /// **No native caller.** The webview that used to load `?panel=<modal>` is
+  /// gone; this is retained deliberately, as the client-side record of a server
+  /// vocabulary that is still live — `?panel=` remains a tested web surface
+  /// (`conversation_live.ex`, with a path-traversal guard), and the strings here
+  /// are the contract it accepts. Its test is therefore a change-detector by
+  /// design: it can only fail if someone edits these literals, which is exactly
+  /// when a human should be asked whether the server agrees.
+  ///
+  /// Delete this only together with the server's `?panel=` mode.
   String get modal => switch (this) {
         MeridianTab.settings => 'settings',
         MeridianTab.reminders => 'reminders',
