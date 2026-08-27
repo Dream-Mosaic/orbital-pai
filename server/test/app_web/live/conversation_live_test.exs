@@ -392,8 +392,8 @@ defmodule AppWeb.ConversationLiveTest do
     html = lv |> element(~s|button[phx-click="archive_plant"]|) |> render_click()
 
     # Not "Past seasons" — the Books frame's "Clear ↻" confirm text for a garden book always
-    # carries that phrase (see clear_confirm_text/1), archived plants or not, so it's satisfied
-    # by chrome alone. "Revive" only ever renders inside the archived `<details>` section
+    # carries that phrase (see AppWeb.BookFormat.clear_confirm/1), archived plants or not, so it's
+    # satisfied by chrome alone. "Revive" only ever renders inside the archived `<details>` section
     # (garden_panel/1), which only exists once `@garden.archived_by_season != %{}` — mirroring
     # the "2025"-style signal the revive test below uses.
     assert html =~ "Revive"

@@ -38,13 +38,18 @@ defmodule AppWeb.Panels.BooksChannel do
   push carries the same, now-current state. Left un-deduplicated on purpose,
   like `RemindersChannel`.
 
-  ## Two queries, and the nudge that follows from them
+  ## Three queries, and the nudge that follows from them
 
-  `Books.for_user/1` calls `Lists.list_visible/1` itself (`books.ex:34`), so a
-  push that also needs items has issued two queries however it is written. A
-  list deleted between them yields a `:list` book whose `list` is nil — the same
-  rare window the web has, which is why `That list is gone` is ported rather
-  than declared impossible.
+  `state/1`'s own `Books.for_user/1` call (`books.ex:34`) is the first
+  `Lists.list_visible/1`. `Books.current/1` (`books.ex:94`) — the shared
+  resolution rule this channel and the web LiveView both call, see below — does
+  its own `for_user/1` rather than reuse the one `state/1` already computed,
+  because its OTHER caller (`clear_book`) never needs the full list at all.
+  That is the second. `list_body/2` then does its own `Lists.list_visible/1`
+  lookup for the current book's actual list struct (with items) — the third.
+  A list deleted between any of these yields a `:list` book whose `list` is
+  nil — the same rare window the web has, which is why `That list is gone` is
+  ported rather than declared impossible.
   """
   use AppWeb, :channel
 
@@ -190,7 +195,7 @@ defmodule AppWeb.Panels.BooksChannel do
         {:reply, {:error, %{reason: "bad_request"}}, socket}
 
       user ->
-        current = current_book(Books.for_user(user), user)
+        current = Books.current(user)
 
         if current.key == key do
           # Books.clear/1 returns {:error, :not_found} when the list was deleted
@@ -291,7 +296,7 @@ defmodule AppWeb.Panels.BooksChannel do
         # carries only the id — so re-read the user on every push or
         # `select_book` would render the value it replaced.
         books = Books.for_user(user)
-        current = current_book(books, user)
+        current = Books.current(user)
 
         %{
           books: Enum.map(books, &book/1),
@@ -302,22 +307,6 @@ defmodule AppWeb.Panels.BooksChannel do
         }
     end
   end
-
-  # conversation_live.ex:584-600, verbatim. Fallback priority is the HOUSEHOLD
-  # "groceries" list, THEN the first book — not merely the first book.
-  # `Books.for_user/1` always appends the garden last, so with no lists at all
-  # "the first book" IS the garden.
-  defp current_book(books, user) do
-    case Books.resolve(user.books_last_book, user) do
-      {:ok, book} -> book
-      :not_found -> Enum.find(books, &household_groceries?/1) || List.first(books)
-    end
-  end
-
-  defp household_groceries?(%{kind: :list, label: label, scope: %{household: true}}),
-    do: String.downcase(label) == "groceries"
-
-  defp household_groceries?(_book), do: false
 
   defp book(b),
     do: %{key: b.key, label: b.label, kind: Atom.to_string(b.kind), icon: icon(b.icon)}

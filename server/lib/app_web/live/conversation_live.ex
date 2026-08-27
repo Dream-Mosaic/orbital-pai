@@ -571,33 +571,16 @@ defmodule AppWeb.ConversationLive do
     assign(socket, garden: Garden.garden(socket.assigns.current_user.id))
   end
 
-  # The Books modal's picker + remembered current book. `user.books_last_book` (a "list:<id>" or
-  # "garden" key) is resolved against the FRESH book set on every load — a stale key (the list was
-  # deleted elsewhere) or a nil key (never chosen) both fall through to `fallback_book/1`.
+  # The Books modal's picker + remembered current book. `App.Books.current/1` resolves
+  # `user.books_last_book` (a "list:<id>" or "garden" key) against the FRESH book set on every
+  # load — a stale key (the list was deleted elsewhere) or a nil key (never chosen) both fall
+  # through to its household-groceries-then-first-book priority.
   defp load_books(socket) do
     user = socket.assigns.current_user
     books = Books.for_user(user)
-    current = resolve_current_book(books, user.books_last_book, user)
+    current = Books.current(user)
     assign(socket, books: books, current_book: current)
   end
-
-  defp resolve_current_book(books, key, user) do
-    case key && Books.resolve(key, user) do
-      {:ok, book} -> book
-      _ -> fallback_book(books)
-    end
-  end
-
-  # Fallback priority: the household groceries list, else the first book. `Books.for_user/1`
-  # always appends the garden book last, so when there are no list books at all, "the first book"
-  # IS the garden book — that's how "else Garden" (the spec's third tier) is satisfied without a
-  # separate branch here.
-  defp fallback_book(books), do: Enum.find(books, &household_groceries?/1) || List.first(books)
-
-  defp household_groceries?(%{kind: :list, label: label, scope: %{household: true}}),
-    do: String.downcase(label) == "groceries"
-
-  defp household_groceries?(_book), do: false
 
   # The Books body needs the ACTUAL list struct (with items preloaded) for a :list book — @lists
   # is already kept fresh by the existing list handlers/broadcasts, so this just looks it up by id

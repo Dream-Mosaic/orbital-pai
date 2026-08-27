@@ -80,6 +80,51 @@ defmodule App.BooksTest do
     end
   end
 
+  describe "current/1" do
+    test "the pref, when it resolves, wins outright — not merely the fallback priority", %{d: d} do
+      {:ok, _apples} =
+        %List{} |> List.changeset(%{user_id: d.id, name: "Apples"}) |> Repo.insert()
+
+      {:ok, zebra} = %List{} |> List.changeset(%{user_id: d.id, name: "Zebra"}) |> Repo.insert()
+      {:ok, d} = Users.update_prefs(d, %{books_last_book: "list:#{zebra.id}"})
+
+      # If the pref were ignored, the fallback (no household groceries here) would land on
+      # "Apples" (first by name) — the pref must win over that.
+      assert Books.current(d).id == zebra.id
+    end
+
+    test "a stale or nil pref falls back to the HOUSEHOLD groceries list, not merely the first book",
+         %{d: d} do
+      # "Apples" sorts before "Groceries", so the two candidate answers DISAGREE: a fixture where
+      # groceries also happened to be first alphabetically would let `List.first/1` pass by luck.
+      {:ok, _apples} =
+        %List{} |> List.changeset(%{user_id: d.id, name: "Apples"}) |> Repo.insert()
+
+      {:ok, groceries} =
+        %List{}
+        |> List.changeset(%{user_id: d.id, name: "Groceries", household: true})
+        |> Repo.insert()
+
+      {:ok, d} = Users.update_prefs(d, %{books_last_book: "list:999999"})
+
+      current = Books.current(d)
+      assert current.id == groceries.id
+      refute current.label == "Apples"
+    end
+
+    test "with no household groceries list, a stale or nil pref falls back to the first book",
+         %{d: d} do
+      {:ok, apples} = %List{} |> List.changeset(%{user_id: d.id, name: "Apples"}) |> Repo.insert()
+      {:ok, _zebra} = %List{} |> List.changeset(%{user_id: d.id, name: "Zebra"}) |> Repo.insert()
+
+      assert Books.current(d).id == apples.id
+    end
+
+    test "with no lists at all, a nil pref falls back to the garden book", %{d: d} do
+      assert Books.current(d).kind == :garden
+    end
+  end
+
   describe "clear/1" do
     test "for a :list book, empties the list's items and keeps the list", %{d: d} do
       {:ok, list} =

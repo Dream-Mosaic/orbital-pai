@@ -492,7 +492,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
     test "on the garden book it closes out the season", %{socket: socket, alice: alice} do
       # A list book must also exist, so the FIRST book (lists name-sorted, then
       # garden last) is NOT the garden — with zero lists, `List.first(books)`
-      # and the correct `current_book/2` resolution are indistinguishable.
+      # and the correct `Books.current/1` resolution are indistinguishable.
       _list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
       {:ok, _} = Garden.add_plant(%{user_id: alice.id, household: false}, %{name: "Peas"})
       {:ok, u} = Users.update_prefs(alice, %{books_last_book: "garden"})
@@ -557,12 +557,12 @@ defmodule AppWeb.Panels.BooksChannelTest do
       # `Books.clear/1` inside the SAME handle_in call — a window this test
       # cannot reach deterministically (no hook exists to pause the handler
       # mid-call). Deleting the list up front instead exercises the channel's
-      # real defence for a stale pref: `current_book/2` re-resolves
-      # `books_last_book` via `Books.resolve/2` on every call, so a deleted
-      # list is simply absent from `Books.for_user/1`'s result and the pref
-      # falls back BEFORE `Books.clear/1` ever sees the stale id — here, to
-      # the household "Groceries" list (current_book/2's household-groceries
-      # priority), which is the one that actually gets cleared.
+      # real defence for a stale pref: `Books.current/1` re-resolves
+      # `books_last_book` on every call, so a deleted list is simply absent
+      # from `Books.for_user/1`'s result and the pref falls back BEFORE
+      # `Books.clear/1` ever sees the stale id — here, to the household
+      # "Groceries" list (`Books.current/1`'s household-groceries priority),
+      # which is the one that actually gets cleared.
       list = Lists.find_or_create_list(%{user_id: alice.id, household: false}, "Apples")
       groceries = Lists.find_or_create_list(%{user_id: alice.id, household: true}, "Groceries")
       {:ok, _} = Lists.add_item(groceries, "milk")

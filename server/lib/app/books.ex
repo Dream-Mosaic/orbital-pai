@@ -80,6 +80,33 @@ defmodule App.Books do
   end
 
   @doc """
+  `user`'s CURRENT book: their remembered pref (`user.books_last_book`) resolved against their
+  visible set, or — for a nil, blank, or stale pref — the fallback priority: the household
+  "groceries" list, THEN the first book, not merely the first book. `for_user/1` always appends
+  the garden last, so with no list books at all "the first book" IS the garden — that's how
+  "else Garden" is satisfied without a separate branch here.
+
+  The single extraction point for this rule: it used to be copy-pasted between the web LiveView
+  and the native panel's channel (independently, right down to the private `household_groceries?`
+  helper), which is exactly the drift `AppWeb.BookFormat` exists to prevent for the panels'
+  display strings — this closes the one function it stopped short of.
+  """
+  def current(user) do
+    books = for_user(user)
+
+    case user.books_last_book && Enum.find(books, &(&1.key == user.books_last_book)) do
+      # `List` is aliased to `App.Lists.List` above — `Elixir.List` disambiguates the built-in.
+      nil -> Enum.find(books, &household_groceries?/1) || Elixir.List.first(books)
+      book -> book
+    end
+  end
+
+  defp household_groceries?(%{kind: :list, label: label, scope: %{household: true}}),
+    do: String.downcase(label) == "groceries"
+
+  defp household_groceries?(_book), do: false
+
+  @doc """
   Type-aware, non-destructive Clear: a `:list` book empties its items (`App.Lists.clear_items/1`
   — the list row itself stays); the `:garden` book closes out the season for BOTH the user's
   personal AND household active plants (`App.Garden.close_season/2` twice — the garden book is a
