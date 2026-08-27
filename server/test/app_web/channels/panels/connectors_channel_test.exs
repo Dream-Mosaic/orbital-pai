@@ -44,6 +44,18 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
     a
   end
 
+  # A write this test triggers can push a re-`state` this test never asserts on. `push/3` is sent
+  # from THIS process, so Erlang's per-sender FIFO ordering guarantees this unrecognised event
+  # lands in the channel's mailbox AFTER every broadcast already in flight; blocking on its reply
+  # proves the channel has fully drained before the test ends. Without this, a channel still
+  # mid-query when ExUnit hard-kills the test process at return can strand the shared SQLite
+  # sandbox connection's lock, which then surfaces as "Database busy" in a LATER, unrelated test's
+  # setup — not in the test that actually caused it.
+  defp drain!(sock) do
+    ref = push(sock, "__test_drain__", %{})
+    assert_reply ref, :error, %{reason: "bad_request"}
+  end
+
   test "join pushes one row per (account, granted connector)", %{socket: socket, alice: alice} do
     account!(alice, "alice-1@x.com", [@cal_read, @gmail_read])
 
@@ -312,7 +324,7 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       assert Repo.get(Account, account.id) == nil
     end
 
-    test "on a MULTI-grant account replies needs_web and deletes nothing",
+    test "on a MULTI-grant account returns a reduction URL and deletes nothing",
          %{socket: socket, alice: alice} do
       account = account!(alice, "multi@x.com", [@cal_read, @gmail_read])
       original_scope = account.scope
@@ -320,7 +332,10 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       sock = drain_join!(socket, alice)
 
       ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
-      assert_reply ref, :error, %{reason: "needs_web"}
+      assert_reply ref, :ok, %{url: url}
+
+      assert URI.decode_query(URI.parse(url).query) ==
+               %{"gmail" => "read", "account" => to_string(account.id)}
 
       refute_push "state", _, 200
       persisted = Repo.get(Account, account.id)
@@ -341,20 +356,27 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
           "only_grant" => true
         })
 
-      assert_reply ref, :error, %{reason: "needs_web"}
+      # The reply SHAPE (a URL, not a bare :ok) is itself proof the stale flag
+      # was ignored: a bare :ok only happens on the actual-delete branch.
+      assert_reply ref, :ok, %{url: _url}
 
       refute_push "state", _, 200
       assert Repo.get(Account, account.id)
     end
 
-    test "for a connector the account does not hold at all replies needs_web and deletes nothing",
+    test "for a connector the account does not hold at all returns a same-state URL and deletes nothing",
          %{socket: socket, alice: alice} do
       account = account!(alice, "cal-only@x.com", [@cal_read])
 
       sock = drain_join!(socket, alice)
 
       ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "gmail"})
-      assert_reply ref, :error, %{reason: "needs_web"}
+      assert_reply ref, :ok, %{url: url}
+
+      # gmail was never granted, so forcing it to :none changes nothing —
+      # calendar's own grant survives untouched.
+      assert URI.decode_query(URI.parse(url).query) ==
+               %{"calendar" => "read", "account" => to_string(account.id)}
 
       refute_push "state", _, 200
       assert Repo.get(Account, account.id)
@@ -459,5 +481,125 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
     assert_push "state", %{connections: rows}
     assert [%{email: "alices@x.com", is_default: true}] = rows
     assert Repo.get(Account, alices_account.id).is_default == true
+  end
+
+  describe "catalog" do
+    test "carries every connector in registry order with its full level list",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{catalog: catalog}
+
+      assert Enum.map(catalog, & &1.key) == ["calendar", "gmail"]
+      assert Enum.map(catalog, & &1.label) == ["Google Calendar", "Gmail"]
+
+      for entry <- catalog do
+        assert entry.kind == "oauth_redirect"
+        assert entry.provider == "google"
+        # The FULL list from Connectors.access_levels/1, including "none" — :none is
+        # meaningful on an existing account (remove that connector). A client must not
+        # be the thing that decides what is selectable.
+        assert Enum.map(entry.fields, & &1.name) == ["account", "level"]
+        level_field = Enum.find(entry.fields, &(&1.name == "level"))
+        assert Enum.map(level_field.options, & &1.value) == ["none", "read", "write"]
+      end
+
+      drain!(sock)
+    end
+  end
+
+  describe "grant_url" do
+    test "a new account yields a URL for exactly that connector and level",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{}
+
+      ref =
+        push(sock, "grant_url", %{
+          "connector" => "gmail",
+          "fields" => %{"account" => "new", "level" => "read"}
+        })
+
+      assert_reply ref, :ok, %{url: url}
+      assert String.starts_with?(url, AppWeb.Endpoint.url())
+      assert URI.decode_query(URI.parse(url).query) == %{"gmail" => "read"}
+      drain!(sock)
+    end
+
+    test "an existing account preserves its OTHER connectors",
+         %{socket: socket, alice: alice} do
+      # Different levels on purpose — a flattening implementation passes a same-level fixture.
+      a = account!(alice, "a@x.com", [@cal_read, @gmail_read])
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{}
+
+      ref =
+        push(sock, "grant_url", %{
+          "connector" => "gmail",
+          "fields" => %{"account" => a.id, "level" => "write"}
+        })
+
+      assert_reply ref, :ok, %{url: url}
+
+      assert URI.decode_query(URI.parse(url).query) ==
+               %{"calendar" => "read", "gmail" => "write", "account" => to_string(a.id)}
+
+      drain!(sock)
+    end
+
+    test "an unknown connector, an unknown level, and a new-account no-op are bad_request",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{}
+
+      for payload <- [
+            %{
+              "connector" => "refresh_token",
+              "fields" => %{"account" => "new", "level" => "read"}
+            },
+            %{"connector" => "gmail", "fields" => %{"account" => "new", "level" => "admin"}},
+            %{"connector" => "gmail", "fields" => %{"account" => "new", "level" => "none"}},
+            %{"connector" => "gmail", "fields" => %{}}
+          ] do
+        ref = push(sock, "grant_url", payload)
+        assert_reply ref, :error, %{reason: "bad_request"}
+      end
+
+      drain!(sock)
+    end
+
+    test "another user's account_id is bad_request", %{socket: socket, alice: alice, bob: bob} do
+      theirs = account!(bob, "bob@x.com", [@cal_read])
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{}
+
+      ref =
+        push(sock, "grant_url", %{
+          "connector" => "gmail",
+          "fields" => %{"account" => theirs.id, "level" => "read"}
+        })
+
+      assert_reply ref, :error, %{reason: "bad_request"}
+      drain!(sock)
+    end
+  end
+
+  describe "disconnect on a multi-connector account" do
+    test "returns a reduction URL setting THAT connector to none, and deletes nothing",
+         %{socket: socket, alice: alice} do
+      a = account!(alice, "a@x.com", [@cal_write, @gmail_read])
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{}
+
+      ref = push(sock, "disconnect", %{"account_id" => a.id, "connector" => "gmail"})
+      assert_reply ref, :ok, %{url: url}
+
+      # gmail dropped, calendar preserved AT ITS OWN LEVEL.
+      assert URI.decode_query(URI.parse(url).query) ==
+               %{"calendar" => "write", "account" => to_string(a.id)}
+
+      # Nothing local happened — the write is the browser's job.
+      assert [_] = App.Google.Accounts.list(alice.id)
+      drain!(sock)
+    end
   end
 end

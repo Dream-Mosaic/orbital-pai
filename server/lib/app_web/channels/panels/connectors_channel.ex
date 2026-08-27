@@ -22,13 +22,16 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   drawer is open is not seen until the drawer is reopened — acceptable for two
   surfaces one person uses at a time.
 
-  What this panel deliberately CANNOT do is anything that needs Google's consent
-  page: adding a connection, and reducing an account that holds two connectors
-  down to one. The web implements the latter as a re-consent with fewer scopes
-  (`conversation_live.ex:336-337` redirects to `change_access_path/3`), because
-  editing our stored scope locally would leave a live Google token holding more
-  access than our record claims. `disconnect` therefore refuses with
-  `needs_web` rather than faking it; see spec §2.
+  Adding a connection, and reducing an account that holds two connectors down
+  to one, both need Google's consent page — this panel cannot complete either
+  flow itself. What it CAN do, same as the web (`conversation_live.ex:336-337`
+  redirecting to `change_access_path/3`), is hand back the `/auth/google/connect`
+  URL for that consent screen: `grant_url` for adding/changing a connector, and
+  `disconnect`'s non-`only_grant` reply for a reduction. The native client opens
+  that URL in the system browser; nothing local changes here — editing our
+  stored scope locally would leave a live Google token holding more access than
+  our record claims, so the actual scope change only ever happens via Google's
+  consent flow completing back through `/auth/google/connect`. See spec §2.
 
   Three booleans are derived HERE because the web derives them there and the
   rules are not obvious to a client:
@@ -39,7 +42,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   """
   use AppWeb, :channel
 
-  alias App.Google.{Accounts, Connectors}
+  alias App.Google.{Accounts, Connectors, Grant}
 
   @impl true
   def join("panel:connectors:" <> _ignored, _payload, socket) do
@@ -79,15 +82,33 @@ defmodule AppWeb.Panels.ConnectorsChannel do
       # cost of trusting it is deleting a Google connection the user still
       # wants. The web makes the same check at conversation_live.ex:332.
       Connectors.granted(account) != [connector] ->
-        # Not an error path to skip: this is the ONLY signal the client has that
-        # the browser is needed, and the panel shows a sentence for it.
-        {:reply, {:error, %{reason: "needs_web"}}, socket}
+        # Not a local no-op: this account holds more than just `connector`, so
+        # deleting it would take those other grants with it. The fix is the
+        # SAME consent screen `grant_url` uses — `Grant.path/3` on this
+        # account with `connector` forced to `:none` — which Google will show
+        # as "review the permissions this app is requesting" for the reduced
+        # set. The native client opens it in the system browser; nothing local
+        # changes until that flow completes back through `/auth/google/connect`.
+        {:reply, {:ok, %{url: AppWeb.Endpoint.url() <> Grant.path(account, connector, :none)}},
+         socket}
 
       true ->
         case Accounts.delete(account) do
           {:ok, _account} -> {:reply, :ok, push_state(socket)}
           {:error, _changeset} -> {:reply, {:error, %{reason: "bad_request"}}, socket}
         end
+    end
+  end
+
+  def handle_in("grant_url", %{"connector" => conn, "fields" => fields}, socket)
+      when is_binary(conn) and is_map(fields) do
+    with connector when not is_nil(connector) <- known_connector(conn),
+         level when not is_nil(level) <- known_level(connector, fields["level"]),
+         {:ok, target} <- grant_target(socket, fields["account"]),
+         path when is_binary(path) <- Grant.path(target, connector, level) do
+      {:reply, {:ok, %{url: AppWeb.Endpoint.url() <> path}}, socket}
+    else
+      _ -> {:reply, {:error, %{reason: "bad_request"}}, socket}
     end
   end
 
@@ -103,8 +124,41 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   # disagree about which accounts exist.
   defp push_state(socket) do
     accounts = Accounts.list(socket.assigns.user_id)
-    push(socket, "state", %{connections: Enum.map(rows(accounts), &row(&1, accounts))})
+
+    push(socket, "state", %{
+      connections: Enum.map(rows(accounts), &row(&1, accounts)),
+      catalog: catalog()
+    })
+
     socket
+  end
+
+  # Describes HOW a connector is added, not just what it is. `kind` says how the flow
+  # completes (`oauth_redirect` is the only one implemented); `fields` is the form the
+  # client renders. Adding a connector to the registry makes it appear in the app with
+  # no Dart change — which is the entire reason the form is generic. See spec §5.
+  defp catalog do
+    for c <- Connectors.all() do
+      %{
+        key: Atom.to_string(c),
+        label: Connectors.label(c),
+        provider: "google",
+        kind: "oauth_redirect",
+        fields: [
+          %{name: "account", label: "Account", type: "account_select", required: true},
+          %{
+            name: "level",
+            label: "Access",
+            type: "choice",
+            required: true,
+            options:
+              for lvl <- Connectors.access_levels(c) do
+                %{value: Atom.to_string(lvl), label: Atom.to_string(lvl)}
+              end
+          }
+        ]
+      }
+    end
   end
 
   # The web's connection_rows/1 (voice_modals.ex:517-520), verbatim. Sorted by
@@ -155,4 +209,26 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   # Returns nil for anything unknown; the caller turns that into bad_request.
   defp known_connector(name),
     do: Enum.find(Connectors.all(), &(Atom.to_string(&1) == name))
+
+  # Same literal-walk rule as known_connector/1, and for the same reason:
+  # String.to_existing_atom/1 is not a guard here either — :read, :write and
+  # :none are all already-existing atoms in this VM, so it would happily turn
+  # ANY existing atom name into a "known" level. Walking
+  # Connectors.access_levels/1 means only levels the registry actually offers
+  # for THIS connector can ever match. Returns nil for anything unknown
+  # (including a non-binary `level`, which no `Atom.to_string/1` result equals).
+  defp known_level(connector, level),
+    do: Enum.find(Connectors.access_levels(connector), &(Atom.to_string(&1) == level))
+
+  # "new" requests a fresh account (nothing to preserve); any other value must
+  # resolve to one of THIS user's own accounts — never Repo.get, never trust
+  # an id that doesn't appear in Accounts.list/1's result.
+  defp grant_target(_socket, "new"), do: {:ok, :new}
+
+  defp grant_target(socket, id) do
+    case own_account(socket, id) do
+      nil -> :error
+      account -> {:ok, account}
+    end
+  end
 end
