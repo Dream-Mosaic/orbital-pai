@@ -15,6 +15,7 @@ defmodule AppWeb.ConversationLive do
   alias App.Books
   alias App.Google.Accounts, as: GoogleAccounts
   alias App.Google.Connectors
+  alias App.Google.Grant
 
   # Kiosk-only ambient info strip (weather · next event · due reminders) refresh cadence.
   @ambient_refresh_ms 5 * 60_000
@@ -334,7 +335,7 @@ defmodule AppWeb.ConversationLive do
         {:noreply, load_google_accounts(socket)}
 
       true ->
-        {:noreply, redirect(socket, to: change_access_path(account, connector, :none))}
+        {:noreply, redirect(socket, to: Grant.path(account, connector, :none))}
     end
   end
 
@@ -662,7 +663,7 @@ defmodule AppWeb.ConversationLive do
   end
 
   # Only a NEW account at :none is a true no-op. An EXISTING account at :none is a real change
-  # (remove access) — change_access_path drops the connector from the query and the connect route
+  # (remove access) — Grant.path/3 drops the connector from the query and the connect route
   # revokes it.
   defp grant_noop?(%{account_id: :new, level: :none}), do: true
   defp grant_noop?(_grant), do: false
@@ -670,35 +671,17 @@ defmodule AppWeb.ConversationLive do
   # highest selectable level for a connector (access_levels is lowest→highest)
   defp default_level(connector), do: List.last(Connectors.access_levels(connector))
 
-  # New account: request exactly the chosen connector at the chosen level (skip a no-op none).
-  defp grant_path(_socket, %{account_id: :new, connector: c, level: l}) when l != :none do
-    "/auth/google/connect?" <> URI.encode_query(%{Atom.to_string(c) => Atom.to_string(l)})
-  end
+  # New account: Grant.path/3 handles the :none no-op internally.
+  defp grant_path(_socket, %{account_id: :new, connector: c, level: l}),
+    do: Grant.path(:new, c, l)
 
-  defp grant_path(_socket, %{account_id: :new}), do: nil
-
-  # Existing account: reuse change_access_path so the account's OTHER connectors are preserved.
+  # Existing account: resolving the id to an %Account{} is an authorisation decision, so it stays
+  # here; Grant.path/3 then rebuilds the connector→access map, preserving every OTHER connector.
   defp grant_path(socket, %{account_id: id, connector: c, level: l}) do
     case account_by_id(socket, id) do
       nil -> nil
-      account -> change_access_path(account, c, l)
+      account -> Grant.path(account, c, l)
     end
-  end
-
-  # Build a connect path that sets `conn` to `level` for `account`, preserving the account's current
-  # access on every OTHER connector (so changing one connector never silently reduces another).
-  defp change_access_path(account, conn, level) do
-    query =
-      Connectors.all()
-      |> Map.new(fn c -> {c, Connectors.access(account, c)} end)
-      |> Map.put(conn, level)
-      |> Enum.reject(fn {_c, lvl} -> lvl == :none end)
-      |> Enum.map(fn {c, lvl} -> {c, Atom.to_string(lvl)} end)
-      |> Map.new()
-      |> Map.put("account", account.id)
-      |> URI.encode_query()
-
-    "/auth/google/connect?" <> query
   end
 
   @impl true
