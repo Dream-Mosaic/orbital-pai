@@ -145,12 +145,43 @@ defmodule AppWeb.Panels.ConnectorsChannel do
         provider: "google",
         kind: "oauth_redirect",
         fields: [
-          %{name: "account", label: "Account", type: "account_select", required: true},
+          %{
+            name: "account",
+            label: "Account",
+            type: "account_select",
+            required: true,
+            # A fresh account is the obvious starting point for "+ Connect
+            # account" — every existing account is one tap away in the
+            # picker right below it, so unlike `level` there is no wrong
+            # value this could default to.
+            default: "new"
+          },
           %{
             name: "level",
             label: "Access",
             type: "choice",
             required: true,
+            # `default` is a property ANY field can carry (see `account`
+            # above) — this is not a `level`-specific concept, it just
+            # happens to matter here. DELIBERATELY the least-privileged
+            # non-`:none` level, NOT the web's `default_level/1`
+            # (conversation_live.ex:672, `List.last/1` = the MOST
+            # privileged, for one-click connect from a surface the user
+            # already trusts). The app's form is a separate, more
+            # deliberate ask — read is a safe starting point and write is
+            # one tap away in the same list.
+            #
+            # `:none` must never be the default: a brand-new account
+            # requesting `:none` is the exact no-op `Grant.path/3` refuses
+            # (grant.ex:33), which the channel turns into `bad_request` —
+            # and `:none` sitting at `options.first` (the client's old
+            # generic default) was precisely the HIGH-severity defect the
+            # 2026-08-27 whole-branch review found: "+ Connect account" ->
+            # Grant did nothing, ever, with no feedback. `:none` STAYS in
+            # `options` below regardless — it is how an existing account's
+            # connector gets removed through this same form — only the
+            # DEFAULT moves.
+            default: Atom.to_string(default_level(c)),
             options:
               for lvl <- Connectors.access_levels(c) do
                 %{value: Atom.to_string(lvl), label: Atom.to_string(lvl)}
@@ -159,6 +190,18 @@ defmodule AppWeb.Panels.ConnectorsChannel do
         ]
       }
     end
+  end
+
+  # The least-privileged level that isn't `:none` — :read out of today's
+  # [:none, :read, :write]. Derived from Connectors.access_levels/1 rather
+  # than hardcoding :read, so a connector that ever offers a different level
+  # set (the moduledoc there names read-only as a plausible future case)
+  # still gets a sane, non-`:none` default with no change needed here.
+  defp default_level(connector) do
+    connector
+    |> Connectors.access_levels()
+    |> Enum.reject(&(&1 == :none))
+    |> List.first()
   end
 
   # The web's connection_rows/1 (voice_modals.ex:517-520), verbatim. Sorted by

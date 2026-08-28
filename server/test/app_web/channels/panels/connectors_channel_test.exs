@@ -499,8 +499,17 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
         # meaningful on an existing account (remove that connector). A client must not
         # be the thing that decides what is selectable.
         assert Enum.map(entry.fields, & &1.name) == ["account", "level"]
+        account_field = Enum.find(entry.fields, &(&1.name == "account"))
         level_field = Enum.find(entry.fields, &(&1.name == "level"))
         assert Enum.map(level_field.options, & &1.value) == ["none", "read", "write"]
+        # The default the client is meant to honour instead of guessing
+        # `options.first` (which is "none" — see grant_url's own test below
+        # for why that combination must never be the default). This assertion
+        # alone is weak on its own (it would still pass if the channel later
+        # rejected "read") — see "the catalog's own stated defaults" below
+        # for the test that actually proves the default is accepted.
+        assert account_field.default == "new"
+        assert level_field.default == "read"
       end
 
       drain!(sock)
@@ -508,6 +517,43 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
   end
 
   describe "grant_url" do
+    # THE regression test for the whole-branch review's HIGH finding: the
+    # native "+ Connect account" form opened on `account: new, level: none`
+    # by construction (the client's generic default was `options.first`,
+    # and `:none` sits first in `Connectors.access_levels/1` because it is
+    # meaningful for an EXISTING account) — which `grant_url` refuses as
+    # `bad_request` (see the "new-account no-op" test below), so tapping
+    # Grant without touching anything did nothing, ever, with no feedback.
+    #
+    # This does not merely assert the default equals "read" (see the
+    # catalog test above, which does, and is intentionally not enough on its
+    # own — it would still pass if the channel started rejecting "read" for
+    # some other reason). It reads the default straight off the catalog the
+    # channel itself just pushed and submits EXACTLY that as `grant_url`'s
+    # payload, proving the form's own advertised starting point is one the
+    # channel accepts — for every connector in the registry, not just
+    # calendar.
+    test "the catalog's own stated defaults, submitted untouched, are accepted — not bad_request",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{catalog: catalog}
+
+      for entry <- catalog do
+        account_field = Enum.find(entry.fields, &(&1.name == "account"))
+        level_field = Enum.find(entry.fields, &(&1.name == "level"))
+
+        ref =
+          push(sock, "grant_url", %{
+            "connector" => entry.key,
+            "fields" => %{"account" => account_field.default, "level" => level_field.default}
+          })
+
+        assert_reply ref, :ok, %{url: _url}
+      end
+
+      drain!(sock)
+    end
+
     test "a new account yields a URL for exactly that connector and level",
          %{socket: socket, alice: alice} do
       {:ok, _reply, sock} = join!(socket, alice)
