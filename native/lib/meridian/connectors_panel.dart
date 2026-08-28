@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart' hide FormField;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../panels/connectors_client.dart';
 import 'tokens.dart';
@@ -56,10 +59,15 @@ const Color _dangerRed = Color(0xFFEA003E);
 ///     `disconnect` handler no longer answers `needs_web`), so there is
 ///     nothing left for this view to fork on client-side.
 ///
-/// Launching the URL either flow can produce ([ConnectorsClient.oauthUrl])
-/// and refetching on app resume are **Task 5**, not this file's job — see
-/// the marker comment in [_ConnectorsPanelViewState._submit]. This view's
-/// job ends at "the form pushes `grant_url` and the client has the URL."
+/// **Task 5**: the URL either flow can produce ([ConnectorsClient.oauthUrl])
+/// is launched from ONE reactive site — [_ConnectorsPanelViewState.build],
+/// via [_ConnectorsPanelViewState._launchIfNeeded] — regardless of whether it
+/// came from a grant-form submit or a Disconnect reduction, because both
+/// callers funnel through the same [ConnectorsClient.oauthUrl] field. A
+/// [WidgetsBindingObserver] also refetches this panel's `state` whenever the
+/// app returns from the system browser (`AppLifecycleState.resumed`) — the
+/// user may have finished (or abandoned) the flow while away, and there is no
+/// other signal that tells this panel to look again.
 class ConnectorsPanelView extends StatefulWidget {
   const ConnectorsPanelView({super.key, required this.client});
 
@@ -104,16 +112,92 @@ class ConnectorsPanelView extends StatefulWidget {
   State<ConnectorsPanelView> createState() => _ConnectorsPanelViewState();
 }
 
-class _ConnectorsPanelViewState extends State<ConnectorsPanelView> {
+class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
+    with WidgetsBindingObserver {
   bool _formOpen = false;
   String? _connectorKey;
   Map<String, Object?> _fieldValues = const {};
+
+  /// Set right after a launch is scheduled and cleared the moment the app
+  /// comes back ([didChangeAppLifecycleState]) — the window during which the
+  /// user is presumed to be away in the system browser, not a flag this view
+  /// otherwise manages.
+  bool _waitingForBrowser = false;
+
+  /// Guards [_launchIfNeeded] against scheduling a second post-frame launch
+  /// for the SAME reply: [ConnectorsClient.oauthUrl] stays non-null across
+  /// every rebuild between "the reply landed" and "the post-frame callback
+  /// ran and called [ConnectorsClient.ackOauthUrl]", and `build` can run more
+  /// than once inside that window (e.g. the `AnimatedBuilder` above this one
+  /// rebuilding for an unrelated reason).
+  bool _launchScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Registered here, not in build: build can run many times for one
+    // mounted panel, and an observer must be added exactly once per State or
+    // a single resume would refetch (and reset _waitingForBrowser) once per
+    // registration instead of once.
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    // MUST run before this State is torn down: WidgetsBinding holds a raw
+    // reference to every registered observer for the life of the app, not
+    // for the life of the widget that registered it. Skip this and the
+    // observer leaks past this panel's own lifetime — the next resume (of
+    // ANY screen, not just this one) calls didChangeAppLifecycleState on a
+    // disposed State, which still holds `widget.client` and would refetch a
+    // topic this panel no longer has any business asking about (see the
+    // moduledoc above and connectors_client.dart's ConnectorsClient.close).
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // The user is presumed back from the browser: whatever the connect/
+    // disconnect flow did (or didn't) do server-side, this panel's cached
+    // `state` predates it, so ask again. There is no narrower signal — the
+    // server has no way to tell this socket "the OAuth callback just landed"
+    // — so every resume refetches, not only ones that follow a launch.
+    widget.client.refetch();
+    setState(() => _waitingForBrowser = false);
+  }
+
+  /// The one launch site both a grant-form submit and a Disconnect reduction
+  /// funnel through — see the class doc. Scheduled on the post-frame
+  /// callback, not run inline from `build`: [ConnectorsClient.ackOauthUrl]
+  /// calls `notifyListeners()`, and calling that synchronously from inside
+  /// the `AnimatedBuilder` `builder` this runs in would be a rebuild
+  /// requested in the middle of a build already in progress.
+  void _launchIfNeeded(String? url) {
+    if (url == null || _launchScheduled) return;
+    _launchScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _launchScheduled = false;
+      if (!mounted) return;
+      // Acked BEFORE launching: url_launcher hands the intent to the OS and
+      // returns almost immediately, but there is no reason to let a
+      // pathological double-callback race ack against a second launch of the
+      // same url — ack first closes that window regardless.
+      widget.client.ackOauthUrl();
+      setState(() => _waitingForBrowser = true);
+      unawaited(
+        launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
         animation: widget.client,
         builder: (context, _) {
           final state = widget.client.state;
+          _launchIfNeeded(widget.client.oauthUrl);
           // The drawer can open before the panel's first `state` push lands.
           if (state == null) return const SizedBox.shrink();
           final connections = state.connections;
@@ -136,6 +220,7 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_waitingForBrowser) _waitingBanner(),
                 if (connections.isEmpty)
                   Text(
                     'No connections.',
@@ -154,6 +239,28 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView> {
             ),
           );
         },
+      );
+
+  /// Shown from the moment a launch fires until the app resumes (see
+  /// [didChangeAppLifecycleState]) — the window during which the user is
+  /// presumed to be away in the system browser.
+  ///
+  /// Deliberately does NOT promise the flow resumes itself if the browser
+  /// isn't signed in: `/auth/google/connect` sits behind `require_user`
+  /// (`server/lib/app_web/router.ex`), which redirects a signed-out browser
+  /// to `/login` — and neither that redirect nor the login flow behind it
+  /// (`AuthController`/`GoogleAuthController`) preserves any return path, so
+  /// a lost-session grant request lands the user back at `/`, not back in
+  /// this flow. The copy below tells them to retry from here instead of
+  /// implying they will be dropped back into it.
+  Widget _waitingBanner() => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          "Finishing in your browser — come back here once you're done. If "
+          'it asks you to sign in first, sign in there, then try this again '
+          "from here; it won't pick back up on its own.",
+          style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6)),
+        ),
       );
 
   /// One row, mirroring `voice_modals.ex:383-414`'s `flex items-center
@@ -371,14 +478,10 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView> {
       });
 
   void _submit(String connectorKey) {
+    // Once the reply lands, widget.client.oauthUrl carries it and build's
+    // _launchIfNeeded (the one launch site — see the class doc) opens it.
     widget.client
         .grantUrl(connector: connectorKey, fields: Map.of(_fieldValues));
-    // TASK 5 MARKER: once widget.client.oauthUrl carries this request's
-    // reply, launch it in the system browser (url_launcher,
-    // LaunchMode.externalApplication) and call ackOauthUrl() so a later
-    // rebuild does not relaunch it — see the design's §6. This task's job
-    // ends here: the form has pushed grant_url, and the client will have
-    // the URL once the reply lands.
   }
 
   /// The port of `connectors_panel/1`'s grant `<div :if={@grant}>` block

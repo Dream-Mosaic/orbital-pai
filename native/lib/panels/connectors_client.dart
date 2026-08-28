@@ -308,14 +308,41 @@ class ConnectorsClient extends ChangeNotifier {
   void close() {
     if (!_open) return;
     _open = false;
+    _leaveChannel();
+    _state = null;
+    _oauthUrl = null;
+    _notify();
+  }
+
+  /// Ask the server for a fresh `state` by leaving and rejoining the topic.
+  /// There is no separate "give me state again" event to push: the server
+  /// sends `state` straight behind every join reply (see [_adopt]'s doc), so
+  /// a rejoin IS the refetch.
+  ///
+  /// The native client's own trigger is app resume (`connectors_panel.dart`'s
+  /// `WidgetsBindingObserver`): the OAuth flow that sent the user to the
+  /// system browser runs entirely server-side, and this socket has no other
+  /// way to learn it finished (or didn't) while the app was backgrounded.
+  ///
+  /// Guarded on [_open] on purpose, not just as an optimization: a caller
+  /// this method exists to protect against is a LEAKED resume observer that
+  /// outlives its panel (see the moduledoc there) — without this guard, that
+  /// leak would silently reopen a topic this client already tore down in
+  /// [close]. The stale `_state`/[_oauthUrl] are left as-is rather than
+  /// nulled first, so a resume-triggered refetch does not flash the drawer
+  /// back to empty while the rejoin is in flight.
+  void refetch() {
+    if (!_open) return;
+    _leaveChannel();
+    _connection.openChannel(topic, onChannel: _adopt);
+  }
+
+  void _leaveChannel() {
     _connection.closeChannel(topic);
     unawaited(_sub?.cancel());
     _sub = null;
     _channel = null;
-    _state = null;
     _pending = null;
-    _oauthUrl = null;
-    _notify();
   }
 
   void setDefault(int accountId) => _push('set_default', {'account_id': accountId});

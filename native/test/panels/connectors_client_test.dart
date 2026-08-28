@@ -474,6 +474,46 @@ void main() {
             'merely stop rendering it locally');
   });
 
+  test('refetch() while closed does nothing — no topic to rejoin', () async {
+    await conn.connect();
+    await pumpEventQueue();
+
+    client.refetch();
+    await pumpEventQueue();
+
+    expect(fake.joinedTopics, isEmpty,
+        reason: 'refetch() must be a no-op while the panel was never opened '
+            '— this is also what protects against a LEAKED resume observer '
+            'calling it after the panel already closed (see '
+            'connectors_panel.dart)');
+    expect(client.isOpen, isFalse);
+  });
+
+  test(
+      'refetch() while open leaves and rejoins the topic, delivering a '
+      'fresh state', () async {
+    await conn.connect();
+    client.open();
+    await pumpEventQueue();
+    expect(fake.joinedTopics.where((t) => t == 'panel:connectors:henry'),
+        hasLength(1));
+    expect(client.state, isNotNull);
+
+    client.refetch();
+    await pumpEventQueue();
+
+    expect(
+        fake.joinedTopics.where((t) => t == 'panel:connectors:henry'),
+        hasLength(2),
+        reason: 'refetch() must actually leave and rejoin — there is no '
+            'separate "give me state again" event, so a SECOND phx_join is '
+            'the only observable proof a refetch happened at all');
+    expect(client.isOpen, isTrue,
+        reason: 'refetch() must not act like close() — the panel is still '
+            'on screen and still wants the topic held open');
+    expect(client.state, isNotNull);
+  });
+
   test(
       'dispose() while open also deregisters the topic from the connection '
       'registry', () async {

@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
 import 'package:henry_wall/meridian/connectors_panel.dart';
 import 'package:henry_wall/panels/connectors_client.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import '../support/fake_socket.dart';
+import '../support/fake_url_launcher.dart';
 
 Map<String, Object?> _conn({
   required int accountId,
@@ -855,6 +857,194 @@ void main() {
       await fake.kill();
       await tester.pumpAndSettle();
 
+      expect(tester.takeException(), isNull);
+
+      await conn.disconnect();
+    });
+  });
+
+  group('launching the OAuth URL (Task 5)', () {
+    testWidgets(
+        'submitting the form launches exactly the URL the server returned, '
+        'once, with LaunchMode.externalApplication', (tester) async {
+      final launcher = FakeUrlLauncher.register();
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/consent'});
+      await tester.pumpAndSettle();
+
+      expect(launcher.launches, hasLength(1),
+          reason: 'exactly once — a reply must not be launched twice across '
+              'the rebuilds it triggers');
+      expect(launcher.launches.single.url,
+          'https://accounts.google.com/o/oauth2/consent');
+      expect(launcher.launches.single.mode,
+          PreferredLaunchMode.externalApplication);
+      expect(client.oauthUrl, isNull,
+          reason: 'ackOauthUrl() must have run so a later rebuild does not '
+              'relaunch the same url');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'a bad_request (error) reply launches nothing — proof the fake '
+        'CAN launch, so "nothing launched" is a real result', (tester) async {
+      final launcher = FakeUrlLauncher.register();
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await tester.pumpAndSettle();
+
+      expect(launcher.launches, isEmpty);
+      expect(client.oauthUrl, isNull);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'Disconnect on a multi-connector row launches the reduction URL '
+        'without showing a form', (tester) async {
+      final launcher = FakeUrlLauncher.register();
+      // A NON-EMPTY catalog is load-bearing here, not incidental: _grantForm
+      // renders SizedBox.shrink() for an empty catalog regardless of
+      // _formOpen, so with no catalog "no form appears" would be true no
+      // matter what Disconnect's handler does to _formOpen — the exact
+      // tautology this task's brief warns against, just one level down from
+      // the launcher. This catalog is what makes "without showing a form" a
+      // claim that could actually fail.
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame(
+          [
+            _conn(
+              accountId: 1,
+              email: 'a@b.com',
+              connector: 'calendar',
+              label: 'Google Calendar',
+              access: 'write',
+              // This account holds more than just `calendar` — the server's
+              // reply to Disconnect here is the consent-URL reduction, not a
+              // bare :ok deletion.
+              onlyGrant: false,
+            ),
+          ],
+          catalog: catalog,
+        ),
+      );
+      await pumpPanel(tester, client);
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pump();
+
+      replyTo(fake, 'disconnect', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/reduce'});
+      await tester.pumpAndSettle();
+
+      expect(launcher.launches, hasLength(1));
+      expect(launcher.launches.single.url,
+          'https://accounts.google.com/o/oauth2/reduce');
+      expect(launcher.launches.single.mode,
+          PreferredLaunchMode.externalApplication);
+      // Disconnect's own reduction never opens the grant form — there is
+      // nothing here for the user to fill in, only a browser tab to finish.
+      expect(find.text('Add a connection'), findsNothing);
+
+      await conn.disconnect();
+    });
+  });
+
+  group('refetching on app resume (Task 5)', () {
+    testWidgets(
+        'AppLifecycleState.resumed while the panel is open triggers a '
+        'refetch', (tester) async {
+      final (client, conn, fake) =
+          await openedClient(tester, _stateFrame(const []));
+      await pumpPanel(tester, client);
+      final joinsBefore = fake.joinedTopics
+          .where((t) => t == 'panel:connectors:henry')
+          .length;
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      expect(
+          fake.joinedTopics
+              .where((t) => t == 'panel:connectors:henry')
+              .length,
+          joinsBefore + 1,
+          reason: 'a refetch IS a rejoin — there is no separate "give me '
+              'state again" event, so a second phx_join is the only way to '
+              'observe one happened');
+      expect(tester.takeException(), isNull);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'AppLifecycleState.resumed before the panel is ever opened triggers '
+        'nothing', (tester) async {
+      // No openedClient/pumpPanel at all — this is the OTHER half of "while
+      // open... while closed it does not": a global app-lifecycle event
+      // firing with no connectors panel anywhere in the tree must not throw
+      // or reach for a client that was never wired up.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        'the WidgetsBindingObserver is removed on dispose — a resumed event '
+        'after the panel is gone must not refetch its (still-open) client',
+        (tester) async {
+      final (client, conn, fake) =
+          await openedClient(tester, _stateFrame(const []));
+      await pumpPanel(tester, client);
+
+      // Unmount the PANEL WIDGET without closing the CLIENT. main.dart's
+      // real wiring couples these via `.whenComplete(_connectors.close)`,
+      // but that is the ROUTE's business, not the widget's — this proves
+      // ConnectorsPanelView's own dispose() removes its observer
+      // unconditionally, rather than leaning on the client happening to be
+      // closed by whoever popped the route. If it did lean on that, this
+      // test would not be exercising the removeObserver call at all.
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
+      final joinsAfterDispose = fake.joinedTopics
+          .where((t) => t == 'panel:connectors:henry')
+          .length;
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      expect(
+          fake.joinedTopics
+              .where((t) => t == 'panel:connectors:henry')
+              .length,
+          joinsAfterDispose,
+          reason: 'a LEAKED observer would still call client.refetch() here '
+              '(the client itself is still open — only the widget is gone) '
+              'and rejoin a topic nobody is looking at any more');
       expect(tester.takeException(), isNull);
 
       await conn.disconnect();
