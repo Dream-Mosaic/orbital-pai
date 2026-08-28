@@ -445,6 +445,142 @@ void main() {
     expect(fake.textFrames.where((p) => p[3] == 'disconnect'), hasLength(1));
   });
 
+  // Half 2 of the fix for the whole-branch review's HIGH finding: before
+  // this, a `bad_request` reply to ANY of this topic's three handlers
+  // (`set_default`/`disconnect`/`grant_url`, all of which reply that exact
+  // shape) resolved `_pending` and then did nothing else at all — the panel
+  // had no way to learn the request even happened, let alone that it was
+  // refused.
+  group('requestError', () {
+    test('is set from an :error grant_url reply', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'none'},
+      );
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await pumpEventQueue();
+
+      expect(client.requestError, isNotNull);
+    });
+
+    test('is set from an :error reply to set_default or disconnect too — '
+        'every handler on this topic can be refused, not only grant_url',
+        () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.setDefault(999);
+      replyTo(fake, 'set_default', 'error', {'reason': 'bad_request'});
+      await pumpEventQueue();
+
+      expect(client.requestError, isNotNull);
+    });
+
+    test('notifies listeners when it is set', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      var notified = false;
+      client.addListener(() => notified = true);
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'none'},
+      );
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await pumpEventQueue();
+
+      expect(notified, isTrue);
+    });
+
+    test('is not set from an :ok reply', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'write'},
+      );
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/consent'});
+      await pumpEventQueue();
+
+      expect(client.requestError, isNull);
+    });
+
+    test(
+        'is cleared the moment a new request is pushed, before that '
+        "request's own reply lands — a retry gets a clean slate", () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'none'},
+      );
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await pumpEventQueue();
+      expect(client.requestError, isNotNull);
+
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'read'},
+      );
+
+      expect(client.requestError, isNull,
+          reason: 'cleared synchronously on push, not only once the new '
+              "reply lands — otherwise the stale error would still show "
+              'while the retry is in flight');
+    });
+
+    test('is cleared by close()', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.grantUrl(
+        connector: 'calendar',
+        fields: {'account': 'new', 'level': 'none'},
+      );
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await pumpEventQueue();
+      expect(client.requestError, isNotNull);
+
+      client.close();
+
+      expect(client.requestError, isNull);
+    });
+  });
+
+  // Finding 3 of the whole-branch review (LOW, "untested redundancy"): the
+  // `answered != 'disconnect' && answered != 'grant_url'` guard in
+  // _onMessage survived mutation because no handler that could hit it
+  // (`set_default`) ever actually replies a url. Pinned here rather than
+  // deleted — unlike a redundant safety net, this guard encodes a real
+  // design fact ("only these two handlers can ever produce a url") that is
+  // worth keeping even though nothing exercises it today.
+  test(
+      "an :ok set_default reply carrying a url does not surface it — url "
+      'only ever comes from disconnect/grant_url', () async {
+    await conn.connect();
+    client.open();
+    await pumpEventQueue();
+
+    client.setDefault(4);
+    replyTo(fake, 'set_default', 'ok',
+        {'url': 'https://should-not-surface.example'});
+    await pumpEventQueue();
+
+    expect(client.oauthUrl, isNull);
+  });
+
   test(
       'close() leaves the topic, clears state, clears oauthUrl, and '
       'deregisters the topic', () async {

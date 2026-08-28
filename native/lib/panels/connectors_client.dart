@@ -96,6 +96,7 @@ class FormField {
     this.type = '',
     this.required = false,
     this.options = const [],
+    this.defaultValue,
   });
 
   /// The key this field's value is pushed under inside `grant_url`'s `fields`
@@ -112,12 +113,28 @@ class FormField {
   /// Only meaningful for a "choice"-shaped field; empty for anything else.
   final List<FieldOption> options;
 
+  /// The value this field should start on, chosen by the SERVER because the
+  /// server owns the rule for what a safe/sensible starting point is — e.g.
+  /// Access defaults to "read", not "none" (`connectors_channel.ex`'s
+  /// `catalog/0`), because a generic client guessing `options.first` landed
+  /// on "none" and produced a request the channel refuses; see the
+  /// 2026-08-27 whole-branch review's HIGH finding. Generic like [options]:
+  /// any field type may carry one (`account` does too, even though its
+  /// options aren't server-sent at all — see [ConnectorSpec]'s
+  /// `_accountSelectField` doc). A field without one, or an unrecognized
+  /// [type], falls back to a kind-specific default the client picks itself
+  /// — see `connectors_panel.dart`'s `_defaultsFor`. Untyped (`Object?`) for
+  /// the same reason [FieldOption.value] is a bare `String`: this client
+  /// never interprets it, only forwards it back verbatim.
+  final Object? defaultValue;
+
   static FormField fromJson(Map<String, dynamic> j) => FormField(
         name: j['name'] as String,
         label: j['label'] as String? ?? '',
         type: j['type'] as String? ?? '',
         required: j['required'] == true,
         options: _options(j['options']),
+        defaultValue: j['default'],
       );
 
   // A value-less option cannot be selected (there would be nothing to push),
@@ -283,6 +300,20 @@ class ConnectorsClient extends ChangeNotifier {
   /// that flow completes server-side.
   String? _oauthUrl;
 
+  /// A message for the most recent request THIS client sent that the server
+  /// rejected, or null. Client-local UI state, same idiom as
+  /// `VoiceLockClient.enrollError`: nothing else on this channel explains a
+  /// rejected `set_default`/`disconnect`/`grant_url` — every one of those
+  /// handlers replies the same `{:error, %{reason: "bad_request"}}`
+  /// (`connectors_channel.ex`), so without this a form submit (or a row
+  /// tap) that gets refused does nothing visible at all. That silence was
+  /// half of the 2026-08-27 whole-branch review's HIGH finding — the OTHER
+  /// half being a default that guaranteed the very first submit would be
+  /// one of these. One reason ever comes back, so this is one generic
+  /// message, not a reason-keyed catalog: keep it that way unless the
+  /// server starts sending a real reason to render.
+  String? _requestError;
+
   ConnectorsState? get state => _state;
   bool get isOpen => _open;
 
@@ -290,6 +321,11 @@ class ConnectorsClient extends ChangeNotifier {
   /// rather than a Future: there is nothing here to await against per-call,
   /// only "the most recent reply that carried a url".
   String? get oauthUrl => _oauthUrl;
+
+  /// See [_requestError]. Cleared the moment ANY new request goes out (a
+  /// retry deserves a clean slate, not yesterday's message), so this is
+  /// always about the single most recent request, same as [oauthUrl].
+  String? get requestError => _requestError;
 
   /// The view calls this once it has opened [oauthUrl] in the system browser,
   /// so a later rebuild does not reopen it.
@@ -311,6 +347,7 @@ class ConnectorsClient extends ChangeNotifier {
     _leaveChannel();
     _state = null;
     _oauthUrl = null;
+    _requestError = null;
     _notify();
   }
 
@@ -380,6 +417,15 @@ class ConnectorsClient extends ChangeNotifier {
     // answer to an earlier request. Enforced here, not merely assumed.
     if (_pending != null) return false;
     _pending = event;
+    // A retry deserves a clean slate: whatever this NEW request's reply
+    // says, it shouldn't have to fight a message left over from the last
+    // one. Cleared unconditionally, not only when about to show a fresh
+    // error, so a form the user is about to resubmit correctly doesn't
+    // still show the last attempt's error while the new one is in flight.
+    if (_requestError != null) {
+      _requestError = null;
+      _notify();
+    }
     ch.push(event, payload);
     return true;
   }
@@ -407,7 +453,17 @@ class ConnectorsClient extends ChangeNotifier {
     // see the correlation doc above _pending.
     final answered = _pending;
     _pending = null;
-    if (m.replyStatus != 'ok') return;
+    if (m.replyStatus != 'ok') {
+      // See [_requestError]'s doc: this is the ONLY place a rejected
+      // request becomes visible at all. `answered` is deliberately not
+      // consulted here (unlike the url extraction below) — every handler
+      // on this topic can be rejected, so there is no handler this message
+      // should be withheld from.
+      _requestError =
+          "That didn't go through — check your selections and try again.";
+      _notify();
+      return;
+    }
     // Only these two handlers can ever produce a url (connectors_channel.ex);
     // guarding on `answered` means an :ok `set_default` reply — which echoes
     // no url — cannot accidentally pick one up from a stray payload shape.

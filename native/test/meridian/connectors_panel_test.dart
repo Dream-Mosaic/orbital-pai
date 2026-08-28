@@ -41,6 +41,7 @@ Map<String, Object?> _fieldJson({
   required String type,
   bool required = true,
   List<Map<String, Object?>> options = const [],
+  Object? defaultValue,
 }) =>
     {
       'name': name,
@@ -48,6 +49,7 @@ Map<String, Object?> _fieldJson({
       'type': type,
       'required': required,
       'options': options,
+      'default': defaultValue,
     };
 
 Map<String, Object?> _optionJson(String value, [String? label]) =>
@@ -81,11 +83,20 @@ Map<String, Object?> _googleConnector(String key, String label) =>
       key: key,
       label: label,
       fields: [
-        _fieldJson(name: 'account', label: 'Account', type: 'account_select'),
+        _fieldJson(
+          name: 'account',
+          label: 'Account',
+          type: 'account_select',
+          defaultValue: 'new',
+        ),
         _fieldJson(
           name: 'level',
           label: 'Access',
           type: 'choice',
+          // "read", not "none" (`options.first`) — the real catalog's own
+          // stated default (`connectors_channel.ex`'s `catalog/0`) since the
+          // whole-branch review's HIGH fix.
+          defaultValue: 'read',
           options: [
             _optionJson('none'),
             _optionJson('read'),
@@ -858,6 +869,200 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
+
+      await conn.disconnect();
+    });
+  });
+
+  group(
+      'server-declared defaults — half 1 of the fix for the whole-branch '
+      "review's HIGH finding", () {
+    testWidgets(
+        "the form's own default, submitted untouched, is exactly what the "
+        'catalog stated — not the guaranteed bad_request "new + none" the '
+        'old options.first default produced', (tester) async {
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      // NOT touched: this is the form exactly as it opened.
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:connectors:henry',
+        'grant_url',
+        {
+          'connector': 'calendar',
+          'fields': {'account': 'new', 'level': 'read'},
+        },
+      ]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'a choice field the server sent no default for still falls back to '
+        'its first option', (tester) async {
+      final catalog = [
+        _catalogEntry(
+          key: 'widget',
+          label: 'Widget Connector',
+          fields: [
+            _fieldJson(
+              name: 'tier',
+              label: 'Tier',
+              type: 'choice',
+              options: [
+                _optionJson('bronze', 'Bronze'),
+                _optionJson('gold', 'Gold'),
+              ],
+              // no defaultValue at all
+            ),
+          ],
+        ),
+      ];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:connectors:henry',
+        'grant_url',
+        {
+          'connector': 'widget',
+          'fields': {'tier': 'bronze'},
+        },
+      ]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        "a choice field whose stated default isn't one of its own options "
+        'falls back to the first option rather than submitting a value with '
+        'no matching selection', (tester) async {
+      final catalog = [
+        _catalogEntry(
+          key: 'widget',
+          label: 'Widget Connector',
+          fields: [
+            _fieldJson(
+              name: 'tier',
+              label: 'Tier',
+              type: 'choice',
+              defaultValue: 'platinum', // not one of the options below
+              options: [
+                _optionJson('bronze', 'Bronze'),
+                _optionJson('gold', 'Gold'),
+              ],
+            ),
+          ],
+        ),
+      ];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      expect(lastPush(fake), [
+        'panel:connectors:henry',
+        'grant_url',
+        {
+          'connector': 'widget',
+          'fields': {'tier': 'bronze'},
+        },
+      ]);
+
+      await conn.disconnect();
+    });
+  });
+
+  group(
+      'a rejected request is now visible — half 2 of the fix for the '
+      "whole-branch review's HIGH finding", () {
+    testWidgets(
+        'choosing new + none by hand and submitting shows a visible error '
+        'instead of silently doing nothing', (tester) async {
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      // The default is "read" now (half 1) — reaching the rejected
+      // combination this test is about takes a deliberate hand-picked
+      // "none", exactly the scenario half 2's fix is for.
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.formOptionKey('level', 'none')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          "That didn't go through — check your selections and try again.",
+        ),
+        findsOneWidget,
+      );
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'submitting again after a rejected request clears the old error',
+        (tester) async {
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.formOptionKey('level', 'none')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+      replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          "That didn't go through — check your selections and try again.",
+        ),
+        findsOneWidget,
+      );
+
+      // Fix the selection and retry.
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.formOptionKey('level', 'read')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+
+      expect(
+        find.text(
+          "That didn't go through — check your selections and try again.",
+        ),
+        findsNothing,
+        reason: 'a retry deserves a clean slate, not yesterday\'s error',
+      );
 
       await conn.disconnect();
     });

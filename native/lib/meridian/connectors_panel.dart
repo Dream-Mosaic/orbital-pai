@@ -124,14 +124,6 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// otherwise manages.
   bool _waitingForBrowser = false;
 
-  /// Guards [_launchIfNeeded] against scheduling a second post-frame launch
-  /// for the SAME reply: [ConnectorsClient.oauthUrl] stays non-null across
-  /// every rebuild between "the reply landed" and "the post-frame callback
-  /// ran and called [ConnectorsClient.ackOauthUrl]", and `build` can run more
-  /// than once inside that window (e.g. the `AnimatedBuilder` above this one
-  /// rebuilding for an unrelated reason).
-  bool _launchScheduled = false;
-
   @override
   void initState() {
     super.initState();
@@ -174,11 +166,23 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// calls `notifyListeners()`, and calling that synchronously from inside
   /// the `AnimatedBuilder` `builder` this runs in would be a rebuild
   /// requested in the middle of a build already in progress.
+  ///
+  /// Does NOT guard against being scheduled more than once for the SAME
+  /// reply: the "launched exactly once" property belongs to
+  /// [ConnectorsClient.ackOauthUrl]. It nulls [ConnectorsClient.oauthUrl]
+  /// before this callback launches anything, so `build`'s NEXT call passes
+  /// this method `null` and it does nothing — a second callback scheduled
+  /// for the same reply would find the same thing true by then. An earlier
+  /// version of this method carried its own `_launchScheduled` flag for the
+  /// same purpose; the 2026-08-27 whole-branch review found it survived
+  /// deletion with the whole suite still green (mutating it out broke
+  /// nothing), and could not construct a case where `build` runs twice for
+  /// the same unacked reply inside one frame to prove it load-bearing.
+  /// Removed rather than kept as untested code that looked like it was
+  /// doing something.
   void _launchIfNeeded(String? url) {
-    if (url == null || _launchScheduled) return;
-    _launchScheduled = true;
+    if (url == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _launchScheduled = false;
       if (!mounted) return;
       // Acked BEFORE launching: url_launcher hands the intent to the OS and
       // returns almost immediately, but there is no reason to let a
@@ -221,6 +225,8 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_waitingForBrowser) _waitingBanner(),
+                if (widget.client.requestError != null)
+                  _errorBanner(widget.client.requestError!),
                 if (connections.isEmpty)
                   Text(
                     'No connections.',
@@ -260,6 +266,21 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
           'it asks you to sign in first, sign in there, then try this again '
           "from here; it won't pick back up on its own.",
           style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6)),
+        ),
+      );
+
+  /// Surfaces [ConnectorsClient.requestError] — the ONLY visible sign a
+  /// `set_default`/`disconnect`/`grant_url` push was refused. Before this,
+  /// a `bad_request` reply (e.g. the grant form's old `new` + `none`
+  /// default — the whole-branch review's HIGH finding) left the panel
+  /// looking exactly like it did before the tap: no dialog, no snackbar,
+  /// nothing. Same red as [_unknownField]'s failure text; disappears the
+  /// moment a new request goes out (`ConnectorsClient._push`'s doc).
+  Widget _errorBanner(String message) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          message,
+          style: const TextStyle(fontSize: 12, color: _dangerRed),
         ),
       );
 
@@ -445,20 +466,36 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// could be nonsense, or worse, coincidentally valid, once a different
   /// connector is picked.
   ///
-  /// Defaults are a generic, arbitrary "first option wins" rule — this does
-  /// NOT reproduce the web's `default_level/1` (`conversation_live.ex:672`,
-  /// which defaults to the LAST, most-privileged access level): that rule
-  /// is Google-specific ("write" beats "read" beats "none"), and baking it
-  /// in here would mean special-casing a field literally named "level",
-  /// exactly what this renderer exists to avoid.
+  /// The server's own [FormField.defaultValue] wins whenever it is present —
+  /// see that field's doc for why the RULE for what a field should start on
+  /// belongs to the server, not this renderer. This used to default a
+  /// `choice` field to `options.first` unconditionally, which coincided with
+  /// Google's Access field's "none" (`Connectors.access_levels/1` lists
+  /// `:none` first, because it is meaningful for an EXISTING account) and
+  /// opened the grant form on a combination the channel refuses outright —
+  /// the whole-branch review's HIGH finding. `options.first` survives only
+  /// as the fallback for a field the server sent no default for (or whose
+  /// stated default isn't actually one of its own options — a malformed
+  /// catalog entry should still produce a selectable field, not a blank
+  /// one). None of this special-cases a field literally named "level": the
+  /// same rule applies to whatever `choice` field a future connector sends.
   Map<String, Object?> _defaultsFor(ConnectorSpec spec) {
     final values = <String, Object?>{};
     for (final field in spec.fields) {
       switch (_kindOf(field.type)) {
         case _FieldKind.accountSelect:
-          values[field.name] = 'new';
+          // No `options` arrive for this type at all (the account list is
+          // built client-side from live connections — see
+          // _accountSelectField's doc), so there is nothing to validate
+          // `defaultValue` against; 'new' is the fallback either way.
+          values[field.name] = field.defaultValue ?? 'new';
         case _FieldKind.choice:
-          if (field.options.isNotEmpty) {
+          final serverDefault = field.defaultValue;
+          final isValidOption =
+              serverDefault is String && field.options.any((o) => o.value == serverDefault);
+          if (isValidOption) {
+            values[field.name] = serverDefault;
+          } else if (field.options.isNotEmpty) {
             values[field.name] = field.options.first.value;
           }
         case _FieldKind.unknown:
