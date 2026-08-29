@@ -100,11 +100,40 @@ defmodule App.Google.OAuth do
         App.Http.Retry.opts() ++ req_opts()
 
     case Req.post(@revoke_url, opts) do
-      {:ok, %{status: status}} when status in 200..299 -> :ok
-      {:ok, %{status: status}} -> {:error, {:http, status}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      # Google answers 400 `invalid_token` when the token is ALREADY invalid —
+      # expired, superseded by a newer grant, or revoked from the user's own
+      # Google account page. Revocation is idempotent, and the caller's goal
+      # ("this token grants nothing") is already true, so this is success.
+      #
+      # Treating it as failure locked accounts permanently: `maybe_revoke_for_reduction`
+      # aborts the whole consent flow on a revoke error, so a dead token meant the
+      # account could not be REDUCED — and it could not be DELETED either, because
+      # deletion only fires once a single connector remains, which reduction is the
+      # only way to reach. Hit live 2026-08-27.
+      {:ok, %{status: 400, body: body}} ->
+        if invalid_token?(body) do
+          :ok
+        else
+          {:error, {:http, 400}}
+        end
+
+      {:ok, %{status: status}} ->
+        {:error, {:http, status}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  # Only the "already gone" 400 is success. A 400 from a MALFORMED request is our
+  # bug and must stay loud, so match the error Google actually documents rather
+  # than blanket-accepting the status.
+  defp invalid_token?(%{"error" => "invalid_token"}), do: true
+  defp invalid_token?(body) when is_binary(body), do: body =~ "invalid_token"
+  defp invalid_token?(_), do: false
 
   # A 200 returns the token body; a 4xx with a JSON `error` body is returned as {:ok, body} so
   # callers can pattern-match the error (e.g. invalid_grant); other failures are {:error, _}.

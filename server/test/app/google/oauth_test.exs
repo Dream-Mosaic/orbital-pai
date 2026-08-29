@@ -122,4 +122,43 @@ defmodule App.Google.OAuthTest do
     assert :ok = OAuth.revoke("some-token")
     assert_received :revoked
   end
+
+  describe "revoke/1" do
+    test "a 400 invalid_token is SUCCESS — the token is already gone" do
+      # Google returns this when the token was expired, superseded, or revoked
+      # from the user's own account page. Revocation is idempotent; the caller's
+      # goal is already met. Treating it as failure locked accounts permanently:
+      # a reduction aborts on revoke error, and deletion is only reachable
+      # THROUGH a reduction.
+      Application.put_env(:app, :google_req_opts,
+        plug: fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(400, ~s({"error":"invalid_token"}))
+        end
+      )
+
+      assert OAuth.revoke("dead-token") == :ok
+    end
+
+    test "a 400 that is NOT invalid_token stays an error — that one is our bug" do
+      Application.put_env(:app, :google_req_opts,
+        plug: fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(400, ~s({"error":"invalid_request"}))
+        end
+      )
+
+      assert OAuth.revoke("whatever") == {:error, {:http, 400}}
+    end
+
+    test "a 200 is success" do
+      Application.put_env(:app, :google_req_opts,
+        plug: fn conn -> Plug.Conn.resp(conn, 200, "") end
+      )
+
+      assert OAuth.revoke("live-token") == :ok
+    end
+  end
 end
