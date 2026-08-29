@@ -166,6 +166,12 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// True when any frame sent so far carried [event]. `lastPush` only sees the
+  /// most recent frame, so it cannot express "this never happened".
+  bool anyPushOf(FakeSocket fake, String event) => fake.sent
+      .map((f) => jsonDecode(f as String) as List<dynamic>)
+      .any((p) => p[3] == event);
+
   List<Object?> lastPush(FakeSocket fake) {
     final frame = jsonDecode(fake.sent.last as String) as List<dynamic>;
     return [frame[2], frame[3], frame[4]];
@@ -408,7 +414,12 @@ void main() {
     // Tap the SECOND row's Disconnect. A hardcoded connector (e.g. always
     // 'calendar') would fail this: the second row is 'gmail'.
     await tester.tap(find.byKey(ConnectorsPanelView.disconnectKey(22, 'gmail')));
-    await tester.pump();
+    await tester.pumpAndSettle();
+    // Disconnect now confirms first — it is destructive, and on a
+    // multi-connector account it also leaves the app for Google's
+    // consent page. Nothing is pushed until this is accepted.
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
 
     expect(lastPush(fake), [
       'panel:connectors:henry',
@@ -467,7 +478,7 @@ void main() {
     // `only_grant` itself and either deletes locally or replies with a
     // consent URL for the reduction — there is nothing left for this view to
     // fork on client-side, and no dialog left to show either way.
-    testWidgets('only_grant: true pushes disconnect and shows no dialog',
+    testWidgets('only_grant: true confirms, then pushes disconnect',
         (tester) async {
       final (client, conn, fake) = await openedClient(
         tester,
@@ -487,21 +498,24 @@ void main() {
 
       await tester
           .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Disconnect now confirms first — it is destructive, and on a
+      // multi-connector account it also leaves the app for Google's
+      // consent page. Nothing is pushed until this is accepted.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
       expect(lastPush(fake), [
         'panel:connectors:henry',
         'disconnect',
         {'account_id': 1, 'connector': 'calendar'},
       ]);
-      expect(find.byType(AlertDialog), findsNothing);
-
       await conn.disconnect();
     });
 
     testWidgets(
-        'only_grant: false ALSO pushes disconnect and shows no dialog — no '
-        'client-side fork any more', (tester) async {
+        'only_grant: false ALSO pushes the same disconnect — onlyGrant changes '
+        'only the WORDING, never the decision', (tester) async {
       final (client, conn, fake) = await openedClient(
         tester,
         _stateFrame([
@@ -520,16 +534,87 @@ void main() {
 
       await tester
           .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Disconnect now confirms first — it is destructive, and on a
+      // multi-connector account it also leaves the app for Google's
+      // consent page. Nothing is pushed until this is accepted.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
       expect(lastPush(fake), [
         'panel:connectors:henry',
         'disconnect',
         {'account_id': 1, 'connector': 'calendar'},
       ]);
-      expect(find.byType(AlertDialog), findsNothing);
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'CANCELLING the confirm pushes nothing — without this the dialog could '
+        'be decorative and every other Disconnect test would still pass',
+        (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+            onlyGrant: true,
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      await tester
+          .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(anyPushOf(fake, 'disconnect'), isFalse,
+          reason: 'a cancelled confirm must not disconnect anything');
 
       await conn.disconnect();
+    });
+
+    testWidgets(
+        'the wording differs by onlyGrant: a sole grant is a plain delete, a '
+        'shared account warns about the browser hop', (tester) async {
+      // The two branches must be distinguishable, or the explanation is
+      // useless: a user whose account holds two connectors is about to be
+      // thrown into a browser and deserves to be told SO BEFORE tapping.
+      for (final (only, wantsBrowser) in [(true, false), (false, true)]) {
+        final (client, conn, _) = await openedClient(
+          tester,
+          _stateFrame([
+            _conn(
+              accountId: 1,
+              email: 'a@b.com',
+              connector: 'calendar',
+              label: 'Google Calendar',
+              access: 'write',
+              onlyGrant: only,
+            ),
+          ]),
+        );
+        await pumpPanel(tester, client);
+
+        await tester
+            .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('browser'), wantsBrowser ? findsOneWidget : findsNothing,
+            reason: 'onlyGrant: $only should ${wantsBrowser ? "" : "not "}'
+                'mention the browser');
+
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        await conn.disconnect();
+      }
     });
 
     testWidgets(
@@ -552,7 +637,12 @@ void main() {
 
       await tester
           .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Disconnect now confirms first — it is destructive, and on a
+      // multi-connector account it also leaves the app for Google's
+      // consent page. Nothing is pushed until this is accepted.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
       await fake.kill();
       await tester.pumpAndSettle();
 
@@ -1159,7 +1249,12 @@ void main() {
 
       await tester
           .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Disconnect now confirms first — it is destructive, and on a
+      // multi-connector account it also leaves the app for Google's
+      // consent page. Nothing is pushed until this is accepted.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
       replyTo(fake, 'disconnect', 'ok',
           {'url': 'https://accounts.google.com/o/oauth2/reduce'});

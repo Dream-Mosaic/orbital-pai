@@ -11,8 +11,8 @@
 # THE TUNNEL IS THE WHOLE POINT. config.dart points at 127.0.0.1, which on the
 # device means the DEVICE's own loopback — not your Mac. `adb reverse` is what
 # bridges the two. Without it the app looks broken in a specific, misleading way:
-# the connection dot goes red and the webview panels load a blank error page,
-# because BOTH are dialling a port with nothing behind it. `flutter run` on its
+# the connection dot goes red and every nav panel stays empty, because BOTH
+# are dialling a port with nothing behind it. `flutter run` on its
 # own does not set the tunnel up; that is why this script exists.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -47,6 +47,15 @@ PORT=8787
 "$ADB" -s "$DEVICE" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
 
 echo "▸ device:  $DEVICE"
+# The build stamp. `kAppVersion` is a hand-bumped constant and says nothing
+# about which commit is on the device — a build 33 commits stale looks
+# identical to a current one in the UI, which has already cost one debugging
+# round chasing a "missing" feature that had in fact shipped. Settings ▸ About
+# shows this next to the server's version. `+` means the tree was dirty.
+SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
+echo "▸ build:   $SHA"
+
 
 # Trust nothing: prove the tunnel is actually registered before blaming the app.
 if "$ADB" -s "$DEVICE" reverse --list 2>/dev/null | grep -q "tcp:$PORT"; then
@@ -82,4 +91,4 @@ A red connection dot means the socket could not reach the server. In order:
 
 EOF
 
-exec flutter run -d "$DEVICE"
+exec flutter run -d "$DEVICE" --dart-define=BUILD_SHA="$SHA"

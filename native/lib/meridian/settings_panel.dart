@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../panels/settings_client.dart';
 import '../voice/voice_controller.dart';
+import '../app_version.dart';
 import 'tokens.dart';
 
 /// `#voice-modal .btn-error { color: #f87171 }` — the literal Danger-zone red
@@ -27,6 +28,10 @@ const Color _dangerRed = Color(0xFFEA003E);
 /// [onOpenVoiceLock] are this view's half of the wiring: bare callbacks, with
 /// no navigation of its own.
 class SettingsPanelView extends StatelessWidget {
+  /// So a test can find the build stamp without matching on its text, which
+  /// changes with every commit.
+  static const Key buildStampKey = ValueKey('settings-build-stamp');
+
   const SettingsPanelView(
       {super.key, required this.client, this.onOpenMemory, this.onOpenVoiceLock});
 
@@ -251,6 +256,22 @@ class SettingsPanelView extends StatelessWidget {
           Text('P.A.I v${state.appVersion}',
               style:
                   TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.6))),
+          // The line above is the SERVER's version; this one is the binary you
+          // are holding. They answer different questions and are routinely out
+          // of step — a device can run a build many commits behind a server
+          // that redeployed minutes ago, which looks identical in every other
+          // way. `unknown` means this build came from a bare `flutter run`
+          // rather than run-dev.sh, so it cannot say; that is deliberately not
+          // dressed up as a version.
+          Text(
+            kBuildShaUnknown ? 'build unknown' : 'build $kBuildSha',
+            key: SettingsPanelView.buildStampKey,
+            style: TextStyle(
+              fontSize: 12,
+              fontFamily: 'monospace',
+              color: M.ink.withValues(alpha: kBuildShaUnknown ? 0.45 : 0.6),
+            ),
+          ),
         ],
       );
 }

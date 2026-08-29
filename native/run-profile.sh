@@ -62,4 +62,8 @@ work? If yes, the 24/7 wall-power lever isn't there yet.
 
 EOF
 
-exec flutter run --profile -d "$DEVICE"
+SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
+echo "▸ build:   $SHA"
+
+exec flutter run --profile -d "$DEVICE" --dart-define=BUILD_SHA="$SHA"

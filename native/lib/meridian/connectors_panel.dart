@@ -341,18 +341,40 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
             _ghostButton(
               key: ConnectorsPanelView.disconnectKey(c.accountId, c.connector),
               label: 'Disconnect',
-              // Unconditional now: the server re-derives `only_grant` itself
-              // and either deletes locally (fresh `state` follows) or
-              // replies with a Google consent URL for the reduction
-              // (`connectors_channel.ex`'s `disconnect` handler) — there is
-              // no longer a dead end for this view to fork around
-              // client-side. Launching that URL is Task 5's job.
-              onTap: () => widget.client
-                  .disconnect(accountId: c.accountId, connector: c.connector),
+              onTap: () => _confirmDisconnect(context, c),
             ),
           ],
         ),
       );
+
+  /// Disconnect is destructive AND, on an account that holds more than one
+  /// connector, it leaves the app: Google will not narrow a grant without
+  /// re-consent, so the reduction has to run on its consent page in a browser.
+  ///
+  /// Both facts are worth saying BEFORE acting. An earlier version of this
+  /// panel showed a sheet explaining the browser hop but could not perform it;
+  /// when the hop started working the sheet was deleted and nothing replaced
+  /// it, so a tap silently threw the user into a browser. That reads as a bug
+  /// even though the behaviour is correct — which is exactly what happened the
+  /// first time this shipped.
+  ///
+  /// [Connection.onlyGrant] decides only WHAT WE SAY. The server re-derives it
+  /// authoritatively before acting (`connectors_channel.ex`'s `disconnect`),
+  /// because a panel rendered before this account gained a second connector
+  /// would otherwise delete a connection the user still wants. Same rule as
+  /// the Books panel's `clear_book` key: a client-side copy is a precondition
+  /// for the copy, never the decision.
+  Future<void> _confirmDisconnect(BuildContext context, Connection c) async {
+    final question = c.onlyGrant
+        ? 'Disconnect ${c.label} (${c.email})?'
+        : '${c.email} also uses another connector, and Google only narrows '
+            'access by asking again. Continue in your browser to remove '
+            '${c.label}?';
+
+    if (await _confirm(context, question)) {
+      widget.client.disconnect(accountId: c.accountId, connector: c.connector);
+    }
+  }
 
   /// `.badge` base + `.badge-primary` (the `default` badge) / `.badge-ghost`
   /// (the access badge) variants — app.css:1176-1197.
@@ -739,4 +761,26 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
           style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6)),
         ),
       );
+}
+
+/// Mirrors `books_panel.dart` and `memory_panel.dart`'s `_confirm`. Returns
+/// false on a dismissed dialog (a barrier tap or back gesture pops null) —
+/// this gates a destructive action, so an ambiguous dismissal must never read
+/// as consent.
+Future<bool> _confirm(BuildContext context, String question) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      content: Text(question),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('OK')),
+      ],
+    ),
+  );
+  return ok ?? false;
 }

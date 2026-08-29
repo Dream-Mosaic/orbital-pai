@@ -14,4 +14,15 @@ void main() {
     expect(match, isNotNull, reason: 'pubspec.yaml has no `version:` line');
     expect(kAppVersion, match!.group(1));
   });
+
+  test('an unstamped build reports "unknown" rather than inventing a version',
+      () {
+    // The whole point of the stamp is trusting what you are looking at, so a
+    // build that was NOT produced by run-dev.sh/run-profile.sh must say so
+    // instead of reporting something plausible. `flutter test` passes no
+    // --dart-define, so this IS the unstamped case.
+    expect(kBuildSha, 'unknown');
+    expect(kBuildShaUnknown, isTrue);
+  });
 }
+
