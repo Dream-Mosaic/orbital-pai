@@ -160,8 +160,17 @@ void main() {
   }
 
   Future<void> pumpPanel(WidgetTester tester, ConnectorsClient client) async {
+    // Wrapped in a SingleChildScrollView because the real host does too
+    // (drawer.dart's `Expanded(child: SingleChildScrollView(...))` around
+    // its `child`) — same rationale as voice_lock_panel_test.dart's own
+    // `pumpPanel`. The new Accounts section pushed this panel (with the
+    // grant form open, or several rows) past a bare fixed-height Scaffold's
+    // 600px test surface; that overflow is a test-harness artifact, not a
+    // real layout bug, since the drawer always scrolls it on device.
     await tester.pumpWidget(MaterialApp(
-      home: Scaffold(body: ConnectorsPanelView(client: client)),
+      home: Scaffold(
+        body: SingleChildScrollView(child: ConnectorsPanelView(client: client)),
+      ),
     ));
     await tester.pumpAndSettle();
   }
@@ -811,10 +820,22 @@ void main() {
           findsOneWidget);
       expect(find.byKey(ConnectorsPanelView.formOptionKey('account', '2')),
           findsOneWidget);
-      // Plain "a@b.com" (the picker's own row text) renders exactly once,
-      // despite account 1 appearing twice in `connections` above.
-      expect(find.text('a@b.com'), findsOneWidget);
-      expect(find.text('c@d.com'), findsOneWidget);
+      // Plain "a@b.com" renders exactly once WITHIN THE FORM, despite
+      // account 1 appearing twice in `connections` above. Scoped to
+      // [ConnectorsPanelView.grantFormKey] rather than the whole panel: the
+      // Accounts section (below) legitimately shows the same emails again in
+      // its own rows, which is a separate feature this test is not about.
+      final withinForm = find.descendant(
+        of: find.byKey(ConnectorsPanelView.grantFormKey),
+        matching: find.text('a@b.com'),
+      );
+      expect(withinForm, findsOneWidget);
+      expect(
+          find.descendant(
+            of: find.byKey(ConnectorsPanelView.grantFormKey),
+            matching: find.text('c@d.com'),
+          ),
+          findsOneWidget);
 
       await conn.disconnect();
     });
@@ -1347,6 +1368,170 @@ void main() {
               'and rejoin a topic nobody is looking at any more');
       expect(tester.takeException(), isNull);
 
+      await conn.disconnect();
+    });
+  });
+
+  group('the Accounts section', () {
+    testWidgets(
+        'lists each connected account ONCE, even when it holds two '
+        'connectors — a flat (non-grouped) render would show it twice',
+        (tester) async {
+      final (client, conn, _) = await openedClient(
+        tester,
+        _stateFrame([
+          // Account 1 holds BOTH calendar and gmail, so it appears TWICE in
+          // `connections` — exactly the shape that sorts non-adjacently
+          // under {label, email} (all Gmail rows before all Calendar rows)
+          // and is why a per-row "Remove account" button can't work here.
+          _conn(
+            accountId: 1,
+            email: 'two@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'read',
+          ),
+          _conn(
+            accountId: 1,
+            email: 'two@b.com',
+            connector: 'gmail',
+            label: 'Gmail',
+            access: 'read',
+          ),
+          _conn(
+            accountId: 2,
+            email: 'one@d.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      expect(find.text('Accounts'), findsOneWidget);
+      expect(find.byKey(ConnectorsPanelView.removeAccountKey(1)),
+          findsOneWidget);
+      expect(find.byKey(ConnectorsPanelView.removeAccountKey(2)),
+          findsOneWidget);
+      // Exactly one "Remove account" per DISTINCT account, not per row —
+      // three connection rows above, only two accounts here.
+      expect(find.text('Remove account'), findsNWidgets(2));
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'is absent entirely when there are no connections',
+        (tester) async {
+      final (client, conn, _) =
+          await openedClient(tester, _stateFrame(const []));
+      await pumpPanel(tester, client);
+
+      expect(find.text('Accounts'), findsNothing);
+      expect(find.text('Remove account'), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        "tapping an account's Remove control confirms, then pushes "
+        'remove_account with that account\'s own id, not a hardcoded one',
+        (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 11,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+          ),
+          _conn(
+            accountId: 22,
+            email: 'c@d.com',
+            connector: 'gmail',
+            label: 'Gmail',
+            access: 'read',
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      // Tap the SECOND account's Remove control. A single-account test
+      // cannot tell a per-account id from a hardcoded one — this can.
+      await tester.tap(find.byKey(ConnectorsPanelView.removeAccountKey(22)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      expect(lastPush(fake), [
+        'panel:connectors:henry',
+        'remove_account',
+        {'account_id': 22},
+      ]);
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'CANCELLING the confirm pushes nothing — without this the dialog '
+        'could be decorative and the push-test above would still pass',
+        (tester) async {
+      final (client, conn, fake) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+      fake.sent.clear();
+
+      await tester.tap(find.byKey(ConnectorsPanelView.removeAccountKey(1)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(anyPushOf(fake, 'remove_account'), isFalse,
+          reason: 'a cancelled confirm must not remove anything');
+
+      await conn.disconnect();
+    });
+
+    testWidgets(
+        'the confirm copy names Google and the manual fallback — it must '
+        'not imply access was fully severed', (tester) async {
+      final (client, conn, _) = await openedClient(
+        tester,
+        _stateFrame([
+          _conn(
+            accountId: 1,
+            email: 'a@b.com',
+            connector: 'calendar',
+            label: 'Google Calendar',
+            access: 'write',
+          ),
+        ]),
+      );
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.removeAccountKey(1)));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('a@b.com'), findsWidgets);
+      expect(find.textContaining('myaccount.google.com/permissions'),
+          findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
       await conn.disconnect();
     });
   });

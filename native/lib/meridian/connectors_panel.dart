@@ -108,6 +108,20 @@ class ConnectorsPanelView extends StatefulWidget {
   static const Key grantCancelKey = ValueKey('connectors-grant-cancel');
   static const Key grantSubmitKey = ValueKey('connectors-grant-submit');
 
+  /// The open grant form's own container. Lets a test scope a `find.text`
+  /// to inside the form specifically — needed since the Accounts section
+  /// (below) can legitimately show the SAME plain email text as the form's
+  /// account picker, and the two must not be conflated when a test is about
+  /// one or the other.
+  static const Key grantFormKey = ValueKey('connectors-grant-form');
+
+  /// The Accounts section's per-account Remove control. Keyed on the account
+  /// id alone (unlike [disconnectKey], which also needs the connector): this
+  /// section renders one row per DISTINCT account, never two, so the id by
+  /// itself is already unique here.
+  static Key removeAccountKey(int accountId) =>
+      ValueKey('connectors-remove-account-$accountId');
+
   @override
   State<ConnectorsPanelView> createState() => _ConnectorsPanelViewState();
 }
@@ -239,6 +253,7 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
                   // Server order ({label, email}) — do not re-sort.
                   for (final c in connections) _row(c),
                 const SizedBox(height: 12), // space-y-3
+                _accountsSection(connections),
                 _connectButton(state),
                 if (_formOpen) _grantForm(state),
               ],
@@ -373,6 +388,84 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
 
     if (await _confirm(context, question)) {
       widget.client.disconnect(accountId: c.accountId, connector: c.connector);
+    }
+  }
+
+  /// The Accounts section: one row per DISTINCT connected account, each with
+  /// its own Remove control — distinct from the per-(account, connector) rows
+  /// above.
+  ///
+  /// An account holding two connectors sorts into two NON-ADJACENT rows up
+  /// there (server-sorted `{label, email}` — all Gmail rows come before all
+  /// Calendar rows), so a per-row "Remove account" button would render twice
+  /// for such an account and read as two different actions. This section is
+  /// the fix: a short, separate list, one row per account, so "drop the
+  /// whole account" is a single findable action.
+  ///
+  /// Before this, the only way to fully remove a two-connector account was
+  /// reducing it to one connector (a trip through Google's consent page via
+  /// Disconnect's reduction reply) and then disconnecting what remained —
+  /// two consent round-trips just to start over. Remove here does it in one
+  /// local action: the server (`connectors_channel.ex`'s `remove_account`)
+  /// attempts to revoke the account's Google grant, then deletes the local
+  /// record REGARDLESS of whether that revoke succeeded — see
+  /// [_confirmRemoveAccount] for why the confirmation has to say so.
+  Widget _accountsSection(List<Connection> connections) {
+    final accounts = _accountSummaries(connections);
+    if (accounts.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _fieldLabel('Accounts'),
+        for (final a in accounts) _accountRow(a),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  /// One row of [_accountsSection], mirroring [_row]'s layout at a coarser
+  /// grain (email + one action, no connector-specific badges).
+  Widget _accountRow(_AccountSummary a) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                a.email,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14, color: M.ink),
+              ),
+            ),
+            const SizedBox(width: 8),
+            _ghostButton(
+              key: ConnectorsPanelView.removeAccountKey(a.accountId),
+              label: 'Remove account',
+              onTap: () => _confirmRemoveAccount(context, a),
+            ),
+          ],
+        ),
+      );
+
+  /// Removing an account is destructive, AND — unlike a plain local delete —
+  /// it is not guaranteed to be complete when it finishes: the server tries
+  /// to revoke the account's Google grant first, but a revoke failure does
+  /// NOT block the local delete that follows (`connectors_channel.ex`'s
+  /// `remove_account` — deliberately, to avoid recreating the deadlock
+  /// commit 09399ae fixed, where a dead token made an account permanently
+  /// unmodifiable). That means a failed revoke leaves Google still listing
+  /// the grant at myaccount.google.com/permissions even though this app has
+  /// forgotten the account entirely. The copy below says that up front —
+  /// it must never imply the app has fully severed access on its own.
+  Future<void> _confirmRemoveAccount(
+      BuildContext context, _AccountSummary a) async {
+    final question = 'Remove ${a.email}? This deletes it here and asks '
+        "Google to revoke access — but if that fails, Google may still list "
+        'it until you remove it yourself at '
+        'myaccount.google.com/permissions.';
+
+    if (await _confirm(context, question)) {
+      widget.client.removeAccount(a.accountId);
     }
   }
 
@@ -558,6 +651,7 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
       orElse: () => catalog.first,
     );
     return Container(
+      key: ConnectorsPanelView.grantFormKey,
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -761,6 +855,42 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
           style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6)),
         ),
       );
+}
+
+/// One row of [_ConnectorsPanelViewState._accountsSection]: a DISTINCT
+/// account, derived from [ConnectorsState.connections] rather than sent by
+/// the server as its own list.
+class _AccountSummary {
+  const _AccountSummary({required this.accountId, required this.email});
+
+  final int accountId;
+  final String email;
+}
+
+/// Groups [connections] by `accountId`, keeping one [_AccountSummary] per
+/// account.
+///
+/// This is PRESENTATION grouping, not a business rule: the server already
+/// decided (and sent) the row order — `{label, email}`, per
+/// `connectors_channel.ex`'s `rows/1` — and this function does not
+/// re-derive or override that order in any way that would matter server-side;
+/// it only collapses each account's (possibly two) rows down to the one it
+/// first appears in, for a section that has nothing to do with connectors or
+/// access levels. The standing rule on this project is that the SERVER
+/// decides ordering (see e.g. `connectors_client.dart`'s "never re-sort"
+/// warnings on [Connection] and [ConnectorSpec]) — this was read and
+/// considered before writing this function, and grouping-without-reordering
+/// is why it doesn't violate that rule: every account here keeps the
+/// position of its FIRST row in the server's own list, nothing is
+/// reshuffled, and no new order is invented that the server didn't already
+/// imply.
+List<_AccountSummary> _accountSummaries(List<Connection> connections) {
+  final seen = <int>{};
+  return [
+    for (final c in connections)
+      if (seen.add(c.accountId))
+        _AccountSummary(accountId: c.accountId, email: c.email),
+  ];
 }
 
 /// Mirrors `books_panel.dart` and `memory_panel.dart`'s `_confirm`. Returns

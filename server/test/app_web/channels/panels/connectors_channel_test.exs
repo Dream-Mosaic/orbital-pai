@@ -446,6 +446,99 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
     end
   end
 
+  describe "remove_account" do
+    setup do
+      on_exit(fn -> Application.delete_env(:app, :google_req_opts) end)
+      :ok
+    end
+
+    test "revokes the token, deletes the account regardless of connector count, and pushes fresh state",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "bye@x.com", [@cal_read, @gmail_read])
+      test_pid = self()
+
+      Application.put_env(:app, :google_req_opts, plug: {Req.Test, RemoveAccountOkStub})
+
+      Req.Test.stub(RemoveAccountOkStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:revoked, body})
+        Req.Test.json(conn, %{})
+      end)
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "remove_account", %{"account_id" => account.id})
+      assert_reply ref, :ok
+
+      assert_receive {:revoked, body}
+      assert URI.decode_query(body) == %{"token" => account.refresh_token}
+
+      assert_push "state", %{connections: []}
+      assert Repo.get(Account, account.id) == nil
+    end
+
+    # THE regression guard for the deadlock commit 09399ae fixed: a revoke
+    # failure must never block the delete. Stubbing a genuine (non
+    # invalid_token) Google error proves the coupling `disconnect`'s
+    # `maybe_revoke_for_reduction` used to have — abort on revoke error,
+    # with deletion reachable only through that path — is NOT reproduced
+    # here.
+    test "a failing revoke still deletes the account",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "dead@x.com", [@cal_read])
+
+      Application.put_env(:app, :google_req_opts,
+        plug: fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(400, ~s({"error":"invalid_request"}))
+        end
+      )
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "remove_account", %{"account_id" => account.id})
+      assert_reply ref, :ok
+
+      assert_push "state", %{connections: []}
+      assert Repo.get(Account, account.id) == nil
+    end
+
+    test "a foreign account_id is bad_request and the row still exists",
+         %{socket: socket, alice: alice, bob: bob} do
+      bobs = account!(bob, "bobs@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "remove_account", %{"account_id" => bobs.id})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      refute_push "state", _, 200
+      assert Repo.get(Account, bobs.id)
+    end
+
+    test "a non-integer account_id, or a missing key, is bad_request and deletes nothing",
+         %{socket: socket, alice: alice} do
+      valid = account!(alice, "valid@x.com", [@cal_read])
+
+      sock = drain_join!(socket, alice)
+
+      ref = push(sock, "remove_account", %{"account_id" => "3"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      ref = push(sock, "remove_account", %{})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      # Same STANDING RULE as set_default's own test above: `3 == 3.0` in
+      # Elixir, so without the is_integer/1 guard, a float that
+      # cross-type-equals the real id would slip through Enum.find's `==`.
+      ref = push(sock, "remove_account", %{"account_id" => valid.id * 1.0})
+      assert_reply ref, :error, %{reason: "bad_request"}
+
+      assert Repo.get(Account, valid.id)
+    end
+  end
+
   test "an unknown event is bad_request and the channel survives", %{socket: socket, alice: alice} do
     account = account!(alice, "sole@x.com", [@cal_read])
 

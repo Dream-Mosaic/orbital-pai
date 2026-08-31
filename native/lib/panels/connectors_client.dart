@@ -407,6 +407,15 @@ class ConnectorsClient extends ChangeNotifier {
   }) =>
       _push('grant_url', {'connector': connector, 'fields': fields});
 
+  /// Push a full account removal — the Accounts section's control
+  /// (`connectors_panel.dart`), distinct from a per-row [disconnect]. The
+  /// server attempts to revoke the account's Google token and deletes the
+  /// local record regardless of whether that revoke succeeded; the reply is
+  /// a bare `:ok` (a fresh `state` follows) or `{:error, %{reason: ...}}` for
+  /// an id this client does not own.
+  void removeAccount(int accountId) =>
+      _push('remove_account', {'account_id': accountId});
+
   bool _push(String event, Map<String, dynamic> payload) {
     final ch = _channel;
     // Phoenix answers a frame on a topic it has not joined with "unmatched

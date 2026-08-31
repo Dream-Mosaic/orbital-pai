@@ -41,8 +41,9 @@ defmodule AppWeb.Panels.ConnectorsChannel do
     * `access`        — `Connectors.access/2`, an atom, stringified for the wire
   """
   use AppWeb, :channel
+  require Logger
 
-  alias App.Google.{Accounts, Connectors, Grant}
+  alias App.Google.{Accounts, Connectors, Grant, OAuth}
 
   @impl true
   def join("panel:connectors:" <> _ignored, _payload, socket) do
@@ -109,6 +110,38 @@ defmodule AppWeb.Panels.ConnectorsChannel do
       {:reply, {:ok, %{url: AppWeb.Endpoint.url() <> path}}, socket}
     else
       _ -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+    end
+  end
+
+  @doc false
+  # "Remove account" — the Accounts section's control (see the panel's
+  # per-(account,connector)-row `disconnect` above, which this does NOT
+  # replace: an account holding two connectors sorts into two non-adjacent
+  # rows, `{label, email}`, so there is no single row this could hang off of).
+  # This drops the WHOLE account in one step, unlike `disconnect`, which on a
+  # multi-connector account defers a REDUCTION to Google's consent screen.
+  #
+  # Revoke-then-delete, unconditionally: a revoke failure must NEVER block
+  # the delete. `Accounts.delete/1`'s own sole-grant caller (`disconnect`
+  # above) does not revoke at all, leaving Google holding a grant we've
+  # forgotten — this handler does better by attempting `OAuth.revoke/1`
+  # first, but the two steps are independent on purpose. Coupling them (abort
+  # the delete on a revoke error) is the EXACT deadlock commit 09399ae fixed:
+  # reduction aborted on revoke failure, and deletion was reachable only
+  # through reduction, so a dead refresh token made an account permanently
+  # unmodifiable. Do not recreate that coupling here.
+  def handle_in("remove_account", %{"account_id" => id}, socket) when is_integer(id) do
+    case own_account(socket, id) do
+      nil ->
+        {:reply, {:error, %{reason: "bad_request"}}, socket}
+
+      account ->
+        revoke_best_effort(account)
+
+        case Accounts.delete(account) do
+          {:ok, _account} -> {:reply, :ok, push_state(socket)}
+          {:error, _changeset} -> {:reply, {:error, %{reason: "bad_request"}}, socket}
+        end
     end
   end
 
@@ -236,6 +269,22 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   # connector, because with one there is nothing to choose between.
   defp multi?(accounts, connector),
     do: Enum.count(accounts, &(Connectors.access(&1, connector) != :none)) >= 2
+
+  # Best-effort only, by design — see `remove_account`'s doc for why a failure
+  # here must never stop the delete that follows. Logged, not raised: a dead
+  # or already-revoked refresh token is an expected outcome, not a crash.
+  defp revoke_best_effort(account) do
+    case OAuth.revoke(account.refresh_token) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[connectors] revoke failed for account #{account.id} during remove_account: " <>
+            "#{inspect(reason)} — deleting the local record anyway"
+        )
+    end
+  end
 
   # Both ids on this channel are CLIENT-SUPPLIED. Resolved against this user's
   # own accounts — never Repo.get, never the topic suffix. Accounts.list/1 is
