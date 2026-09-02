@@ -334,8 +334,11 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
       assert_reply ref, :ok, %{url: url}
 
+      # `return=app` on every URL this channel hands out: it is the native
+      # client that opens them, so the flow must finish by deep-linking back
+      # into the app rather than dumping the browser on the web UI.
       assert URI.decode_query(URI.parse(url).query) ==
-               %{"gmail" => "read", "account" => to_string(account.id)}
+               %{"gmail" => "read", "account" => to_string(account.id), "return" => "app"}
 
       refute_push "state", _, 200
       persisted = Repo.get(Account, account.id)
@@ -376,7 +379,7 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       # gmail was never granted, so forcing it to :none changes nothing —
       # calendar's own grant survives untouched.
       assert URI.decode_query(URI.parse(url).query) ==
-               %{"calendar" => "read", "account" => to_string(account.id)}
+               %{"calendar" => "read", "account" => to_string(account.id), "return" => "app"}
 
       refute_push "state", _, 200
       assert Repo.get(Account, account.id)
@@ -660,7 +663,39 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
 
       assert_reply ref, :ok, %{url: url}
       assert String.starts_with?(url, AppWeb.Endpoint.url())
-      assert URI.decode_query(URI.parse(url).query) == %{"gmail" => "read"}
+      assert URI.decode_query(URI.parse(url).query) == %{"gmail" => "read", "return" => "app"}
+      drain!(sock)
+    end
+
+    # The whole point of the connector flow on the native client: the URL it opens has to ask
+    # the server to come BACK to the app. Without `return=app` the callback finishes on the web
+    # UI (`GoogleAuthController.finish/3`) and the user is left in a browser tab, with the app
+    # behind it showing no sign the flow ever happened. Asserted for every connector in the
+    # registry and for both grant targets, because a URL built on the branch nobody tested is
+    # exactly how this got missed once already.
+    test "every URL this channel hands out asks to return to the app",
+         %{socket: socket, alice: alice} do
+      account = account!(alice, "both@x.com", [@cal_read, @gmail_read])
+      {:ok, _reply, sock} = join!(socket, alice)
+      assert_push "state", %{catalog: catalog}
+
+      for entry <- catalog, target <- ["new", account.id] do
+        ref =
+          push(sock, "grant_url", %{
+            "connector" => entry.key,
+            "fields" => %{"account" => target, "level" => "read"}
+          })
+
+        assert_reply ref, :ok, %{url: url}
+        assert URI.decode_query(URI.parse(url).query)["return"] == "app"
+      end
+
+      # ...and the reduction URL `disconnect` defers to Google, which is built on its own
+      # branch and would not be covered by the loop above.
+      ref = push(sock, "disconnect", %{"account_id" => account.id, "connector" => "calendar"})
+      assert_reply ref, :ok, %{url: url}
+      assert URI.decode_query(URI.parse(url).query)["return"] == "app"
+
       drain!(sock)
     end
 
@@ -680,7 +715,12 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
       assert_reply ref, :ok, %{url: url}
 
       assert URI.decode_query(URI.parse(url).query) ==
-               %{"calendar" => "read", "gmail" => "write", "account" => to_string(a.id)}
+               %{
+                 "calendar" => "read",
+                 "gmail" => "write",
+                 "account" => to_string(a.id),
+                 "return" => "app"
+               }
 
       drain!(sock)
     end
@@ -734,7 +774,7 @@ defmodule AppWeb.Panels.ConnectorsChannelTest do
 
       # gmail dropped, calendar preserved AT ITS OWN LEVEL.
       assert URI.decode_query(URI.parse(url).query) ==
-               %{"calendar" => "write", "account" => to_string(a.id)}
+               %{"calendar" => "write", "account" => to_string(a.id), "return" => "app"}
 
       # Nothing local happened — the write is the browser's job.
       assert [_] = App.Google.Accounts.list(alice.id)

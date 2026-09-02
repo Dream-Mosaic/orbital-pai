@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart' hide FormField;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../deep_link.dart';
 import '../panels/connectors_client.dart';
+import 'hero_icon.dart';
 import 'tokens.dart';
 
 /// The known field-renderer kinds, mapped from the server's free-form
@@ -122,6 +124,9 @@ class ConnectorsPanelView extends StatefulWidget {
   static Key removeAccountKey(int accountId) =>
       ValueKey('connectors-remove-account-$accountId');
 
+  /// The outcome line for a flow that finished out in the system browser.
+  static const Key resultBannerKey = ValueKey('connectors-oauth-result');
+
   @override
   State<ConnectorsPanelView> createState() => _ConnectorsPanelViewState();
 }
@@ -203,7 +208,15 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
       // pathological double-callback race ack against a second launch of the
       // same url — ack first closes that window regardless.
       widget.client.ackOauthUrl();
-      setState(() => _waitingForBrowser = true);
+      setState(() {
+        _waitingForBrowser = true;
+        // The request has left for the browser, so this form has done its
+        // job — and it cannot be meaningfully resubmitted, because whatever
+        // happens next happens at Google. Left open, it is still sitting
+        // there filled in when the user comes back, which reads as "that
+        // didn't take" at exactly the moment it did.
+        _resetForm();
+      });
       unawaited(
         launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
       );
@@ -239,6 +252,8 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_waitingForBrowser) _waitingBanner(),
+                if (widget.client.oauthResult != null)
+                  _resultBanner(widget.client.oauthResult!),
                 if (widget.client.requestError != null)
                   _errorBanner(widget.client.requestError!),
                 if (connections.isEmpty)
@@ -250,10 +265,12 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
                     ),
                   )
                 else
-                  // Server order ({label, email}) — do not re-sort.
-                  for (final c in connections) _row(c),
+                  // Grouped by account, each group in the server's own order
+                  // and the groups in the order their accounts first appear —
+                  // see _accountSummaries. Nothing is re-sorted.
+                  for (final a in _accountSummaries(connections))
+                    _accountGroup(a),
                 const SizedBox(height: 12), // space-y-3
-                _accountsSection(connections),
                 _connectButton(state),
                 if (_formOpen) _grantForm(state),
               ],
@@ -266,20 +283,20 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// [didChangeAppLifecycleState]) — the window during which the user is
   /// presumed to be away in the system browser.
   ///
-  /// Deliberately does NOT promise the flow resumes itself if the browser
-  /// isn't signed in: `/auth/google/connect` sits behind `require_user`
-  /// (`server/lib/app_web/router.ex`), which redirects a signed-out browser
-  /// to `/login` — and neither that redirect nor the login flow behind it
-  /// (`AuthController`/`GoogleAuthController`) preserves any return path, so
-  /// a lost-session grant request lands the user back at `/`, not back in
-  /// this flow. The copy below tells them to retry from here instead of
-  /// implying they will be dropped back into it.
+  /// The sign-in sentence used to say the opposite — retry from here, it
+  /// won't pick back up on its own — because `/auth/google/connect` sits
+  /// behind `require_user` (`server/lib/app_web/router.ex`) and a signed-out
+  /// browser was bounced to `/login` with the grant request discarded.
+  /// `UserAuth.store_return_to/1` now records the refused GET and
+  /// `GoogleAuthController.handle_login/2` resumes it after sign-in, so the
+  /// flow really does continue. If either of those is ever removed, this
+  /// copy goes back to telling the user to retry from here.
   Widget _waitingBanner() => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(
           "Finishing in your browser — come back here once you're done. If "
-          'it asks you to sign in first, sign in there, then try this again '
-          "from here; it won't pick back up on its own.",
+          'it asks you to sign in first, sign in there and it will pick up '
+          'where it left off.',
           style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6)),
         ),
       );
@@ -291,6 +308,37 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// looking exactly like it did before the tap: no dialog, no snackbar,
   /// nothing. Same red as [_unknownField]'s failure text; disappears the
   /// moment a new request goes out (`ConnectorsClient._push`'s doc).
+  /// The outcome of a flow that finished in the system browser, delivered by
+  /// deep link (see [ConnectorsClient.oauthResult] and lib/deep_link.dart).
+  ///
+  /// The copy is written HERE rather than sent by the server, and the link
+  /// carries a bounded status rather than a message, for one reason: an
+  /// `intent-filter` is open to every app on the device, so a free-text field
+  /// would let any of them write whatever it liked into a banner inside
+  /// Henry.
+  ///
+  /// Success is deliberately modest. The link says the flow reached its end,
+  /// not what changed — the account list below, refetched on the same resume,
+  /// is what actually reports that.
+  Widget _resultBanner(ConnectorsOauthResult result) => Padding(
+        key: ConnectorsPanelView.resultBannerKey,
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          switch (result) {
+            ConnectorsOauthResult.ok =>
+              'Done — your connections are up to date below.',
+            ConnectorsOauthResult.failed =>
+              "That didn't finish, so nothing changed. You can try again.",
+          },
+          style: TextStyle(
+            fontSize: 12,
+            color: result == ConnectorsOauthResult.ok
+                ? M.ink.withValues(alpha: 0.6)
+                : _dangerRed,
+          ),
+        ),
+      );
+
   Widget _errorBanner(String message) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(
@@ -299,39 +347,43 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
         ),
       );
 
-  /// One row, mirroring `voice_modals.ex:383-414`'s `flex items-center
-  /// gap-2`.
+  /// One connector row, rendered INSIDE its account's group — so unlike the
+  /// web's `voice_modals.ex:383-414`, it carries no email: the group header
+  /// above it already names the account, once, instead of every row repeating
+  /// it.
+  ///
+  /// That repetition is what forced this redesign. The flat row tried to fit
+  /// label + email + three controls on one line; at 360dp (the phone this is
+  /// laid out for) BOTH text halves ellipsised, so `Google…` and `Google C…`
+  /// were the same connector on different accounts and no row could be told
+  /// from any other. Removing the email frees roughly 150dp — enough for the
+  /// label to render whole.
+  ///
+  /// Disconnect is an icon here for the last of that width. It is safe to
+  /// shrink precisely because it is not the confirmation: tapping it opens
+  /// [_confirmDisconnect], which spells out in words what is about to happen
+  /// and (on a multi-connector account) that it means a trip to the browser.
+  /// The icon is labelled for screen readers, which the bare text row was
+  /// not obliged to do and this is.
+  ///
+  /// `power`, NOT `xMark`: the drawer's own close control is an xMark, and a
+  /// second one inside every row is ambiguous — "does this dismiss the panel
+  /// or drop my connection?". The first version used xMark and the drawer
+  /// test caught it immediately, by no longer being able to say which ✕ it
+  /// meant to tap. `trash` was the other candidate and over-promises: on a
+  /// multi-connector account this does not delete anything, it opens Google's
+  /// consent page to narrow the grant.
   Widget _row(Connection c) => Padding(
         key: ConnectorsPanelView.rowKey(c.accountId, c.connector),
-        padding: const EdgeInsets.symmetric(vertical: 2), // space-y-1
+        padding: const EdgeInsets.fromLTRB(12, 2, 0, 2), // indented under its account
         child: Row(
           children: [
-            // `<span class="flex-1">{label} <span class="opacity-60">
-            // ({email})</span></span>`
             Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      c.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14, color: M.ink),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                      '(${c.email})',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: M.ink.withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ),
-                ],
+              child: Text(
+                c.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14, color: M.ink),
               ),
             ),
             // The default badge/button pair appears ONLY when at least two
@@ -352,12 +404,76 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
             ],
             const SizedBox(width: 8),
             _badge(c.access),
-            const SizedBox(width: 8),
-            _ghostButton(
+            const SizedBox(width: 4),
+            _iconButton(
               key: ConnectorsPanelView.disconnectKey(c.accountId, c.connector),
-              label: 'Disconnect',
+              semanticLabel: 'Disconnect ${c.label} (${c.email})',
               onTap: () => _confirmDisconnect(context, c),
             ),
+          ],
+        ),
+      );
+
+  /// An icon affordance with a real hit target and a screen-reader name.
+  ///
+  /// 32x32: below Material's 48dp guidance, which is the deliberate trade for
+  /// fitting a whole connector label on a 360dp line. Acceptable HERE, and
+  /// not a precedent for the panel's other controls, because every tap lands
+  /// on a confirmation dialog rather than on the destructive act itself — a
+  /// mis-tap costs one "Cancel", not a connection.
+  Widget _iconButton({
+    required Key key,
+    required String semanticLabel,
+    required VoidCallback onTap,
+  }) =>
+      Semantics(
+        button: true,
+        label: semanticLabel,
+        child: GestureDetector(
+          key: key,
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: const SizedBox(
+            width: 32,
+            height: 32,
+            child: Center(
+              child: HeroIconView(HeroIcon.power, size: 16, color: M.inkDim),
+            ),
+          ),
+        ),
+      );
+
+  /// A group's header: the account, named once, with the control that drops
+  /// it whole. "Remove" rather than "Remove account" — the row it sits on IS
+  /// the account, so the noun was saying the same thing twice, and the words
+  /// it costs are the ones the email needs.
+  Widget _accountGroup(_AccountSummary a) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      a.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14, color: M.ink),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _ghostButton(
+                    key: ConnectorsPanelView.removeAccountKey(a.accountId),
+                    label: 'Remove',
+                    onTap: () => _confirmRemoveAccount(context, a),
+                  ),
+                ],
+              ),
+            ),
+            for (final c in a.connections) _row(c),
           ],
         ),
       );
@@ -390,62 +506,6 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
       widget.client.disconnect(accountId: c.accountId, connector: c.connector);
     }
   }
-
-  /// The Accounts section: one row per DISTINCT connected account, each with
-  /// its own Remove control — distinct from the per-(account, connector) rows
-  /// above.
-  ///
-  /// An account holding two connectors sorts into two NON-ADJACENT rows up
-  /// there (server-sorted `{label, email}` — all Gmail rows come before all
-  /// Calendar rows), so a per-row "Remove account" button would render twice
-  /// for such an account and read as two different actions. This section is
-  /// the fix: a short, separate list, one row per account, so "drop the
-  /// whole account" is a single findable action.
-  ///
-  /// Before this, the only way to fully remove a two-connector account was
-  /// reducing it to one connector (a trip through Google's consent page via
-  /// Disconnect's reduction reply) and then disconnecting what remained —
-  /// two consent round-trips just to start over. Remove here does it in one
-  /// local action: the server (`connectors_channel.ex`'s `remove_account`)
-  /// attempts to revoke the account's Google grant, then deletes the local
-  /// record REGARDLESS of whether that revoke succeeded — see
-  /// [_confirmRemoveAccount] for why the confirmation has to say so.
-  Widget _accountsSection(List<Connection> connections) {
-    final accounts = _accountSummaries(connections);
-    if (accounts.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _fieldLabel('Accounts'),
-        for (final a in accounts) _accountRow(a),
-        const SizedBox(height: 12),
-      ],
-    );
-  }
-
-  /// One row of [_accountsSection], mirroring [_row]'s layout at a coarser
-  /// grain (email + one action, no connector-specific badges).
-  Widget _accountRow(_AccountSummary a) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                a.email,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14, color: M.ink),
-              ),
-            ),
-            const SizedBox(width: 8),
-            _ghostButton(
-              key: ConnectorsPanelView.removeAccountKey(a.accountId),
-              label: 'Remove account',
-              onTap: () => _confirmRemoveAccount(context, a),
-            ),
-          ],
-        ),
-      );
 
   /// Removing an account is destructive, AND — unlike a plain local delete —
   /// it is not guaranteed to be complete when it finishes: the server tries
@@ -623,11 +683,16 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   void _setField(String name, Object? value) =>
       setState(() => _fieldValues = {..._fieldValues, name: value});
 
-  void _cancelForm() => setState(() {
-        _formOpen = false;
-        _connectorKey = null;
-        _fieldValues = const {};
-      });
+  void _cancelForm() => setState(_resetForm);
+
+  /// The form's reset, shared by [_cancelForm] and [_launchIfNeeded] so the
+  /// two can never drift into clearing different halves of it. Not wrapped in
+  /// setState itself — one caller is already inside one.
+  void _resetForm() {
+    _formOpen = false;
+    _connectorKey = null;
+    _fieldValues = const {};
+  }
 
   void _submit(String connectorKey) {
     // Once the reply lands, widget.client.oauthUrl carries it and build's
@@ -857,14 +922,21 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
       );
 }
 
-/// One row of [_ConnectorsPanelViewState._accountsSection]: a DISTINCT
-/// account, derived from [ConnectorsState.connections] rather than sent by
+/// One group in the panel: a DISTINCT connected account and every connector
+/// it holds, derived from [ConnectorsState.connections] rather than sent by
 /// the server as its own list.
 class _AccountSummary {
-  const _AccountSummary({required this.accountId, required this.email});
+  const _AccountSummary({
+    required this.accountId,
+    required this.email,
+    required this.connections,
+  });
 
   final int accountId;
   final String email;
+
+  /// This account's rows, in the order the server sent them.
+  final List<Connection> connections;
 }
 
 /// Groups [connections] by `accountId`, keeping one [_AccountSummary] per
@@ -885,11 +957,25 @@ class _AccountSummary {
 /// reshuffled, and no new order is invented that the server didn't already
 /// imply.
 List<_AccountSummary> _accountSummaries(List<Connection> connections) {
-  final seen = <int>{};
+  final order = <int>[];
+  final byAccount = <int, List<Connection>>{};
+  final emails = <int, String>{};
+
+  for (final c in connections) {
+    if (byAccount.putIfAbsent(c.accountId, () => []).isEmpty) {
+      order.add(c.accountId);
+      emails[c.accountId] = c.email;
+    }
+    byAccount[c.accountId]!.add(c);
+  }
+
   return [
-    for (final c in connections)
-      if (seen.add(c.accountId))
-        _AccountSummary(accountId: c.accountId, email: c.email),
+    for (final id in order)
+      _AccountSummary(
+        accountId: id,
+        email: emails[id]!,
+        connections: byAccount[id]!,
+      ),
   ];
 }
 

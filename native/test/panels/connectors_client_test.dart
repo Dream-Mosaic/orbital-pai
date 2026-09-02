@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
+import 'package:henry_wall/deep_link.dart';
 import 'package:henry_wall/panels/connectors_client.dart';
 
 import '../support/fake_socket.dart';
@@ -687,5 +688,65 @@ void main() {
 
     expect(c2.state, ConnState.joined);
     expect(cc.state, isNull);
+  });
+
+  // The result of a flow that finished out in the system browser, delivered
+  // back through a deep link rather than through this channel. See
+  // ConnectorsClient.noteOauthResult.
+  group('oauthResult', () {
+    test('starts null and is surfaced once noted, with a notification',
+        () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      expect(client.oauthResult, isNull);
+
+      var notified = 0;
+      client.addListener(() => notified++);
+      client.noteOauthResult(ConnectorsOauthResult.ok);
+
+      expect(client.oauthResult, ConnectorsOauthResult.ok);
+      expect(notified, 1);
+    });
+
+    // The refetch that lands on the same resume is how the panel learns what
+    // changed; if it wiped this, a FAILED flow — where by definition nothing
+    // changed — would have nothing at all left to show for itself.
+    test('survives the resume refetch that lands alongside it', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.noteOauthResult(ConnectorsOauthResult.failed);
+      client.refetch();
+      await pumpEventQueue();
+
+      expect(client.oauthResult, ConnectorsOauthResult.failed);
+    });
+
+    // A new request means the user has moved on; yesterday's browser outcome
+    // must not sit above a form they are resubmitting.
+    test('is cleared when a new request goes out', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.noteOauthResult(ConnectorsOauthResult.ok);
+      client.setDefault(4);
+
+      expect(client.oauthResult, isNull);
+    });
+
+    test('is cleared when the panel closes', () async {
+      await conn.connect();
+      client.open();
+      await pumpEventQueue();
+
+      client.noteOauthResult(ConnectorsOauthResult.ok);
+      client.close();
+
+      expect(client.oauthResult, isNull);
+    });
   });
 }

@@ -223,4 +223,181 @@ defmodule AppWeb.GoogleAuthControllerTest do
     assert redirected_to(conn, 302) =~ "accounts.google.com"
     refute_received :revoked
   end
+
+  describe "returning to the native app" do
+    test "connect?return=app records the app as the return target", %{conn: conn} do
+      conn = get(conn, ~p"/auth/google/connect?return=app&calendar=read")
+
+      assert redirected_to(conn, 302) =~ "accounts.google.com"
+      assert get_session(conn, :google_oauth_return) == "app"
+    end
+
+    test "a bare connect still returns to the web", %{conn: conn} do
+      conn = get(conn, ~p"/auth/google/connect")
+
+      assert get_session(conn, :google_oauth_return) == "web"
+    end
+
+    # `return` is an allowlist of one, not a destination. If an arbitrary value were honored
+    # this parameter would be an open redirect: anyone could hand our own user a link that
+    # bounces them off our domain to somewhere else, carrying our flash and our session.
+    test "an unrecognized return target is ignored rather than honored", %{conn: conn} do
+      conn = get(conn, ~p"/auth/google/connect?return=https://evil.example.com/x")
+
+      assert get_session(conn, :google_oauth_return) == "web"
+      assert redirected_to(conn, 302) =~ "accounts.google.com"
+    end
+
+    test "a successful callback on an app flow deep-links back into the app", %{conn: conn} do
+      stub_token_exchange("deep@example.com")
+
+      conn =
+        conn
+        |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
+        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
+
+      assert redirected_to(conn, 302) == "henry://connectors?status=ok"
+      assert Accounts.get_by_email("deep@example.com")
+      assert get_session(conn, :google_oauth_return) == nil
+    end
+
+    test "a failed callback on an app flow deep-links back with an error status", %{conn: conn} do
+      conn =
+        conn
+        |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
+        |> get(~p"/auth/google/callback?state=s1&error=access_denied")
+
+      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+    end
+
+    # The web surface predates all of this and must be untouched by it: a flow with no recorded
+    # return target lands home with a flash, exactly as before.
+    test "a callback with no recorded return target finishes on the web", %{conn: conn} do
+      stub_token_exchange("web@example.com")
+
+      conn =
+        conn
+        |> init_test_session(%{google_oauth_state: "s1"})
+        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
+
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "web@example.com"
+    end
+
+    # Failing BEFORE the hop to Google is the case most likely to strand someone: the browser
+    # never leaves our domain, so without this the app-launched tab just sits on the web UI.
+    test "a failed revoke on an app flow returns to the app instead of stranding the browser",
+         %{conn: conn, user: user} do
+      {:ok, acc} =
+        %Account{}
+        |> Account.changeset(%{
+          user_id: user.id,
+          email: "strand@x.com",
+          label: "strand@x.com",
+          refresh_token: "rt-live",
+          scope: "https://www.googleapis.com/auth/calendar.events openid email"
+        })
+        |> Repo.insert()
+
+      Application.put_env(:app, :google_req_opts, plug: {Req.Test, AppRevokeFailStub})
+
+      Req.Test.stub(AppRevokeFailStub, fn c ->
+        c |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "bad"})
+      end)
+
+      conn =
+        get(conn, ~p"/auth/google/connect?return=app&account=#{acc.id}&calendar=read")
+
+      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+    end
+
+    test "missing credentials on an app flow returns to the app", %{conn: conn} do
+      System.delete_env("GOOGLE_CLIENT_ID")
+
+      conn = get(conn, ~p"/auth/google/connect?return=app&calendar=read")
+
+      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+    end
+  end
+
+  describe "resuming a signed-out request after sign-in" do
+    setup do
+      # The signed-out conn these tests need: the module-level
+      # `register_and_log_in_user` has already put a user in the session on `conn`.
+      %{anon: Phoenix.ConnTest.build_conn()}
+    end
+
+    test "a refused GET remembers what it was asking for", %{anon: anon} do
+      path = "/auth/google/connect?return=app&calendar=read"
+      conn = get(anon, path)
+
+      assert redirected_to(conn) == "/login"
+      assert get_session(conn, :user_return_to) == path
+    end
+
+    # Resuming a POST would replay a write the user never re-confirmed.
+    test "a refused POST is not remembered", %{anon: anon} do
+      conn = post(anon, ~p"/kiosk/switch_user", %{})
+
+      assert redirected_to(conn) == "/login"
+      assert get_session(conn, :user_return_to) == nil
+    end
+
+    test "signing in resumes the remembered request instead of landing home", %{anon: anon} do
+      stub_login_exchange("alice@x.com")
+
+      conn =
+        anon
+        |> init_test_session(%{
+          google_oauth_state: "s1",
+          google_oauth_flow: "login",
+          user_return_to: "/auth/google/connect?return=app&calendar=read"
+        })
+        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
+
+      assert redirected_to(conn) == "/auth/google/connect?return=app&calendar=read"
+    end
+
+    test "signing in with nothing remembered still lands home", %{anon: anon} do
+      stub_login_exchange("alice@x.com")
+
+      conn =
+        anon
+        |> init_test_session(%{google_oauth_state: "s1", google_oauth_flow: "login"})
+        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
+
+      assert redirected_to(conn) == ~p"/"
+    end
+  end
+
+  defp stub_token_exchange(email) do
+    Application.put_env(:app, :google_req_opts, plug: {Req.Test, TokenStub})
+
+    Req.Test.stub(TokenStub, fn c ->
+      Req.Test.json(c, %{
+        "access_token" => "at-1",
+        "refresh_token" => "rt-1",
+        "expires_in" => 3599,
+        "id_token" => id_token(email)
+      })
+    end)
+  end
+
+  defp stub_login_exchange(email) do
+    Application.put_env(:app, :google_req_opts, plug: {Req.Test, LoginStub})
+
+    Req.Test.stub(LoginStub, fn c ->
+      Req.Test.json(c, %{
+        "access_token" => "at-1",
+        "refresh_token" => "rt-1",
+        "expires_in" => 3599,
+        "id_token" => id_token(email)
+      })
+    end)
+  end
+
+  defp id_token(email),
+    do:
+      "h." <>
+        Base.url_encode64(Jason.encode!(%{"email" => email}), padding: false) <> ".sig"
 end

@@ -9,8 +9,14 @@ defmodule AppWeb.GoogleAuthController do
 
   alias App.Google.{Account, Accounts, Connectors, OAuth}
   alias App.Repo
+  alias AppWeb.AppLink
 
   def connect(conn, params) do
+    # Allowlisted, never a URL taken from the caller: the only thing a client may ask for is
+    # WHICH of the two known return branches to take. Anything else is ignored rather than
+    # honored, so `return` can never become an open redirect.
+    target = if params["return"] == "app", do: "app", else: "web"
+
     if configured?() do
       grants = grants_from_params(params)
       scopes = Connectors.scopes_for(grants)
@@ -21,19 +27,27 @@ defmodule AppWeb.GoogleAuthController do
 
           conn
           |> put_session(:google_oauth_state, state)
+          |> put_session(:google_oauth_return, target)
           |> delete_session(:google_oauth_flow)
           |> redirect(external: OAuth.authorize_url(state, scopes))
 
         {:error, :revoke_failed} ->
-          conn
-          |> put_flash(:error, "Couldn't update Google access (revoke failed). Please try again.")
-          |> redirect(to: ~p"/")
+          bail(conn, target, "Couldn't update Google access (revoke failed). Please try again.")
       end
     else
-      conn
-      |> put_flash(:error, "Google isn't configured (missing client credentials).")
-      |> redirect(to: ~p"/")
+      bail(conn, target, "Google isn't configured (missing client credentials).")
     end
+  end
+
+  # A failure BEFORE the hop to Google. The return target has not been stored in the session
+  # yet -- nothing is coming back through the callback to read it -- so this takes it from the
+  # params instead. An app-initiated connect that dies here must STILL return to the app: the
+  # alternative is the user stranded in a browser tab holding an error, with the app behind it
+  # showing no sign anything happened.
+  defp bail(conn, "app", _message), do: redirect(conn, external: AppLink.connectors(:error))
+
+  defp bail(conn, _target, message) do
+    conn |> put_flash(:error, message) |> redirect(to: ~p"/")
   end
 
   def callback(conn, %{"state" => state} = params) do
@@ -64,10 +78,16 @@ defmodule AppWeb.GoogleAuthController do
 
       case App.Users.upsert_allowed(email) do
         {:ok, user} ->
+          # Read BEFORE log_in_user/2, which renews the session and so CLEARS everything stored
+          # in it -- this key included. Without this, a signed-out browser sent here by
+          # `UserAuth.require_user/2` loses whatever it was originally asking for: for the
+          # native app that is the entire connector grant, silently discarded.
+          return_to = get_session(conn, :user_return_to) || ~p"/"
+
           conn
           |> AppWeb.UserAuth.log_in_user(user)
           |> put_flash(:info, "Welcome, #{user.name}.")
-          |> redirect(to: ~p"/")
+          |> redirect(to: return_to)
 
         {:error, :not_allowed} ->
           Logger.warning("[auth] login denied — #{email} is not in the allowlist")
@@ -141,12 +161,23 @@ defmodule AppWeb.GoogleAuthController do
     end
   end
 
+  # Both branches describe the SAME outcome from one `kind`, so the app and the web can never
+  # disagree about whether a flow succeeded. The app branch drops `message` on purpose -- see
+  # `AppWeb.AppLink`'s moduledoc on why a deep link carries a status and no free text.
   defp finish(conn, kind, message) do
-    conn
-    |> delete_session(:google_oauth_state)
-    |> delete_session(:google_oauth_flow)
-    |> put_flash(kind, message)
-    |> redirect(to: ~p"/")
+    target = get_session(conn, :google_oauth_return)
+
+    conn =
+      conn
+      |> delete_session(:google_oauth_state)
+      |> delete_session(:google_oauth_flow)
+      |> delete_session(:google_oauth_return)
+
+    if target == "app" do
+      redirect(conn, external: AppLink.connectors(kind))
+    else
+      conn |> put_flash(kind, message) |> redirect(to: ~p"/")
+    end
   end
 
   defp random_state, do: 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)

@@ -28,6 +28,24 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- The return hop from a connector OAuth flow. The system browser finishes at
+                 the server, which redirects here (see server/lib/app_web/app_link.ex); this
+                 filter is what lets Android hand that URL back to us instead of leaving the
+                 user sitting on a web page. Combined with the singleTop launchMode above, it
+                 brings the RUNNING app forward rather than starting a second copy.
+
+                 This is not an OAuth redirect URI and Google never sees it — no Google Cloud
+                 configuration corresponds to this block.
+
+                 The scheme must stay in sync with kAppScheme (lib/deep_link.dart) and @scheme
+                 (server/lib/app_web/app_link.ex). Android reads this at INSTALL time, so
+                 changing it requires a reinstall, not just a rebuild. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="henry"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

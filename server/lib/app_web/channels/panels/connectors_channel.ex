@@ -90,8 +90,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
         # as "review the permissions this app is requesting" for the reduced
         # set. The native client opens it in the system browser; nothing local
         # changes until that flow completes back through `/auth/google/connect`.
-        {:reply, {:ok, %{url: AppWeb.Endpoint.url() <> Grant.path(account, connector, :none)}},
-         socket}
+        {:reply, {:ok, %{url: app_url(Grant.path(account, connector, :none))}}, socket}
 
       true ->
         case Accounts.delete(account) do
@@ -107,7 +106,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
          level when not is_nil(level) <- known_level(connector, fields["level"]),
          {:ok, target} <- grant_target(socket, fields["account"]),
          path when is_binary(path) <- Grant.path(target, connector, level) do
-      {:reply, {:ok, %{url: AppWeb.Endpoint.url() <> path}}, socket}
+      {:reply, {:ok, %{url: app_url(path)}}, socket}
     else
       _ -> {:reply, {:error, %{reason: "bad_request"}}, socket}
     end
@@ -152,6 +151,27 @@ defmodule AppWeb.Panels.ConnectorsChannel do
 
   @impl true
   def handle_info(:push_state, socket), do: {:noreply, push_state(socket)}
+
+  # Every URL this channel hands out is opened by the NATIVE client, so each one carries
+  # `return=app`: it asks the server to finish the flow by deep-linking back into the app
+  # (`AppWeb.AppLink`) instead of landing the browser on the web UI, where the user would be
+  # stranded looking at a page they did not ask for with no way back. The LiveView calls
+  # `Grant.path/3` directly and keeps the web ending — which is correct THERE, because the web
+  # UI is where that user already was.
+  #
+  # The query is decoded and re-encoded rather than appended as `&return=app`, so this does not
+  # silently depend on `Grant.path/3` always emitting at least one parameter.
+  defp app_url(path) do
+    uri = URI.parse(path)
+
+    query =
+      (uri.query || "")
+      |> URI.decode_query()
+      |> Map.put("return", "app")
+      |> URI.encode_query()
+
+    AppWeb.Endpoint.url() <> URI.to_string(%URI{uri | query: query})
+  end
 
   # One query, reused for the rows AND for shows_default, so the two can never
   # disagree about which accounts exist.

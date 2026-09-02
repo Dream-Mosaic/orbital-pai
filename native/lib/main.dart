@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
 import 'connection/app_connection.dart';
+import 'deep_link.dart';
 import 'meridian/books_panel.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
@@ -44,18 +48,29 @@ class HenryApp extends StatelessWidget {
         theme: ThemeData.dark(useMaterial3: true).copyWith(
           scaffoldBackgroundColor: M.bg,
         ),
-        home: const HenryHome(),
+        // The plugin is constructed HERE, not inside HenryHome, so that
+        // HenryHome stays buildable in a widget test without a platform
+        // channel behind it — every test builds HenryHome directly and simply
+        // passes no stream. See [HenryHome.deepLinks].
+        home: HenryHome(deepLinks: AppLinks().uriLinkStream),
       );
 }
 
 class HenryHome extends StatefulWidget {
-  const HenryHome({super.key, this.connection});
+  const HenryHome({super.key, this.connection, this.deepLinks});
 
   /// The one connection, injectable so a test can build the REAL home — and
   /// therefore the real `_openPanel` wiring below — against a fake socket.
   /// Null (production) constructs one, which dials the configured server.
   /// Whatever ends up here is owned by this widget and disposed with it.
   final AppConnection? connection;
+
+  /// Deep links the OS delivers to this app — in practice the return hop from
+  /// a connector OAuth flow that finished in the system browser (see
+  /// lib/deep_link.dart). Null means "no link source", which is what widget
+  /// tests want and what makes the plugin's absence a non-event rather than a
+  /// MissingPluginException.
+  final Stream<Uri>? deepLinks;
 
   @override
   State<HenryHome> createState() => _HenryHomeState();
@@ -79,9 +94,12 @@ class _HenryHomeState extends State<HenryHome> {
   late final ConnectorsClient _connectors;
   late final BooksClient _books;
 
+  StreamSubscription<Uri>? _linkSub;
+
   @override
   void initState() {
     super.initState();
+    _linkSub = widget.deepLinks?.listen(_onDeepLink);
     _conn = widget.connection ?? AppConnection();
     _vc = VoiceController(connection: _conn);
     // Registered before connect() so the first sweep opens the badges topic
@@ -118,6 +136,7 @@ class _HenryHomeState extends State<HenryHome> {
 
   @override
   void dispose() {
+    unawaited(_linkSub?.cancel());
     _books.dispose();
     _connectors.dispose();
     _voiceLock.dispose();
@@ -128,6 +147,29 @@ class _HenryHomeState extends State<HenryHome> {
     _vc.dispose();
     _conn.dispose();
     super.dispose();
+  }
+
+  /// A connector flow that went out to the system browser has come back.
+  ///
+  /// Opening the panel when it is closed is the point, not a nicety: the user
+  /// may well have shut the drawer — or the whole app — while they were away,
+  /// and a result delivered to a panel nobody can see is a result nobody gets.
+  /// [ConnectorsClient.isOpen] is the single source of truth for whether the
+  /// drawer is up; there is no second flag here to drift from it, because
+  /// `_openPanel` is the only thing that opens this client and the route's
+  /// `whenComplete` is the only thing that closes it.
+  ///
+  /// Order matters: open first, then record. [ConnectorsClient.close] clears
+  /// the result, so recording into a closed client and opening afterwards
+  /// would show nothing at all.
+  void _onDeepLink(Uri uri) {
+    final result = parseConnectorsLink(uri);
+    // Null is every link this app does not positively recognize — including
+    // anything another app on the device fired at our scheme. Ignored, never
+    // guessed at. See parseConnectorsLink.
+    if (result == null || !mounted) return;
+    if (!_connectors.isOpen) _openPanel(MeridianTab.connectors);
+    _connectors.noteOauthResult(result);
   }
 
   /// Every station is native. A `switch` over the enum, with no default arm,

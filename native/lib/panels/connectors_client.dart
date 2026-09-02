@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../connection/app_connection.dart';
+import '../deep_link.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
 
@@ -314,6 +315,17 @@ class ConnectorsClient extends ChangeNotifier {
   /// server starts sending a real reason to render.
   String? _requestError;
 
+  /// How the last connector flow that went out to the system browser came back, or null.
+  ///
+  /// Distinct from [_requestError] on purpose, even though both end up as a line of text in the
+  /// panel: that one is about a push THIS client sent and the server refused, and is cleared
+  /// by the next push. This one is about a flow that completed somewhere else entirely — in the
+  /// browser, minutes ago, with the app backgrounded — and arrives back through a deep link
+  /// ([noteOauthResult]), not through this channel at all. Folding them together would mean a
+  /// browser result got wiped by an unrelated row tap, or a stale refusal outlived the flow it
+  /// described.
+  ConnectorsOauthResult? _oauthResult;
+
   ConnectorsState? get state => _state;
   bool get isOpen => _open;
 
@@ -326,6 +338,20 @@ class ConnectorsClient extends ChangeNotifier {
   /// retry deserves a clean slate, not yesterday's message), so this is
   /// always about the single most recent request, same as [oauthUrl].
   String? get requestError => _requestError;
+
+  /// See [_oauthResult].
+  ConnectorsOauthResult? get oauthResult => _oauthResult;
+
+  /// Record how a browser flow came back, from a deep link the OS delivered.
+  ///
+  /// Deliberately does NOT clear on the resume refetch that lands alongside it: the refetch is
+  /// how the panel learns what actually changed, and wiping the result at the same moment would
+  /// leave a failed flow — where by definition nothing changed — with nothing at all to show
+  /// for it. It clears on [close], and when a new request goes out.
+  void noteOauthResult(ConnectorsOauthResult result) {
+    _oauthResult = result;
+    _notify();
+  }
 
   /// The view calls this once it has opened [oauthUrl] in the system browser,
   /// so a later rebuild does not reopen it.
@@ -348,6 +374,7 @@ class ConnectorsClient extends ChangeNotifier {
     _state = null;
     _oauthUrl = null;
     _requestError = null;
+    _oauthResult = null;
     _notify();
   }
 
@@ -431,8 +458,9 @@ class ConnectorsClient extends ChangeNotifier {
     // one. Cleared unconditionally, not only when about to show a fresh
     // error, so a form the user is about to resubmit correctly doesn't
     // still show the last attempt's error while the new one is in flight.
-    if (_requestError != null) {
+    if (_requestError != null || _oauthResult != null) {
       _requestError = null;
+      _oauthResult = null;
       _notify();
     }
     ch.push(event, payload);

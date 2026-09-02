@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:henry_wall/connection/app_connection.dart';
@@ -48,6 +50,12 @@ const String _settingsFrame = '[null,null,"panel:settings:henry","state",'
 const String _memoryFrame = '[null,null,"panel:memory:henry","state",'
     '{"summary":"Likes coffee.","facts":[]}]';
 
+// The connectors panel renders nothing at all until its first `state` lands
+// (`ConnectorsPanelView.build` returns a shrink for a null state), so the deep
+// link tests below need one to have anything to assert a banner against.
+const String _connectorsFrame = '[null,null,"panel:connectors:henry","state",'
+    '{"connections":[],"catalog":[]}]';
+
 void main() {
   /// The one viewport the chrome is laid out for; voice_screen_test.dart uses
   /// the same. The 800x600 default overflows it.
@@ -57,7 +65,10 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  Future<(AppConnection, FakeSocket)> pumpHome(WidgetTester tester) async {
+  Future<(AppConnection, FakeSocket)> pumpHome(
+    WidgetTester tester, {
+    Stream<Uri>? deepLinks,
+  }) async {
     phone(tester);
     // Only the two panels whose CONTENT a test drives (the Settings layer
     // rows) need a state frame; every other station is asserted on its
@@ -65,6 +76,7 @@ void main() {
     final fake = FakeSocket(joinPushes: const {
       'panel:settings:henry': _settingsFrame,
       'panel:memory:henry': _memoryFrame,
+      'panel:connectors:henry': _connectorsFrame,
     });
     final conn = AppConnection(
       connector: () async => fake.socket,
@@ -73,7 +85,9 @@ void main() {
       // below closes the socket for real.
       rejoinBackoff: const [Duration(days: 1)],
     );
-    await tester.pumpWidget(MaterialApp(home: HenryHome(connection: conn)));
+    await tester.pumpWidget(
+      MaterialApp(home: HenryHome(connection: conn, deepLinks: deepLinks)),
+    );
     // Two pumps: one for connect()'s await on the connector, one for the join
     // replies the fake delivers a microtask later.
     await tester.pump();
@@ -300,5 +314,112 @@ void main() {
     expect(leftTopics(fake), isNot(contains('badges:henry')));
 
     await conn.disconnect();
+  });
+
+  /// The return hop from a connector OAuth flow that finished in the system
+  /// browser. Production feeds this from `AppLinks().uriLinkStream`; here it is
+  /// a plain controller, which is the whole reason [HenryHome.deepLinks] is
+  /// injectable — see the note in main.dart.
+  group('deep links back from the browser', () {
+    testWidgets('a success link opens the closed Connectors drawer and reports it',
+        (tester) async {
+      // Broadcast, so `close()` completes whether or not a listener is still
+      // attached. A single-subscription controller's close() never completes
+      // once its listener has been cancelled — which is exactly what a FAILING
+      // test does on the way out, turning a clean failure into a hung suite.
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
+      addTearDown(conn.disconnect);
+
+      expect(find.byType(ConnectorsPanelView), findsNothing);
+
+      links.add(Uri.parse('henry://connectors?status=ok'));
+      // Two pumps before the slide, same reason pumpHome needs two: a stream
+      // event is delivered a microtask after `add`, so the first pump is what
+      // lets _onDeepLink run at all and the second renders what it pushed.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
+
+      expect(find.byType(ConnectorsPanelView), findsOneWidget);
+      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
+      expect(find.textContaining('up to date'), findsOneWidget);
+    });
+
+    testWidgets('a failure link says nothing changed', (tester) async {
+      // Broadcast, so `close()` completes whether or not a listener is still
+      // attached. A single-subscription controller's close() never completes
+      // once its listener has been cancelled — which is exactly what a FAILING
+      // test does on the way out, turning a clean failure into a hung suite.
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
+      addTearDown(conn.disconnect);
+
+      links.add(Uri.parse('henry://connectors?status=error'));
+      // Two pumps before the slide, same reason pumpHome needs two: a stream
+      // event is delivered a microtask after `add`, so the first pump is what
+      // lets _onDeepLink run at all and the second renders what it pushed.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
+
+      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
+      expect(find.textContaining("didn't finish"), findsOneWidget);
+    });
+
+    // The drawer is normally still open — the user launched the browser from
+    // it — and re-pushing the route on top of itself would leave two.
+    testWidgets('a link arriving while the drawer is already open does not stack a second one',
+        (tester) async {
+      // Broadcast, so `close()` completes whether or not a listener is still
+      // attached. A single-subscription controller's close() never completes
+      // once its listener has been cancelled — which is exactly what a FAILING
+      // test does on the way out, turning a clean failure into a hung suite.
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
+      addTearDown(conn.disconnect);
+
+      await tapStation(tester, MeridianTab.connectors);
+      expect(find.byType(ConnectorsPanelView), findsOneWidget);
+
+      links.add(Uri.parse('henry://connectors?status=ok'));
+      // Two pumps before the slide, same reason pumpHome needs two: a stream
+      // event is delivered a microtask after `add`, so the first pump is what
+      // lets _onDeepLink run at all and the second renders what it pushed.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
+
+      expect(find.byType(ConnectorsPanelView), findsOneWidget);
+      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
+    });
+
+    // Any app on the device can fire our scheme; an unrecognized link must not
+    // yank a drawer open, let alone claim a connection succeeded.
+    testWidgets('an unrecognized link is ignored entirely', (tester) async {
+      // Broadcast, so `close()` completes whether or not a listener is still
+      // attached. A single-subscription controller's close() never completes
+      // once its listener has been cancelled — which is exactly what a FAILING
+      // test does on the way out, turning a clean failure into a hung suite.
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
+      addTearDown(conn.disconnect);
+
+      links.add(Uri.parse('henry://connectors?status=whatever'));
+      links.add(Uri.parse('henry://somewhere-else?status=ok'));
+      links.add(Uri.parse('other://connectors?status=ok'));
+      // Two pumps before the slide, same reason pumpHome needs two: a stream
+      // event is delivered a microtask after `add`, so the first pump is what
+      // lets _onDeepLink run at all and the second renders what it pushed.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
+
+      expect(find.byType(ConnectorsPanelView), findsNothing);
+    });
   });
 }

@@ -38,11 +38,29 @@ defmodule AppWeb.UserAuth do
       conn
     else
       conn
+      |> store_return_to()
       |> put_flash(:error, "Please sign in.")
       |> redirect(to: "/login")
       |> halt()
     end
   end
+
+  # Remember what the signed-out request was actually asking for, so signing in resumes it
+  # instead of dumping the user on "/". This is what makes the native app's connector flow
+  # survive an unauthenticated browser: the app opens `/auth/google/connect?...`, and without
+  # this the grant it encoded in that URL is silently discarded at the login bounce -- the user
+  # signs in, lands home, and nothing they asked for has happened.
+  #
+  # `current_path/1` reads the path and query off the request being refused, never off a param,
+  # so the stored value is always internal to this app and cannot be aimed at another host.
+  # GET only: a replayed POST is not a safe thing to resume on the user's behalf.
+  #
+  # `log_in_user/2` renews the session, which clears this key -- so it is consumed exactly once
+  # and cannot leak into a later, unrelated sign-in.
+  defp store_return_to(%Plug.Conn{method: "GET"} = conn),
+    do: put_session(conn, :user_return_to, current_path(conn))
+
+  defp store_return_to(conn), do: conn
 
   def on_mount(:default, _params, session, socket) do
     user = session |> Map.get("user_id") |> load_user()

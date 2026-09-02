@@ -186,6 +186,61 @@ void main() {
     return [frame[2], frame[3], frame[4]];
   }
 
+  /// The regression guard for the redesign, written to be FONT-INDEPENDENT.
+  ///
+  /// The obvious test — render at 360dp and assert the label does not
+  /// ellipsise — cannot work here: `flutter test` substitutes a placeholder
+  /// font whose glyphs are fixed-width boxes, so 'Google Calendar' measures
+  /// ~214dp in a test where it renders at roughly 96dp on the device. A fit
+  /// assertion written against that would fail every layout, including
+  /// correct ones. Whether it FITS is therefore a smoke check, not a unit
+  /// test.
+  ///
+  /// What is testable is the structural cause, which is the actual fix: the
+  /// email is no longer inside the row competing with the connector label for
+  /// the same line. Put it back and this fails, whatever the font.
+  testWidgets('the connector row does not render the email — the header does',
+      (tester) async {
+    final (client, conn, _) = await openedClient(
+      tester,
+      _stateFrame([
+        _conn(
+          accountId: 1,
+          email: 'davidclausen2051@gmail.com',
+          connector: 'calendar',
+          label: 'Google Calendar',
+          access: 'write',
+          isDefault: false,
+          showsDefault: true,
+        ),
+      ]),
+    );
+    await pumpPanel(tester, client);
+
+    // Anywhere in the row's subtree, in any wrapping — '(email)', 'email', or
+    // a truncation of either.
+    expect(
+      find.descendant(
+        of: find.byKey(ConnectorsPanelView.rowKey(1, 'calendar')),
+        matching: find.textContaining('davidclausen2051'),
+      ),
+      findsNothing,
+      reason: 'the email belongs to the account header, not to every row',
+    );
+    // ...and it is still on screen exactly once, in that header.
+    expect(find.text('davidclausen2051@gmail.com'), findsOneWidget);
+    // The label shares its line with the controls and nothing else.
+    expect(
+      find.descendant(
+        of: find.byKey(ConnectorsPanelView.rowKey(1, 'calendar')),
+        matching: find.text('Google Calendar'),
+      ),
+      findsOneWidget,
+    );
+
+    await conn.disconnect();
+  });
+
   testWidgets('the copy renders verbatim from the server', (tester) async {
     final (client, conn, _) = await openedClient(
       tester,
@@ -202,9 +257,27 @@ void main() {
     await pumpPanel(tester, client);
 
     expect(find.text('Google Calendar'), findsOneWidget);
-    expect(find.text('(a@b.com)'), findsOneWidget);
+    // The email is the GROUP HEADER now, rendered once and bare — it used to
+    // be '(a@b.com)' inline on every row, which is what made both halves of
+    // the row ellipsise on a 360dp phone.
+    expect(find.text('a@b.com'), findsOneWidget);
     expect(find.text('read'), findsOneWidget);
-    expect(find.text('Disconnect'), findsOneWidget);
+    // Disconnect is an icon, so it has no text to find; its key and its
+    // screen-reader name are what identify it. The name is asserted rather
+    // than just the key, because an unlabelled icon button is unusable to a
+    // screen reader and nothing else in the row would reveal that.
+    expect(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')),
+        findsOneWidget);
+    expect(
+      tester.getSemantics(
+        find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')),
+      ),
+      matchesSemantics(
+        isButton: true,
+        hasTapAction: true,
+        label: 'Disconnect Google Calendar (a@b.com)',
+      ),
+    );
     expect(find.text('+ Connect account'), findsOneWidget);
 
     await conn.disconnect();
@@ -911,6 +984,39 @@ void main() {
       await conn.disconnect();
     });
 
+    // The form is filled in, submitted, and the browser takes over — at which
+    // point the form has done its job and CANNOT be meaningfully resubmitted,
+    // because whatever happens next happens at Google. Leaving it open meant
+    // it was still sitting there, filled in, when the user came back, which
+    // reads as "that didn't take" at exactly the moment it did.
+    testWidgets('submitting closes the form once the browser has taken over',
+        (tester) async {
+      final launcher = FakeUrlLauncher.register();
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      expect(find.text('Add a connection'), findsOneWidget);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pumpAndSettle();
+      // Still open while the request is in flight: nothing has left the app
+      // yet, and a refusal has to leave the user their form.
+      expect(find.text('Add a connection'), findsOneWidget);
+
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/auth'});
+      await tester.pumpAndSettle();
+
+      expect(launcher.launches, hasLength(1));
+      expect(find.text('Add a connection'), findsNothing);
+
+      await conn.disconnect();
+    });
+
     testWidgets('tapping Cancel closes the form and pushes nothing',
         (tester) async {
       final catalog = [_googleConnector('calendar', 'Google Calendar')];
@@ -1409,14 +1515,24 @@ void main() {
       );
       await pumpPanel(tester, client);
 
-      expect(find.text('Accounts'), findsOneWidget);
       expect(find.byKey(ConnectorsPanelView.removeAccountKey(1)),
           findsOneWidget);
       expect(find.byKey(ConnectorsPanelView.removeAccountKey(2)),
           findsOneWidget);
-      // Exactly one "Remove account" per DISTINCT account, not per row —
-      // three connection rows above, only two accounts here.
-      expect(find.text('Remove account'), findsNWidgets(2));
+      // Exactly one Remove per DISTINCT account, not per row — three
+      // connection rows above, only two accounts here.
+      expect(find.text('Remove'), findsNWidgets(2));
+      // And the whole point of grouping: account 1 holds TWO connectors and
+      // its email is still printed exactly once. A flat render prints it on
+      // both rows, which is the repetition that left no width for either.
+      expect(find.text('two@b.com'), findsOneWidget);
+      expect(find.text('one@d.com'), findsOneWidget);
+      // Both of account 1's connectors are still listed under that one
+      // header — grouping must not drop the second row it folded in.
+      expect(find.byKey(ConnectorsPanelView.rowKey(1, 'calendar')),
+          findsOneWidget);
+      expect(
+          find.byKey(ConnectorsPanelView.rowKey(1, 'gmail')), findsOneWidget);
 
       await conn.disconnect();
     });
@@ -1428,8 +1544,7 @@ void main() {
           await openedClient(tester, _stateFrame(const []));
       await pumpPanel(tester, client);
 
-      expect(find.text('Accounts'), findsNothing);
-      expect(find.text('Remove account'), findsNothing);
+      expect(find.text('Remove'), findsNothing);
 
       await conn.disconnect();
     });
