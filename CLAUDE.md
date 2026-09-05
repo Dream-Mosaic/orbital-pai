@@ -49,6 +49,30 @@ docs/, docker-compose*.yml, dev.sh, CLAUDE.md, AGENTS.md …   top level
 phone/tablet/desktop are build targets + responsive layout inside `native/`, not separate folders.
 Deploy: `docker-compose.yml` (Coolify) builds with `context: ./server`.
 
+## Surfaces: Flutter is the target, the web is the monitor
+
+**As of 2026-09-05 the web UI is no longer the reference implementation.** The Flutter client is
+the product. The LiveView is being allowed to drift, and is slowly becoming a debugging /
+monitoring / deep-analysis view rather than a second front end.
+
+What that changes, concretely:
+
+- **Do NOT keep the two aligned.** Native copy, layout, ordering and affordances are decided on
+  their own merits — a 360dp phone is not a browser window, and matching the web was costing real
+  usability (the connectors rows that truncated to `Google...` and `Google C...` were a direct
+  result of porting the web's one-line row shape).
+- **A divergence is no longer an exception that needs justifying.** Earlier phases documented each
+  one; that framing is obsolete. Justify a *native* decision on native grounds.
+- **Still true, and different:** panels must render what the CHANNEL sent (labels, facts,
+  summaries) rather than inventing their own. The four `"the copy renders verbatim from the
+  server"` tests assert THAT, not web parity -- keep them.
+- The web still needs auth and still needs to work. A monitor you cannot log into is not a monitor.
+
+Parity locks left over from the port, to retire as each file is next touched:
+`connectors_panel_test.dart`'s "byte-exact with voice_modals.ex" test, `nav.dart:6`'s "**This
+order is fixed**" (its reason -- phases B-D -- is complete), and `connectors_panel.dart:836`'s
+byte-exactness claim.
+
 ## Gates (always, before any commit)
 
 **From `server/`:** `mix precommit` = `compile --warnings-as-errors` + `deps.unlock --unused` +
