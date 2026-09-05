@@ -74,7 +74,9 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - The user works **directly on `main`** (explicit consent — no feature branches needed).
 - **Commit only when asked; push only when asked, and confirm each push** (the auto-classifier will
   block an ambiguous push — get an explicit "yes, push").
-- End commit messages with: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+- End commit messages with: `Co-Authored-By: Claude <noreply@anthropic.com>`.
+  Version-free on purpose — a pinned model name goes stale the moment the model changes,
+  and following it then writes a false attribution into the history.
 - **Secrets** (`GOOGLE_API_KEY`, `CARTESIA_API_KEY` (STT + TTS), `GOOGLE_CLIENT_ID/SECRET`)
   live in `.env` (gitignored). Confirm key *names* only; **never print values**, never commit them.
 - Leave the user's own uncommitted edits alone unless they ask you to commit them.
