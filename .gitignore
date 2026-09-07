@@ -67,3 +67,8 @@ docs/superpowers/
 # Personal roadmap/wishlist — kept local
 IDEAS.md
 FEEDBACK.md
+
+# Backups of .env are still .env -- full secrets, and NOT covered by the
+# bare `.env` rule above. One `git add -A` away from being committed.
+.env.bak*
+**/.env.bak*

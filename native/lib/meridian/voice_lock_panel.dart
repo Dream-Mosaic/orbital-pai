@@ -11,7 +11,7 @@ import 'tokens.dart';
 const List<(int, String)> kVoiceLockPrompts = [
   (
     1,
-    "Hey Remi, this is my normal speaking voice. I'm going to ask about the weather, my calendar, reminders, and the grocery list, just like I do every day."
+    "Hey Henry, this is my normal speaking voice. I'm going to ask about the weather, my calendar, reminders, and the grocery list, just like I do every day."
   ),
   (
     2,

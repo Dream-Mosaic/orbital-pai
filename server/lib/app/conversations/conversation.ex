@@ -1060,7 +1060,7 @@ defmodule App.Conversations.Conversation do
 
   # ---- Voice Lock gate (spec 2026-07-12-voice-lock-design) ----
   # Every MIC-driven endpoint funnels through here. PTT and internal feeds bypass by
-  # construction. Any malfunction fails OPEN (feed) — never "Remi went deaf".
+  # construction. Any malfunction fails OPEN (feed) — never "Henry went deaf".
 
   defp gate_and_feed_endpoint(t, %{voice_lock: vl} = data)
        when is_nil(vl) or vl.mode == :off,

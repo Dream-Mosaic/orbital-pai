@@ -650,7 +650,7 @@ defmodule AppWeb.VoiceModals do
 
   @voice_lock_prompts [
     {1,
-     "Hey Remi, this is my normal speaking voice. I'm going to ask about the weather, my calendar, reminders, and the grocery list, just like I do every day."},
+     "Hey Henry, this is my normal speaking voice. I'm going to ask about the weather, my calendar, reminders, and the grocery list, just like I do every day."},
     {2,
      "The quick brown fox jumps over the lazy dog, while the five boxing wizards jump quickly over the frozen river behind our house."},
     {3,
