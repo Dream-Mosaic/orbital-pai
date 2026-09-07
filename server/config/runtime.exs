@@ -106,6 +106,18 @@ if redirect = System.get_env("GOOGLE_OAUTH_REDIRECT_URI") do
   config :app, :google_redirect_uri, redirect
 end
 
+# Authentik OIDC — server IDENTITY (who you are), distinct from the Google OAuth above
+# (a CONNECTOR: what you granted access to). See docs/superpowers/specs/
+# 2026-09-05-authentik-identity-design.md §3 for the Authentik console setup.
+for {env, key} <- [
+      {"OIDC_ISSUER", :oidc_issuer},
+      {"OIDC_CLIENT_ID", :oidc_client_id},
+      {"OIDC_CLIENT_SECRET", :oidc_client_secret},
+      {"OIDC_REDIRECT_URI", :oidc_redirect_uri}
+    ] do
+  if v = System.get_env(env), do: config(:app, key, v)
+end
+
 # One IANA timezone for the whole instance (grounds the brain's relative-time resolution and
 # local-time display). Unset → the config/config.exs default (America/Chicago). App.Config
 # validates it, so a bad value falls back rather than crashing.

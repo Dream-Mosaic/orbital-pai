@@ -1,0 +1,138 @@
+defmodule App.Auth.OidcTest do
+  use ExUnit.Case, async: false
+
+  alias App.Auth.Oidc
+
+  setup do
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/remi/")
+    Application.put_env(:app, :oidc_client_id, "cid")
+    Application.put_env(:app, :oidc_client_secret, "csecret")
+    Application.put_env(:app, :oidc_redirect_uri, "http://localhost:8787/auth/oidc/callback")
+
+    on_exit(fn ->
+      for k <- [
+            :oidc_issuer,
+            :oidc_client_id,
+            :oidc_client_secret,
+            :oidc_redirect_uri,
+            :oidc_req_opts
+          ] do
+        Application.delete_env(:app, k)
+      end
+    end)
+
+    :ok
+  end
+
+  defp id_token(claims),
+    do: "h." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".sig"
+
+  # Discovery is fetched once and cached in :persistent_term, so every test that reaches it must
+  # clear that cache first or the first test's stub leaks into the rest of the file.
+  defp stub_discovery do
+    Oidc.reset_discovery_cache()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, DiscoStub})
+
+    Req.Test.stub(DiscoStub, fn conn ->
+      Req.Test.json(conn, %{
+        "issuer" => "https://auth.example.com/application/o/henry/",
+        "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
+        "token_endpoint" => "https://auth.example.com/application/o/token/"
+      })
+    end)
+  end
+
+  test "authorize_url carries the client, redirect, scopes and state" do
+    stub_discovery()
+    url = Oidc.authorize_url("st8")
+    # From the discovery document, NOT joined onto the issuer -- the real instance serves
+    # /application/o/authorize/ while the issuer is /application/o/henry/.
+    assert String.starts_with?(url, "https://auth.example.com/application/o/authorize/")
+    q = URI.decode_query(URI.parse(url).query)
+    assert q["client_id"] == "cid"
+    assert q["redirect_uri"] == "http://localhost:8787/auth/oidc/callback"
+    assert q["response_type"] == "code"
+    assert q["state"] == "st8"
+
+    assert MapSet.new(String.split(q["scope"], " ")) ==
+             MapSet.new(["openid", "email", "profile"])
+  end
+
+  # Discovery lives at <issuer>.well-known/..., so a missing trailing slash must not produce
+  # ".../henry.well-known/...".
+  test "a slash-less issuer still finds the discovery document" do
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/henry")
+    stub_discovery()
+    assert Oidc.authorize_url("s") =~ "/application/o/authorize/"
+  end
+
+  test "an unreachable discovery document is an error, not a raise" do
+    # The discovery cache is a global :persistent_term, so this test must start from a clean
+    # cache itself -- otherwise a discovery already warmed by an earlier test in this file (via
+    # stub_discovery/0) would answer from cache instead of ever reaching DiscoFailStub, and this
+    # test would flake based on run order (ExUnit randomizes test order per seed).
+    Oidc.reset_discovery_cache()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, DiscoFailStub})
+    Req.Test.stub(DiscoFailStub, fn conn -> Plug.Conn.send_resp(conn, 500, "nope") end)
+    assert {:error, _} = Oidc.discovery()
+  end
+
+  test "exchange_code posts the code and returns the tokens" do
+    # exchange_code/1 also resolves the token endpoint via discovery, so warm the cache first
+    # (deterministically, regardless of run order) before pointing the token POST at its own
+    # stub -- the discovery fetch and the token exchange hit different mock endpoints.
+    stub_discovery()
+    assert {:ok, _} = Oidc.discovery()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, OidcTokenStub})
+
+    Req.Test.stub(OidcTokenStub, fn conn ->
+      Req.Test.json(conn, %{
+        "access_token" => "at",
+        "id_token" => id_token(%{"sub" => "s-1", "email" => "a@b.com"})
+      })
+    end)
+
+    assert {:ok, %{access_token: "at", id_token: idt}} = Oidc.exchange_code("code-1")
+    assert is_binary(idt)
+  end
+
+  test "a non-200 token response is an error, not a crash" do
+    # Same reasoning as above: warm discovery deterministically before stubbing the token
+    # endpoint to fail.
+    stub_discovery()
+    assert {:ok, _} = Oidc.discovery()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, OidcFailStub})
+
+    Req.Test.stub(OidcFailStub, fn conn ->
+      conn |> Plug.Conn.put_status(401) |> Req.Test.json(%{"error" => "invalid_client"})
+    end)
+
+    assert {:error, _} = Oidc.exchange_code("code-1")
+  end
+
+  test "claims_from_id_token reads sub, email and name" do
+    token = id_token(%{"sub" => "s-9", "email" => "A@B.com", "name" => "David"})
+
+    assert {:ok, %{sub: "s-9", email: "A@B.com", name: "David"}} =
+             Oidc.claims_from_id_token(token)
+  end
+
+  # The predicted operator error: an Authentik user created without an email.
+  # It must fail cleanly here rather than surfacing as a confusing allowlist denial.
+  test "a token with no email claim is an error" do
+    assert {:error, _} = Oidc.claims_from_id_token(id_token(%{"sub" => "s-9"}))
+  end
+
+  test "a token with no sub is an error" do
+    assert {:error, _} = Oidc.claims_from_id_token(id_token(%{"email" => "a@b.com"}))
+  end
+
+  test "a malformed token is an error, not a crash" do
+    assert {:error, _} = Oidc.claims_from_id_token("not-a-jwt")
+  end
+
+  test "configured? is false when the client id is missing" do
+    Application.delete_env(:app, :oidc_client_id)
+    refute Oidc.configured?()
+  end
+end
