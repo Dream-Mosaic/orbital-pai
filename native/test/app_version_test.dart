@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/app_version.dart';
+import 'package:orbital_pai/app_version.dart';
 
 void main() {
   test('kAppVersion is in sync with pubspec.yaml', () {

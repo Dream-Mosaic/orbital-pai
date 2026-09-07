@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/live_caption.dart';
-import 'package:henry_wall/meridian/tokens.dart';
+import 'package:orbital_pai/meridian/live_caption.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
 
 void main() {
   test('the length ladder matches index.js setCaption()', () {

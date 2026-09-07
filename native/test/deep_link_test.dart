@@ -1,18 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/deep_link.dart';
+import 'package:orbital_pai/deep_link.dart';
 
 void main() {
   group('parseConnectorsLink', () {
     test('reads a success status', () {
       expect(
-        parseConnectorsLink(Uri.parse('henry://connectors?status=ok')),
+        parseConnectorsLink(Uri.parse('orbital://connectors?status=ok')),
         ConnectorsOauthResult.ok,
       );
     });
 
     test('reads a failure status', () {
       expect(
-        parseConnectorsLink(Uri.parse('henry://connectors?status=error')),
+        parseConnectorsLink(Uri.parse('orbital://connectors?status=error')),
         ConnectorsOauthResult.failed,
       );
     });
@@ -25,15 +25,15 @@ void main() {
     });
 
     test('ignores an unknown host', () {
-      expect(parseConnectorsLink(Uri.parse('henry://something?status=ok')), isNull);
+      expect(parseConnectorsLink(Uri.parse('orbital://something?status=ok')), isNull);
     });
 
     test('ignores an unknown status rather than assuming success', () {
-      expect(parseConnectorsLink(Uri.parse('henry://connectors?status=maybe')), isNull);
+      expect(parseConnectorsLink(Uri.parse('orbital://connectors?status=maybe')), isNull);
     });
 
     test('ignores a link with no status at all', () {
-      expect(parseConnectorsLink(Uri.parse('henry://connectors')), isNull);
+      expect(parseConnectorsLink(Uri.parse('orbital://connectors')), isNull);
     });
   });
 }

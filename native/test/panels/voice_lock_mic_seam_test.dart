@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/panels/voice_lock_client.dart';
-import 'package:henry_wall/voice/voice_controller.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/panels/voice_lock_client.dart';
+import 'package:orbital_pai/voice/voice_controller.dart';
 
 import '../support/fake_socket.dart';
 import '../support/fakes.dart';

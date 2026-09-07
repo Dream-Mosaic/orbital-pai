@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/drawer.dart';
-import 'package:henry_wall/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/drawer.dart';
+import 'package:orbital_pai/meridian/hero_icon.dart';
 
 /// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
 Finder findHero(HeroIcon icon) =>

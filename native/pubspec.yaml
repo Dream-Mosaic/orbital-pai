@@ -1,4 +1,4 @@
-name: henry_wall
+name: orbital_pai
 description: "Henry native wall client (Milestone 1a spike + skeleton)."
 publish_to: 'none'
 version: 0.1.0

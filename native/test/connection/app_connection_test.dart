@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/tokens.dart';
-import 'package:henry_wall/phoenix/phoenix_channel.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
+import 'package:orbital_pai/phoenix/phoenix_channel.dart';
 
 import '../support/fake_socket.dart';
 

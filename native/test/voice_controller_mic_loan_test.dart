@@ -3,11 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/audio/audio_track_player.dart';
-import 'package:henry_wall/audio/mic_capture.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/phoenix/phoenix_socket.dart';
-import 'package:henry_wall/voice/voice_controller.dart';
+import 'package:orbital_pai/audio/audio_track_player.dart';
+import 'package:orbital_pai/audio/mic_capture.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/phoenix/phoenix_socket.dart';
+import 'package:orbital_pai/voice/voice_controller.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'support/fakes.dart';

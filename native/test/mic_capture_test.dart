@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/audio/mic_capture.dart';
+import 'package:orbital_pai/audio/mic_capture.dart';
 
 import 'support/fakes.dart';
 

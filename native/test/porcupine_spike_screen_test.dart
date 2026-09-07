@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/spike/porcupine_spike_screen.dart';
+import 'package:orbital_pai/spike/porcupine_spike_screen.dart';
 
 void main() {
   testWidgets(

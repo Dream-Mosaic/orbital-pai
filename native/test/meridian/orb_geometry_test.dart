@@ -4,8 +4,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/orb_painter.dart';
-import 'package:henry_wall/meridian/orb_state.dart';
+import 'package:orbital_pai/meridian/orb_painter.dart';
+import 'package:orbital_pai/meridian/orb_state.dart';
 
 class Rec {
   Rec(this.method, this.args);

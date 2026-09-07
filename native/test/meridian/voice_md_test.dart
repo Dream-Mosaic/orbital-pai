@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/voice_md.dart';
+import 'package:orbital_pai/meridian/voice_md.dart';
 
 void main() {
   group('inline', () {

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/hold_to_talk.dart';
-import 'package:henry_wall/meridian/tokens.dart';
+import 'package:orbital_pai/meridian/hold_to_talk.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
 
 void main() {
   Widget host({

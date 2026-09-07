@@ -256,7 +256,7 @@ defmodule AppWeb.GoogleAuthControllerTest do
         |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
         |> get(~p"/auth/google/callback?state=s1&code=auth-code")
 
-      assert redirected_to(conn, 302) == "henry://connectors?status=ok"
+      assert redirected_to(conn, 302) == "orbital://connectors?status=ok"
       assert Accounts.get_by_email("deep@example.com")
       assert get_session(conn, :google_oauth_return) == nil
     end
@@ -267,7 +267,7 @@ defmodule AppWeb.GoogleAuthControllerTest do
         |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
         |> get(~p"/auth/google/callback?state=s1&error=access_denied")
 
-      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
     end
 
     # The web surface predates all of this and must be untouched by it: a flow with no recorded
@@ -308,7 +308,7 @@ defmodule AppWeb.GoogleAuthControllerTest do
       conn =
         get(conn, ~p"/auth/google/connect?return=app&account=#{acc.id}&calendar=read")
 
-      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
     end
 
     test "missing credentials on an app flow returns to the app", %{conn: conn} do
@@ -316,7 +316,7 @@ defmodule AppWeb.GoogleAuthControllerTest do
 
       conn = get(conn, ~p"/auth/google/connect?return=app&calendar=read")
 
-      assert redirected_to(conn, 302) == "henry://connectors?status=error"
+      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
     end
   end
 

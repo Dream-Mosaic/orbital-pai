@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/hero_icon.dart';
-import 'package:henry_wall/meridian/orb_bezel.dart';
-import 'package:henry_wall/meridian/orb_painter.dart';
-import 'package:henry_wall/meridian/orb_view.dart';
-import 'package:henry_wall/meridian/tokens.dart';
+import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/orb_bezel.dart';
+import 'package:orbital_pai/meridian/orb_painter.dart';
+import 'package:orbital_pai/meridian/orb_view.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
 
 /// heroicons are SVGs, not IconData, so `find.byIcon` does not apply.
 Finder findHero(HeroIcon icon) =>

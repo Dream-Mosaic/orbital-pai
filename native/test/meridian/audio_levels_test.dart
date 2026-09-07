@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/audio_levels.dart';
+import 'package:orbital_pai/meridian/audio_levels.dart';
 
 /// Build PCM16LE mono bytes from int16 samples.
 Uint8List pcm(List<int> samples) {

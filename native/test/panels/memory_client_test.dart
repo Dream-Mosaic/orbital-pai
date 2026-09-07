@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/panels/memory_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/panels/memory_client.dart';
 
 import '../support/fake_socket.dart';
 

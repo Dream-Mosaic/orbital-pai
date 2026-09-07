@@ -2,13 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/books_garden.dart';
-import 'package:henry_wall/meridian/books_panel.dart';
-import 'package:henry_wall/meridian/drawer.dart';
-import 'package:henry_wall/meridian/hero_icon.dart';
-import 'package:henry_wall/meridian/tokens.dart';
-import 'package:henry_wall/panels/books_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/books_garden.dart';
+import 'package:orbital_pai/meridian/books_panel.dart';
+import 'package:orbital_pai/meridian/drawer.dart';
+import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
+import 'package:orbital_pai/panels/books_client.dart';
 
 import '../support/fake_socket.dart';
 

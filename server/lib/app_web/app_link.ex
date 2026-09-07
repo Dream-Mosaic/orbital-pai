@@ -10,7 +10,7 @@ defmodule AppWeb.AppLink do
 
   ## Why these carry a status and nothing else
 
-  Any app installed on the device can fire `henry://connectors?...` at us — an `intent-filter`
+  Any app installed on the device can fire `orbital://connectors?...` at us — an `intent-filter`
   is open to all callers, not just to our own server. So everything here is treated as
   attacker-controllable on arrival, and the payload is kept to a single allowlisted enum the
   client can validate exhaustively. A human-readable `message=` would be more convenient and
@@ -22,10 +22,10 @@ defmodule AppWeb.AppLink do
   """
 
   # Matches `android:scheme` in native/android/app/src/main/AndroidManifest.xml and `kScheme`
-  # in native/lib/deep_link.dart. Chosen to match the applicationId (com.henry.henry_wall).
+  # in native/lib/deep_link.dart. Chosen to match the applicationId (com.orbital.pai).
   # Changing it means changing all three, and reinstalling the app — the intent-filter is read
   # at install time.
-  @scheme "henry"
+  @scheme "orbital"
 
   @doc """
   The link that returns to the Connectors panel after a connect/disconnect flow.

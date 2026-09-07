@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/orb_state.dart';
+import 'package:orbital_pai/meridian/orb_state.dart';
 
 void main() {
   test('power off wins over everything', () {

@@ -5,9 +5,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/voice_lock_panel.dart';
-import 'package:henry_wall/panels/voice_lock_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/voice_lock_panel.dart';
+import 'package:orbital_pai/panels/voice_lock_client.dart';
 
 import '../support/fake_socket.dart';
 

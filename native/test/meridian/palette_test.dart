@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/orb_state.dart';
-import 'package:henry_wall/meridian/palette.dart';
+import 'package:orbital_pai/meridian/orb_state.dart';
+import 'package:orbital_pai/meridian/palette.dart';
 
 void main() {
   test('every orb state has a palette', () {

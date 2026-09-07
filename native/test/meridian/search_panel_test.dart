@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:henry_wall/meridian/search_panel.dart';
+import 'package:orbital_pai/meridian/search_panel.dart';
 
 void main() {
   testWidgets('renders the web\'s coming-soon line verbatim', (tester) async {

@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/thread_model.dart';
-import 'package:henry_wall/meridian/tokens.dart';
-import 'package:henry_wall/phoenix/decoded_message.dart';
-import 'package:henry_wall/voice/voice_controller.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/thread_model.dart';
+import 'package:orbital_pai/meridian/tokens.dart';
+import 'package:orbital_pai/phoenix/decoded_message.dart';
+import 'package:orbital_pai/voice/voice_controller.dart';
 
 import 'support/fakes.dart';
 

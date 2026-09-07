@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:henry_wall/phoenix/phoenix_socket.dart';
+import 'package:orbital_pai/phoenix/phoenix_socket.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 /// One in-memory socket that answers joins, and can be killed to simulate a

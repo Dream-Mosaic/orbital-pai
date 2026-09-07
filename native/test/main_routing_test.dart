@@ -2,22 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/main.dart';
-import 'package:henry_wall/meridian/books_panel.dart';
-import 'package:henry_wall/meridian/connectors_panel.dart';
-import 'package:henry_wall/meridian/drawer.dart';
-import 'package:henry_wall/meridian/hero_icon.dart';
-import 'package:henry_wall/meridian/nav.dart';
-import 'package:henry_wall/meridian/reminders_panel.dart';
-import 'package:henry_wall/meridian/search_panel.dart';
-import 'package:henry_wall/meridian/settings_drawer_host.dart';
-import 'package:henry_wall/panels/books_client.dart';
-import 'package:henry_wall/panels/connectors_client.dart';
-import 'package:henry_wall/panels/memory_client.dart';
-import 'package:henry_wall/panels/reminders_client.dart';
-import 'package:henry_wall/panels/settings_client.dart';
-import 'package:henry_wall/panels/voice_lock_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/main.dart';
+import 'package:orbital_pai/meridian/books_panel.dart';
+import 'package:orbital_pai/meridian/connectors_panel.dart';
+import 'package:orbital_pai/meridian/drawer.dart';
+import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/nav.dart';
+import 'package:orbital_pai/meridian/reminders_panel.dart';
+import 'package:orbital_pai/meridian/search_panel.dart';
+import 'package:orbital_pai/meridian/settings_drawer_host.dart';
+import 'package:orbital_pai/panels/books_client.dart';
+import 'package:orbital_pai/panels/connectors_client.dart';
+import 'package:orbital_pai/panels/memory_client.dart';
+import 'package:orbital_pai/panels/reminders_client.dart';
+import 'package:orbital_pai/panels/settings_client.dart';
+import 'package:orbital_pai/panels/voice_lock_client.dart';
 
 import 'support/fake_socket.dart';
 
@@ -334,7 +334,7 @@ void main() {
 
       expect(find.byType(ConnectorsPanelView), findsNothing);
 
-      links.add(Uri.parse('henry://connectors?status=ok'));
+      links.add(Uri.parse('orbital://connectors?status=ok'));
       // Two pumps before the slide, same reason pumpHome needs two: a stream
       // event is delivered a microtask after `add`, so the first pump is what
       // lets _onDeepLink run at all and the second renders what it pushed.
@@ -357,7 +357,7 @@ void main() {
       final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
       addTearDown(conn.disconnect);
 
-      links.add(Uri.parse('henry://connectors?status=error'));
+      links.add(Uri.parse('orbital://connectors?status=error'));
       // Two pumps before the slide, same reason pumpHome needs two: a stream
       // event is delivered a microtask after `add`, so the first pump is what
       // lets _onDeepLink run at all and the second renders what it pushed.
@@ -385,7 +385,7 @@ void main() {
       await tapStation(tester, MeridianTab.connectors);
       expect(find.byType(ConnectorsPanelView), findsOneWidget);
 
-      links.add(Uri.parse('henry://connectors?status=ok'));
+      links.add(Uri.parse('orbital://connectors?status=ok'));
       // Two pumps before the slide, same reason pumpHome needs two: a stream
       // event is delivered a microtask after `add`, so the first pump is what
       // lets _onDeepLink run at all and the second renders what it pushed.
@@ -409,8 +409,8 @@ void main() {
       final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
       addTearDown(conn.disconnect);
 
-      links.add(Uri.parse('henry://connectors?status=whatever'));
-      links.add(Uri.parse('henry://somewhere-else?status=ok'));
+      links.add(Uri.parse('orbital://connectors?status=whatever'));
+      links.add(Uri.parse('orbital://somewhere-else?status=ok'));
       links.add(Uri.parse('other://connectors?status=ok'));
       // Two pumps before the slide, same reason pumpHome needs two: a stream
       // event is delivered a microtask after `add`, so the first pump is what

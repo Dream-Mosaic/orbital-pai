@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.henry.henry_wall"
+    namespace = "com.orbital.pai"
     // record_android requires compileSdk >= 36 (checked at AAR-metadata time);
     // compileSdk is independent of targetSdk/minSdk (runtime behavior below).
     compileSdk = 36
@@ -17,7 +17,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.henry.henry_wall"
+        applicationId = "com.orbital.pai"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

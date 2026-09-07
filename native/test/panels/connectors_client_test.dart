@@ -1,9 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/deep_link.dart';
-import 'package:henry_wall/panels/connectors_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/deep_link.dart';
+import 'package:orbital_pai/panels/connectors_client.dart';
 
 import '../support/fake_socket.dart';
 

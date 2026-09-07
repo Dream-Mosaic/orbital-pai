@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/orb_state.dart';
-import 'package:henry_wall/voice/voice_controller.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/orb_state.dart';
+import 'package:orbital_pai/voice/voice_controller.dart';
 
 import '../support/fakes.dart';
 

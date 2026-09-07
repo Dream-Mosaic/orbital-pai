@@ -8,7 +8,7 @@
 /// ## Everything here is untrusted
 ///
 /// An `intent-filter` is open to every app on the device, not just to our own server: anything
-/// installed here can fire `henry://connectors?status=...` at us whenever it likes. So
+/// installed here can fire `orbital://connectors?status=...` at us whenever it likes. So
 /// [parseConnectorsLink] is written as an allowlist that returns null for anything it does not
 /// positively recognize, and the server deliberately sends a bounded status rather than a
 /// human-readable message — a free-text field would hand any installed app the ability to write
@@ -20,11 +20,11 @@ library;
 
 /// The custom scheme, matching `android:scheme` in
 /// android/app/src/main/AndroidManifest.xml and `@scheme` in server/lib/app_web/app_link.ex.
-/// Chosen to match the applicationId (com.henry.henry_wall).
+/// Chosen to match the applicationId (com.orbital.pai).
 ///
 /// Changing it means changing all three AND reinstalling the app — Android reads the
 /// intent-filter at install time, so a rebuild alone will not re-register a new scheme.
-const String kAppScheme = 'henry';
+const String kAppScheme = 'orbital';
 
 /// How a connector flow that went out to the browser came back.
 enum ConnectorsOauthResult {

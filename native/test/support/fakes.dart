@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:henry_wall/audio/audio_track_player.dart';
-import 'package:henry_wall/audio/mic_capture.dart';
+import 'package:orbital_pai/audio/audio_track_player.dart';
+import 'package:orbital_pai/audio/mic_capture.dart';
 import 'package:record/record.dart';
 
 /// What one platform call does. The `record` plugin can refuse (a throw) and

@@ -2,9 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/connection/app_connection.dart';
-import 'package:henry_wall/meridian/reminders_panel.dart';
-import 'package:henry_wall/panels/reminders_client.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/reminders_panel.dart';
+import 'package:orbital_pai/panels/reminders_client.dart';
 
 import '../support/fake_socket.dart';
 

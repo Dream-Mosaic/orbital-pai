@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/meridian/meridian_surface.dart';
-import 'package:henry_wall/meridian/orb_state.dart';
-import 'package:henry_wall/meridian/palette.dart';
+import 'package:orbital_pai/meridian/meridian_surface.dart';
+import 'package:orbital_pai/meridian/orb_state.dart';
+import 'package:orbital_pai/meridian/palette.dart';
 
 void main() {
   testWidgets('renders its child and survives a state change', (tester) async {

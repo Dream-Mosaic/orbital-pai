@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:henry_wall/phoenix/phoenix_socket.dart';
+import 'package:orbital_pai/phoenix/phoenix_socket.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 /// Decodes what the client wrote, so assertions read as protocol rather than as
