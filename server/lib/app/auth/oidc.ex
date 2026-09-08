@@ -32,6 +32,14 @@ defmodule App.Auth.Oidc do
   `App.Google.OAuth.email_from_id_token/1` already does. Recorded here because it reads like an
   oversight and is not; a JWKS client would add a moving part that secures nothing here.
 
+  That argument's premise is TLS: an unsigned token is only safe to trust because it arrived over
+  a channel nothing can tamper with in transit. `fetch_discovery/0` therefore REJECTS a
+  non-`https://` issuer before ever making a request — an `http://` `OIDC_ISSUER` would silently
+  void this section's premise and make the unsigned id_token forgeable in transit. The one
+  exception is a loopback host (`localhost`/`127.0.0.1`/`::1`), so a locally self-hosted IdP
+  during development isn't blocked. Keep this guard and the paragraph above in sync: if the
+  premise here ever changes, the guard below must change with it.
+
   Config comes from `Application.get_env(:app, :oidc_*)` (wired in `config/runtime.exs` from
   `OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`/`OIDC_REDIRECT_URI`); Req options are
   overridable via `:oidc_req_opts` (test seam, same pattern as `:google_req_opts`).
@@ -139,32 +147,53 @@ defmodule App.Auth.Oidc do
 
   def claims_from_id_token(_), do: {:error, :invalid_id_token}
 
+  @loopback_hosts ~w(localhost 127.0.0.1 ::1)
+
   defp fetch_discovery do
     issuer = issuer()
 
-    url =
-      issuer
-      |> String.trim_trailing("/")
-      |> Kernel.<>("/.well-known/openid-configuration")
+    with :ok <- ensure_secure_issuer(issuer) do
+      url =
+        issuer
+        |> String.trim_trailing("/")
+        |> Kernel.<>("/.well-known/openid-configuration")
 
-    opts = [finch: App.Finch, receive_timeout: 8_000] ++ App.Http.Retry.opts() ++ req_opts()
+      opts = [finch: App.Finch, receive_timeout: 8_000] ++ App.Http.Retry.opts() ++ req_opts()
 
-    case Req.get(url, opts) do
-      {:ok,
-       %{
-         status: 200,
-         body: %{"authorization_endpoint" => auth_ep, "token_endpoint" => token_ep}
-       }} ->
-        result = %{authorization_endpoint: auth_ep, token_endpoint: token_ep}
-        :persistent_term.put(@discovery_key, result)
-        {:ok, result}
+      case Req.get(url, opts) do
+        {:ok,
+         %{
+           status: 200,
+           body: %{"authorization_endpoint" => auth_ep, "token_endpoint" => token_ep}
+         }} ->
+          result = %{authorization_endpoint: auth_ep, token_endpoint: token_ep}
+          :persistent_term.put(@discovery_key, result)
+          {:ok, result}
 
-      _ ->
-        {:error, :discovery_failed}
+        _ ->
+          {:error, :discovery_failed}
+      end
     end
   rescue
     _ -> {:error, :discovery_failed}
   end
+
+  # The unsigned-id_token argument above holds only because the token travels over TLS end to
+  # end. Refuse a non-https issuer outright rather than let discovery/token-exchange quietly
+  # happen in cleartext — except for a loopback host, so a locally self-hosted IdP still works
+  # during development. Returns an error tuple; never raises.
+  defp ensure_secure_issuer(issuer) when is_binary(issuer) do
+    case URI.parse(issuer) do
+      %URI{scheme: "https"} -> :ok
+      %URI{scheme: "http", host: host} when host in @loopback_hosts -> :ok
+      _ -> {:error, :insecure_issuer}
+    end
+  end
+
+  # A missing/non-binary issuer is not this guard's concern -- it falls through to the existing
+  # `String.trim_trailing/2` crash below, caught by the outer `rescue` as `:discovery_failed`
+  # (an unset `OIDC_ISSUER` predates this guard and should keep failing the same way).
+  defp ensure_secure_issuer(_), do: :ok
 
   defp issuer, do: Application.get_env(:app, :oidc_issuer)
   defp client_id, do: Application.get_env(:app, :oidc_client_id)

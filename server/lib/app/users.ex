@@ -105,7 +105,15 @@ defmodule App.Users do
           entry ->
             canonical = String.downcase(entry.email)
 
-            case get_by_email(canonical) do
+            # Look the row up across the WHOLE entry (canonical + aliases), not just the
+            # canonical email. An allowlist entry's `email` can be repointed to a different
+            # address (aliases demoted/promoted) at any time; step 3's bind is one-time, so
+            # missing an existing row here is not harmless like it is in `upsert_allowed/1` --
+            # it strands the row's turns/facts/connected accounts under an id nobody logs into
+            # and inserts a fresh, empty one instead. Always write back the canonical email.
+            existing = Enum.find_value(entry_emails(entry), &get_by_email/1)
+
+            case existing do
               # The row exists but is already bound to a DIFFERENT subject: this is an
               # impostor (or a subject swap), not step 3's one-time migration bind. Refuse
               # rather than silently steal the row out from under the person it belongs to.

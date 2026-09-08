@@ -40,6 +40,7 @@ defmodule App.Users.User do
     |> cast(attrs, [:oidc_subject, :email, :name])
     |> validate_required([:oidc_subject, :email, :name])
     |> unique_constraint(:oidc_subject)
+    |> unique_constraint(:email)
   end
 
   @doc false

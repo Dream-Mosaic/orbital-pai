@@ -4,7 +4,7 @@ defmodule App.Auth.OidcTest do
   alias App.Auth.Oidc
 
   setup do
-    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/remi/")
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/orbital/")
     Application.put_env(:app, :oidc_client_id, "cid")
     Application.put_env(:app, :oidc_client_secret, "csecret")
     Application.put_env(:app, :oidc_redirect_uri, "http://localhost:8787/auth/oidc/callback")
@@ -35,7 +35,7 @@ defmodule App.Auth.OidcTest do
 
     Req.Test.stub(DiscoStub, fn conn ->
       Req.Test.json(conn, %{
-        "issuer" => "https://auth.example.com/application/o/henry/",
+        "issuer" => "https://auth.example.com/application/o/orbital/",
         "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
         "token_endpoint" => "https://auth.example.com/application/o/token/"
       })
@@ -46,7 +46,7 @@ defmodule App.Auth.OidcTest do
     stub_discovery()
     assert {:ok, url} = Oidc.authorize_url("st8")
     # From the discovery document, NOT joined onto the issuer -- the real instance serves
-    # /application/o/authorize/ while the issuer is /application/o/henry/.
+    # /application/o/authorize/ while the issuer is /application/o/orbital/.
     assert String.starts_with?(url, "https://auth.example.com/application/o/authorize/")
     q = URI.decode_query(URI.parse(url).query)
     assert q["client_id"] == "cid"
@@ -59,9 +59,9 @@ defmodule App.Auth.OidcTest do
   end
 
   # Discovery lives at <issuer>.well-known/..., so a missing trailing slash must not produce
-  # ".../henry.well-known/...".
+  # ".../orbital.well-known/...".
   test "a slash-less issuer still finds the discovery document" do
-    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/henry")
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/orbital")
     stub_discovery()
     assert {:ok, url} = Oidc.authorize_url("s")
     assert url =~ "/application/o/authorize/"
@@ -70,14 +70,14 @@ defmodule App.Auth.OidcTest do
   # The stub inspects conn.request_path directly, so this proves the trim-trailing-slash join
   # actually lands on <issuer>/.well-known/openid-configuration, not merely that *a* request
   # happened -- a bare `Req.Test.json/2` stub (ignoring conn) would pass even if the URL join
-  # were wrong (e.g. a stray "henry.well-known" from a missing slash-trim).
+  # were wrong (e.g. a stray "orbital.well-known" from a missing slash-trim).
   test "a slash-less issuer requests the discovery document at the right path" do
-    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/henry")
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/orbital")
     Oidc.reset_discovery_cache()
     Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, DiscoPathStub})
 
     Req.Test.stub(DiscoPathStub, fn conn ->
-      assert conn.request_path == "/application/o/henry/.well-known/openid-configuration"
+      assert conn.request_path == "/application/o/orbital/.well-known/openid-configuration"
 
       Req.Test.json(conn, %{
         "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
@@ -183,5 +183,30 @@ defmodule App.Auth.OidcTest do
   test "configured? is false when the client id is missing" do
     Application.delete_env(:app, :oidc_client_id)
     refute Oidc.configured?()
+  end
+
+  # The unsigned-id_token argument (moduledoc) holds only because the token travels over TLS
+  # end to end. A non-https issuer would silently void that premise.
+  test "a non-https issuer is refused, not raised" do
+    Application.put_env(:app, :oidc_issuer, "http://auth.example.com/application/o/orbital/")
+    Oidc.reset_discovery_cache()
+
+    assert {:error, :insecure_issuer} = Oidc.discovery()
+  end
+
+  # Except for a loopback host, so a locally self-hosted IdP still works during development.
+  test "a loopback issuer over http is allowed" do
+    Application.put_env(:app, :oidc_issuer, "http://localhost:9000/application/o/orbital/")
+    Oidc.reset_discovery_cache()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, LoopbackDiscoStub})
+
+    Req.Test.stub(LoopbackDiscoStub, fn conn ->
+      Req.Test.json(conn, %{
+        "authorization_endpoint" => "http://localhost:9000/application/o/authorize/",
+        "token_endpoint" => "http://localhost:9000/application/o/token/"
+      })
+    end)
+
+    assert {:ok, _} = Oidc.discovery()
   end
 end

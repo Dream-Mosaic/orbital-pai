@@ -201,6 +201,30 @@ defmodule App.UsersTest do
       assert {:error, _} =
                Users.upsert_from_oidc(%{sub: "s-2", email: "alice@x.com", name: "Impostor"})
     end
+
+    # I-1: the allowlist entry's CANONICAL email can be repointed (the natural follow-up to this
+    # whole migration -- promoting a non-Google address, demoting the Gmail one to an alias).
+    # Step 3's bind is one-time, so looking the row up ONLY by the new canonical would miss the
+    # existing row and insert a fresh, empty one -- stranding the real user's turns/facts/
+    # connectors under an id nobody logs into. The lookup must check every email the entry owns.
+    test "an entry whose canonical email is new but whose alias matches an existing row binds to it" do
+      # Existing row from before the cutover, under what was then the canonical address.
+      {:ok, existing} = Users.upsert_allowed("alice@x.com")
+
+      # The allowlist entry is repointed: a new canonical, the old address demoted to an alias.
+      Application.put_env(:app, :allowed_users, [
+        %{email: "dave@newdomain.com", name: "Dave", aliases: ["alice@x.com"]}
+      ])
+
+      assert {:ok, bound} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Dave"})
+
+      assert bound.id == existing.id,
+             "must bind the existing row via the alias, not insert a second one"
+
+      assert bound.email == "dave@newdomain.com"
+      assert length(App.Repo.all(App.Users.User)) == 1
+    end
   end
 
   describe "stamp_briefing! busy-retry (with_busy_retry/2)" do

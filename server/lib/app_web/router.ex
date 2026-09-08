@@ -21,6 +21,11 @@ defmodule AppWeb.Router do
     # public (no auth)
     get "/login", AuthController, :login_page
     get "/auth/login", AuthController, :login
+    # Deliberately temporary cutover fallback (spec 2026-09-05 §6): a second way into the web
+    # app while the Authentik migration is verified against production. DELETE this route
+    # together with AuthController.login_via_google/2 and GoogleAuthController's
+    # `flow == "login"` branch once Authentik is confirmed reliable.
+    get "/auth/login/google", AuthController, :login_via_google
     get "/auth/google/callback", GoogleAuthController, :callback
     get "/auth/oidc/callback", AuthController, :callback
     delete "/logout", AuthController, :logout
