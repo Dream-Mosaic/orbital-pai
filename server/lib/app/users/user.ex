@@ -33,6 +33,15 @@ defmodule App.Users.User do
     |> unique_constraint(:email)
   end
 
+  @doc "Bind an OIDC subject to a user. Separate from changeset/2 so an ordinary profile update
+  can never rewrite an identity key."
+  def oidc_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:oidc_subject, :email, :name])
+    |> validate_required([:oidc_subject, :email, :name])
+    |> unique_constraint(:oidc_subject)
+  end
+
   @doc false
   def prefs_changeset(user, attrs) do
     user

@@ -65,6 +65,68 @@ defmodule App.Users do
 
   def upsert_allowed(_), do: {:error, :not_allowed}
 
+  @doc """
+  Resolve an Authentik login to a user row.
+
+  Order is load-bearing and must not be reordered:
+
+    1. Known subject -> that row. The steady state, every login after the first.
+    2. Unknown subject -> the ALLOWED_USERS gate, by email. This is the SECOND gate: Authentik's
+       group binding is the first, and both must pass (spec 2026-09-05 decision 4).
+    3. Listed, row exists for that email -> BIND the subject to it. This runs exactly once per
+       user, ever, and is the entire migration story off Google sign-in.
+    4. Listed, no row -> insert.
+
+  Step 3 is the dangerous one. Getting it wrong does not raise: it falls through to step 4 and
+  creates a SECOND row, leaving the user looking at an empty app while their turns, facts and
+  connected accounts sit intact under an id nobody is logged into. It has a dedicated test and a
+  mutation guard.
+
+  Note that step 1 returns BEFORE the allowlist check, on purpose: a user whose email changed in
+  Authentik must keep resolving to their row even though the new address was never allowlisted.
+  Eviction still works -- `UserAuth.load_user/1` re-checks `allowed?/1` on every request.
+
+  Step 3 additionally refuses (`{:error, :subject_conflict}`) if the row it would bind to already
+  carries a DIFFERENT subject. Without that guard, a second person logging in under a listed email
+  with a fresh subject would silently steal the existing owner's row out from under them -- step 3
+  is meant to run exactly once per row, not to be re-triggerable by an impostor.
+  """
+  def upsert_from_oidc(%{sub: sub, email: email, name: name})
+      when is_binary(sub) and is_binary(email) do
+    case Repo.get_by(User, oidc_subject: sub) do
+      %User{} = user ->
+        {:ok, user}
+
+      nil ->
+        case entry_for(email) do
+          nil ->
+            {:error, :not_allowed}
+
+          entry ->
+            canonical = String.downcase(entry.email)
+
+            case get_by_email(canonical) do
+              # The row exists but is already bound to a DIFFERENT subject: this is an
+              # impostor (or a subject swap), not step 3's one-time migration bind. Refuse
+              # rather than silently steal the row out from under the person it belongs to.
+              %User{oidc_subject: bound_sub} when is_binary(bound_sub) and bound_sub != sub ->
+                {:error, :subject_conflict}
+
+              user ->
+                (user || %User{})
+                |> User.oidc_changeset(%{
+                  oidc_subject: sub,
+                  email: canonical,
+                  name: name || entry.name
+                })
+                |> Repo.insert_or_update()
+            end
+        end
+    end
+  end
+
+  def upsert_from_oidc(_), do: {:error, :not_allowed}
+
   @doc "Ensure a row exists for every allowlisted email; returns the primary (first allowlisted)."
   def ensure_allowlisted do
     Enum.each(allowlist(), fn entry ->

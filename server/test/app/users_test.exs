@@ -134,6 +134,75 @@ defmodule App.UsersTest do
     end
   end
 
+  describe "upsert_from_oidc/1" do
+    setup do
+      Application.put_env(:app, :allowed_users, [
+        %{email: "alice@x.com", name: "Alice", aliases: []}
+      ])
+
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      :ok
+    end
+
+    test "an unlisted email is refused and creates nothing" do
+      assert {:error, :not_allowed} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "stranger@x.com", name: "S"})
+
+      assert Users.get_by_email("stranger@x.com") == nil
+    end
+
+    test "a listed email with no existing row inserts one carrying the subject" do
+      assert {:ok, user} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert user.oidc_subject == "s-1"
+      assert user.email == "alice@x.com"
+    end
+
+    # THE migration step. A pre-existing row (every user today) must be ADOPTED, not duplicated.
+    test "a listed email with an existing row binds the subject to THAT row" do
+      {:ok, existing} = Users.upsert_allowed("alice@x.com")
+      refute existing.oidc_subject
+
+      assert {:ok, bound} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert bound.id == existing.id, "binding must adopt the existing row, not create a new one"
+      assert bound.oidc_subject == "s-1"
+      assert length(App.Repo.all(App.Users.User)) == 1
+    end
+
+    test "the second login matches on subject and does not touch the email" do
+      {:ok, first} = Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert {:ok, again} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert again.id == first.id
+      assert length(App.Repo.all(App.Users.User)) == 1
+    end
+
+    # The whole point of keying on sub: the email may change and the row must survive it,
+    # WITHOUT the new address needing to be allowlisted — step 1 returns before the gate.
+    test "a changed email still resolves to the same row via the subject" do
+      {:ok, first} = Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert {:ok, same} =
+               Users.upsert_from_oidc(%{sub: "s-1", email: "alice@newdomain.com", name: "Alice"})
+
+      assert same.id == first.id
+      assert length(App.Repo.all(App.Users.User)) == 1
+    end
+
+    # Two different people must never collapse into one row.
+    test "a different subject on a listed email does not steal the bound row" do
+      {:ok, _alice} = Users.upsert_from_oidc(%{sub: "s-1", email: "alice@x.com", name: "Alice"})
+
+      assert {:error, _} =
+               Users.upsert_from_oidc(%{sub: "s-2", email: "alice@x.com", name: "Impostor"})
+    end
+  end
+
   describe "stamp_briefing! busy-retry (with_busy_retry/2)" do
     # The briefing's once/day claim is stamped at delivery off the FSM in an ack task. SQLite is
     # single-writer, so that stamp can transiently hit "Database is busy"; it's the briefing's ONLY
