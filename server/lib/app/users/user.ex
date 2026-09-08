@@ -6,6 +6,10 @@ defmodule App.Users.User do
   schema "users" do
     field :email, :string
     field :name, :string
+    # The OIDC subject from Authentik — the identity key. Stable across email changes, unlike
+    # :email, which is now a display + allowlist attribute. nil until the owner's first
+    # Authentik login (see App.Users.upsert_from_oidc/1).
+    field :oidc_subject, :string
     field :default_abi, :boolean, default: false
     field :default_ptt, :boolean, default: false
     field :voice_activation, :boolean, default: false
