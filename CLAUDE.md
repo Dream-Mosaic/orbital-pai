@@ -186,6 +186,31 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   Session key = `to_string(user.id)`; `App.Users.id_from_session/1` parses it back. Voice socket
   authed via `Phoenix.Token` (`UserAuth.authenticate_socket/1`); `load_user/1` re-checks existence
   + allowlist on every request. Memory `context/2` + `Updater.run/1` guard non-integer session ids.
+- **Authentik is the IDENTITY provider; Google is a CONNECTOR provider.** Two unrelated things
+  that both speak OAuth. Authentik (`auth.clausens.cloud`, application slug `orbital`) answers
+  "who are you"; Google answers "what did you grant access to" (Calendar/Gmail) and its Cloud
+  console setup is untouched by any of this. `App.Auth.Oidc` and `App.Google.OAuth` are
+  deliberately separate modules — do not merge them. ONE Authentik application serves local and
+  prod, with both redirect URIs registered on it; only `OIDC_REDIRECT_URI` differs per env.
+- **OIDC endpoints come from the discovery document, never from joining paths onto the issuer.**
+  Authentik's issuer carries the application slug (`/application/o/orbital/`) while the endpoints
+  do NOT (`/application/o/authorize/`, `/application/o/token/`). Deriving them 404s. `App.Auth
+  .Oidc` fetches `<issuer>.well-known/openid-configuration` lazily on first use and caches the
+  pair in `:persistent_term` (`reset_discovery_cache/0` is the test seam — tests that stub
+  discovery MUST clear it or the first stub leaks into the rest of the file).
+- **An Authentik user with no email cannot log in**, and the error does not say so. Identity is
+  keyed on the OIDC `sub`, but `App.Users.upsert_from_oidc/1` gates an *unknown* subject on
+  `ALLOWED_USERS` by email — `:allowed_users` is deliberately retained as a SECOND gate behind
+  Authentik's own group binding, so both must pass. Set each Authentik user's email to match the
+  allowlist exactly. Ordering in that function is load-bearing: the subject match returns BEFORE
+  the allowlist check, so a changed email still resolves to its row; eviction still works because
+  `UserAuth.load_user/1` re-checks the allowlist on every request. An allowlisted email whose row
+  is already bound to a DIFFERENT subject is `{:error, :subject_conflict}` — refuse, never rebind,
+  or one user silently inherits the other's turns, facts and connectors.
+- **Cloudflare fronts `auth.clausens.cloud` and blocks non-browser POSTs** to the Authentik API
+  with `403 error code: 1010` (its browser-signature check). GETs pass. `curl` gets through;
+  Python `urllib` does not. If a script against that API 403s with a body that is not JSON, it is
+  Cloudflare talking, not Authentik.
 - **Coolify + Cloudflare-tunnel deploy gotchas:** `force_ssl OFF` in `config/prod.exs` (TLS
   terminated upstream by CF → otherwise redirect-loop); `SECRET_KEY_BASE` ≥64 bytes (Plug cookie
   store); **host has no IPv6 egress** → `App.Finch` connect timeout 10s + `/etc/gai.conf` IPv4
