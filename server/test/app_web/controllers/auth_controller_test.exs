@@ -35,9 +35,17 @@ defmodule AppWeb.AuthControllerTest do
     :ok
   end
 
-  test "GET /login renders a Sign in with Google link", %{conn: conn} do
+  # The label is provider-neutral on purpose. It said "Sign in with Google" while the button
+  # already led to Authentik (c000745 changed the destination and not the copy), which told the
+  # user the wrong thing about where their credentials were going. Naming the IdP here buys
+  # nothing -- there is only one -- and would rot again at the next swap.
+  test "GET /login renders a sign-in link that does not name a provider", %{conn: conn} do
     conn = get(conn, ~p"/login")
-    assert html_response(conn, 200) =~ "Sign in with Google"
+    html = html_response(conn, 200)
+
+    assert html =~ ~p"/auth/login"
+    assert html =~ "Sign in"
+    refute html =~ "Google"
   end
 
   test "an unauthenticated request to / redirects to /login", %{conn: conn} do
