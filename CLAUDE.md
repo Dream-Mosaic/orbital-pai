@@ -203,10 +203,23 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `ALLOWED_USERS` by email — `:allowed_users` is deliberately retained as a SECOND gate behind
   Authentik's own group binding, so both must pass. Set each Authentik user's email to match the
   allowlist exactly. Ordering in that function is load-bearing: the subject match returns BEFORE
-  the allowlist check, so a changed email still resolves to its row; eviction still works because
-  `UserAuth.load_user/1` re-checks the allowlist on every request. An allowlisted email whose row
+  the allowlist check, so a changed email still resolves to its row. Note what that costs, because
+  an earlier version of this line got it wrong: `UserAuth.load_user/1` re-checks the allowlist on
+  every request against the **stored** email, and the subject-match path never updates it — so
+  changing someone's email in Authentik does NOT evict them. To evict, remove them from
+  `ALLOWED_USERS` (or deactivate them in Authentik), which does take effect on the next request.
+  The lookup that binds an existing row searches the entry's canonical email AND its aliases: an
+  entry whose `email` is repointed while its old address becomes an alias must still find the
+  original row, or that row's turns/facts/connectors are stranded under an id nobody logs into. An allowlisted email whose row
   is already bound to a DIFFERENT subject is `{:error, :subject_conflict}` — refuse, never rebind,
   or one user silently inherits the other's turns, facts and connectors.
+- **`GET /auth/login/google` is a deliberately TEMPORARY cutover fallback.** `/auth/login` goes to
+  Authentik; this second route is the only thing that still sets `:google_oauth_flow`, and so the
+  only door into `GoogleAuthController`'s login branch. It exists because a mis-set `OIDC_*` on a
+  deploy would otherwise lock everyone out of the web with no second way in. **Delete it together
+  with that branch** once the Authentik bind is verified against production — the whole-branch
+  review found the branch had already gone unreachable once, silently, when the function that set
+  the session key was replaced.
 - **Cloudflare fronts `auth.clausens.cloud` and blocks non-browser POSTs** to the Authentik API
   with `403 error code: 1010` (its browser-signature check). GETs pass. `curl` gets through;
   Python `urllib` does not. If a script against that API 403s with a body that is not JSON, it is
