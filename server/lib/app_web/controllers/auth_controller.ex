@@ -1,12 +1,16 @@
 defmodule AppWeb.AuthController do
   @moduledoc """
-  Google sign-in (identity), distinct from connection OAuth. `login/2` starts the consent for
-  `openid email` and tags the session flow `:login`; the shared `/auth/google/callback` (in
-  GoogleAuthController) branches on that flow to log the user in via `App.Users.upsert_allowed/1`.
+  Authentik sign-in (identity), distinct from Google connectors. `login/2` starts the Authentik
+  consent (via `App.Auth.Oidc`) and stores a CSRF `state` under `:oidc_state` — a session key
+  that belongs exclusively to this flow, never `:google_oauth_state`/`:google_oauth_flow` (those
+  stay `GoogleAuthController`'s, for connectors). `callback/2` verifies the state, exchanges the
+  code, reads the login claims, and resolves the row via `App.Users.upsert_from_oidc/1`.
   """
   use AppWeb, :controller
+  require Logger
 
-  alias App.Google.OAuth
+  alias App.Auth.Oidc
+  alias App.Users
   alias AppWeb.UserAuth
 
   def login_page(conn, _params) do
@@ -20,10 +24,77 @@ defmodule AppWeb.AuthController do
   def login(conn, _params) do
     state = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
+    case Oidc.authorize_url(state) do
+      {:ok, url} ->
+        conn
+        |> put_session(:oidc_state, state)
+        |> redirect(external: url)
+
+      {:error, reason} ->
+        Logger.warning("[auth] could not build the Authentik authorize URL: #{inspect(reason)}")
+
+        conn
+        |> put_flash(:error, "Sign-in is unavailable right now. Please try again shortly.")
+        |> redirect(to: ~p"/login")
+    end
+  end
+
+  def callback(conn, %{"state" => state} = params) do
+    expected = get_session(conn, :oidc_state)
+
+    cond do
+      is_nil(expected) or state != expected ->
+        login_failed(conn, "Sign-in failed (state mismatch). Please try again.")
+
+      params["error"] ->
+        login_failed(conn, "Sign-in cancelled.")
+
+      true ->
+        handle_code(conn, params["code"])
+    end
+  end
+
+  def callback(conn, _params), do: login_failed(conn, "Sign-in failed.")
+
+  defp handle_code(conn, nil), do: login_failed(conn, "Sign-in failed (no code).")
+
+  defp handle_code(conn, code) do
+    with {:ok, %{id_token: id_token}} <- Oidc.exchange_code(code),
+         {:ok, claims} <- Oidc.claims_from_id_token(id_token),
+         {:ok, user} <- Users.upsert_from_oidc(claims) do
+      # Read BEFORE log_in_user/2, which renews the session and so CLEARS everything stored in
+      # it -- this key included. Without this, a signed-out browser sent here by
+      # `UserAuth.require_user/2` loses whatever it was originally asking for: for a connector
+      # grant link that is the entire request, silently discarded.
+      return_to = get_session(conn, :user_return_to) || ~p"/"
+
+      conn
+      |> UserAuth.log_in_user(user)
+      |> put_flash(:info, "Welcome, #{user.name}.")
+      |> redirect(to: return_to)
+    else
+      {:error, :not_allowed} ->
+        Logger.warning("[auth] login denied — subject/email is not in the allowlist")
+        login_failed(conn, "That account isn't allowed.")
+
+      {:error, :subject_conflict} ->
+        Logger.warning(
+          "[auth] login denied — subject_conflict (email already bound to a different subject)"
+        )
+
+        login_failed(conn, "That account isn't allowed.")
+
+      error ->
+        Logger.warning("[auth] login failed: #{inspect(error)}")
+        login_failed(conn, "Sign-in failed.")
+    end
+  end
+
+  defp login_failed(conn, message) do
     conn
-    |> put_session(:google_oauth_state, state)
-    |> put_session(:google_oauth_flow, "login")
-    |> redirect(external: OAuth.authorize_url(state, ["openid", "email"]))
+    |> delete_session(:oidc_state)
+    |> put_flash(:error, message)
+    |> redirect(to: ~p"/login")
   end
 
   def logout(conn, _params), do: UserAuth.log_out_user(conn)

@@ -22,6 +22,7 @@ defmodule AppWeb.Router do
     get "/login", AuthController, :login_page
     get "/auth/login", AuthController, :login
     get "/auth/google/callback", GoogleAuthController, :callback
+    get "/auth/oidc/callback", AuthController, :callback
     delete "/logout", AuthController, :logout
   end
 

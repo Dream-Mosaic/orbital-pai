@@ -1,17 +1,35 @@
 defmodule AppWeb.AuthControllerTest do
   use AppWeb.ConnCase, async: false
 
-  alias App.Users
+  alias App.Auth.Oidc
 
   setup do
     Application.put_env(:app, :allowed_users, [%{email: "alice@x.com", name: "Alice"}])
     System.put_env("GOOGLE_CLIENT_ID", "id")
     System.put_env("GOOGLE_CLIENT_SECRET", "secret")
 
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/remi/")
+    Application.put_env(:app, :oidc_client_id, "cid")
+    Application.put_env(:app, :oidc_client_secret, "csecret")
+    Application.put_env(:app, :oidc_redirect_uri, "http://localhost:8787/auth/oidc/callback")
+    Oidc.reset_discovery_cache()
+
     on_exit(fn ->
       Application.delete_env(:app, :allowed_users)
       System.delete_env("GOOGLE_CLIENT_ID")
       System.delete_env("GOOGLE_CLIENT_SECRET")
+
+      for k <- [
+            :oidc_issuer,
+            :oidc_client_id,
+            :oidc_client_secret,
+            :oidc_redirect_uri,
+            :oidc_req_opts
+          ] do
+        Application.delete_env(:app, k)
+      end
+
+      Oidc.reset_discovery_cache()
     end)
 
     :ok
@@ -27,66 +45,118 @@ defmodule AppWeb.AuthControllerTest do
     assert redirected_to(conn) == "/login"
   end
 
-  test "login redirects to Google's consent with openid+email and flow=login", %{conn: conn} do
+  test "login redirects to Authentik and stores a state", %{conn: conn} do
+    stub_discovery()
+
     conn = get(conn, ~p"/auth/login")
-    loc = redirected_to(conn)
-    assert loc =~ "accounts.google.com"
-    assert loc =~ "openid+email" or loc =~ "openid%20email"
-    assert get_session(conn, :google_oauth_flow) == "login"
+    assert redirected_to(conn, 302) =~ "auth.example.com"
+    assert get_session(conn, :oidc_state) != nil
   end
 
-  test "callback with a login flow + allowlisted email logs the user in", %{conn: conn} do
-    id_token = unsigned_id_token("alice@x.com")
-    Application.put_env(:app, :google_req_opts, plug: {Req.Test, AuthStub})
-    on_exit(fn -> Application.delete_env(:app, :google_req_opts) end)
+  test "login flashes and bounces back to /login when discovery is unreachable", %{conn: conn} do
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, DiscoDownStub})
+    Req.Test.stub(DiscoDownStub, fn conn -> Plug.Conn.send_resp(conn, 500, "nope") end)
 
-    Req.Test.stub(AuthStub, fn c ->
-      Req.Test.json(c, %{
-        "access_token" => "at",
-        "refresh_token" => "rt",
-        "expires_in" => 3600,
-        "id_token" => id_token,
-        "scope" => "openid email"
-      })
-    end)
+    conn = get(conn, ~p"/auth/login")
+    assert redirected_to(conn) == "/login"
+    refute get_session(conn, :oidc_state)
+  end
+
+  test "the callback signs in an allowlisted subject", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
 
     conn =
       conn
-      |> init_test_session(%{google_oauth_state: "s", google_oauth_flow: "login"})
-      |> get(~p"/auth/google/callback", %{"state" => "s", "code" => "c"})
+      |> init_test_session(%{oidc_state: "st"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
-    assert redirected_to(conn) == "/"
-    user = Users.get_by_email("alice@x.com")
-    assert get_session(conn, :user_id) == user.id
+    assert redirected_to(conn) == ~p"/"
+    assert get_session(conn, :user_id)
   end
 
-  test "callback login flow with a non-allowlisted email is denied", %{conn: conn} do
-    id_token = unsigned_id_token("stranger@x.com")
-    Application.put_env(:app, :google_req_opts, plug: {Req.Test, AuthStub2})
-    on_exit(fn -> Application.delete_env(:app, :google_req_opts) end)
+  test "a mismatched state is refused and signs nobody in", %{conn: conn} do
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "expected"})
+      |> get(~p"/auth/oidc/callback?state=WRONG&code=c1")
 
-    Req.Test.stub(AuthStub2, fn c ->
-      Req.Test.json(c, %{
-        "access_token" => "at",
-        "refresh_token" => "rt",
-        "expires_in" => 3600,
-        "id_token" => id_token,
-        "scope" => "openid email"
-      })
-    end)
+    refute get_session(conn, :user_id)
+  end
+
+  test "an unlisted subject is refused", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-2", "email" => "stranger@x.com", "name" => "S"})
 
     conn =
       conn
-      |> init_test_session(%{google_oauth_state: "s", google_oauth_flow: "login"})
-      |> get(~p"/auth/google/callback", %{"state" => "s", "code" => "c"})
+      |> init_test_session(%{oidc_state: "st"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
     assert redirected_to(conn) == "/login"
-    assert is_nil(get_session(conn, :user_id))
-    assert is_nil(Users.get_by_email("stranger@x.com"))
+    refute get_session(conn, :user_id)
   end
 
-  defp unsigned_id_token(email) do
-    payload = %{"email" => email} |> Jason.encode!() |> Base.url_encode64(padding: false)
-    "header.#{payload}.sig"
+  test "a subject conflict (email already bound to a different subject) is refused", %{
+    conn: conn
+  } do
+    # Seed a row already bound to a different subject than the one this login presents.
+    {:ok, _user} =
+      App.Users.upsert_from_oidc(%{sub: "s-original", email: "alice@x.com", name: "Alice"})
+
+    stub_oidc_exchange(%{"sub" => "s-impostor", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    assert redirected_to(conn) == "/login"
+    refute get_session(conn, :user_id)
+  end
+
+  # Shipped 2026-09-02 and must survive the provider swap: a signed-out browser sent to /login
+  # while opening a connector grant resumes that grant after signing in.
+  test "signing in resumes a remembered request", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{
+        oidc_state: "st",
+        user_return_to: "/auth/google/connect?return=app&calendar=read"
+      })
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    assert redirected_to(conn) == "/auth/google/connect?return=app&calendar=read"
+  end
+
+  defp id_token(claims),
+    do: "h." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".sig"
+
+  defp stub_discovery do
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, AuthDiscoStub})
+
+    Req.Test.stub(AuthDiscoStub, fn conn ->
+      Req.Test.json(conn, %{
+        "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
+        "token_endpoint" => "https://auth.example.com/application/o/token/"
+      })
+    end)
+  end
+
+  defp stub_oidc_exchange(claims) do
+    stub_discovery()
+
+    Req.Test.stub(AuthDiscoStub, fn conn ->
+      cond do
+        String.ends_with?(conn.request_path, "/token/") ->
+          Req.Test.json(conn, %{"access_token" => "at", "id_token" => id_token(claims)})
+
+        true ->
+          Req.Test.json(conn, %{
+            "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
+            "token_endpoint" => "https://auth.example.com/application/o/token/"
+          })
+      end
+    end)
   end
 end
