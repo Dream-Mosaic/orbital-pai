@@ -44,7 +44,7 @@ defmodule App.Auth.OidcTest do
 
   test "authorize_url carries the client, redirect, scopes and state" do
     stub_discovery()
-    url = Oidc.authorize_url("st8")
+    assert {:ok, url} = Oidc.authorize_url("st8")
     # From the discovery document, NOT joined onto the issuer -- the real instance serves
     # /application/o/authorize/ while the issuer is /application/o/henry/.
     assert String.starts_with?(url, "https://auth.example.com/application/o/authorize/")
@@ -63,7 +63,29 @@ defmodule App.Auth.OidcTest do
   test "a slash-less issuer still finds the discovery document" do
     Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/henry")
     stub_discovery()
-    assert Oidc.authorize_url("s") =~ "/application/o/authorize/"
+    assert {:ok, url} = Oidc.authorize_url("s")
+    assert url =~ "/application/o/authorize/"
+  end
+
+  # The stub inspects conn.request_path directly, so this proves the trim-trailing-slash join
+  # actually lands on <issuer>/.well-known/openid-configuration, not merely that *a* request
+  # happened -- a bare `Req.Test.json/2` stub (ignoring conn) would pass even if the URL join
+  # were wrong (e.g. a stray "henry.well-known" from a missing slash-trim).
+  test "a slash-less issuer requests the discovery document at the right path" do
+    Application.put_env(:app, :oidc_issuer, "https://auth.example.com/application/o/henry")
+    Oidc.reset_discovery_cache()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, DiscoPathStub})
+
+    Req.Test.stub(DiscoPathStub, fn conn ->
+      assert conn.request_path == "/application/o/henry/.well-known/openid-configuration"
+
+      Req.Test.json(conn, %{
+        "authorization_endpoint" => "https://auth.example.com/application/o/authorize/",
+        "token_endpoint" => "https://auth.example.com/application/o/token/"
+      })
+    end)
+
+    assert {:ok, _} = Oidc.discovery()
   end
 
   test "an unreachable discovery document is an error, not a raise" do
@@ -77,6 +99,26 @@ defmodule App.Auth.OidcTest do
     assert {:error, _} = Oidc.discovery()
   end
 
+  # Pins the authorize_url/1 contract: on a discovery outage it must return an error tuple, not
+  # hand a caller (e.g. Task 4's `redirect(external: ...)`) a garbage string or crash.
+  test "authorize_url returns an error, not a URL, when discovery is unreachable" do
+    Oidc.reset_discovery_cache()
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, AuthorizeDiscoFailStub})
+
+    Req.Test.stub(AuthorizeDiscoFailStub, fn conn ->
+      Plug.Conn.send_resp(conn, 500, "nope")
+    end)
+
+    assert {:error, :discovery_failed} = Oidc.authorize_url("st8")
+  end
+
+  # Reads the actual application/x-www-form-urlencoded POST body so the test proves what
+  # exchange_code/1 sends, not just that a request happened.
+  defp read_form_params(conn) do
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+    {URI.decode_query(body), conn}
+  end
+
   test "exchange_code posts the code and returns the tokens" do
     # exchange_code/1 also resolves the token endpoint via discovery, so warm the cache first
     # (deterministically, regardless of run order) before pointing the token POST at its own
@@ -86,6 +128,13 @@ defmodule App.Auth.OidcTest do
     Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, OidcTokenStub})
 
     Req.Test.stub(OidcTokenStub, fn conn ->
+      {params, conn} = read_form_params(conn)
+      assert params["code"] == "code-1"
+      assert params["client_id"] == "cid"
+      assert params["client_secret"] == "csecret"
+      assert params["redirect_uri"] == "http://localhost:8787/auth/oidc/callback"
+      assert params["grant_type"] == "authorization_code"
+
       Req.Test.json(conn, %{
         "access_token" => "at",
         "id_token" => id_token(%{"sub" => "s-1", "email" => "a@b.com"})

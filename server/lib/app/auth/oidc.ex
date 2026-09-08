@@ -64,7 +64,13 @@ defmodule App.Auth.Oidc do
     _, _ -> :ok
   end
 
-  @doc "Build the Authentik consent/login URL. `state` is echoed to the callback (CSRF guard)."
+  @doc """
+  Build the Authentik consent/login URL. `state` is echoed to the callback (CSRF guard).
+
+  Returns `{:ok, url}`, or `{:error, :discovery_failed}` when the discovery document (which the
+  authorization endpoint comes from) is unreachable — callers MUST handle the error case rather
+  than redirecting to it; there is no bare-string return.
+  """
   def authorize_url(state) do
     with {:ok, %{authorization_endpoint: endpoint}} <- discovery() do
       query =
@@ -76,7 +82,7 @@ defmodule App.Auth.Oidc do
           state: state
         })
 
-      endpoint <> "?" <> query
+      {:ok, endpoint <> "?" <> query}
     end
   end
 
