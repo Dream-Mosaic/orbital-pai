@@ -1,25 +1,37 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_secure_storage/test/test_flutter_secure_storage_platform.dart';
+import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:orbital_pai/auth/auth_controller.dart';
+import 'package:orbital_pai/auth/token_store.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/main.dart';
 import 'package:orbital_pai/meridian/books_panel.dart';
 import 'package:orbital_pai/meridian/connectors_panel.dart';
 import 'package:orbital_pai/meridian/drawer.dart';
 import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/login_screen.dart';
 import 'package:orbital_pai/meridian/nav.dart';
 import 'package:orbital_pai/meridian/reminders_panel.dart';
 import 'package:orbital_pai/meridian/search_panel.dart';
 import 'package:orbital_pai/meridian/settings_drawer_host.dart';
+import 'package:orbital_pai/meridian/voice_screen.dart';
 import 'package:orbital_pai/panels/books_client.dart';
 import 'package:orbital_pai/panels/connectors_client.dart';
 import 'package:orbital_pai/panels/memory_client.dart';
 import 'package:orbital_pai/panels/reminders_client.dart';
 import 'package:orbital_pai/panels/settings_client.dart';
 import 'package:orbital_pai/panels/voice_lock_client.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import 'support/fake_socket.dart';
+import 'support/fake_url_launcher.dart';
 
 /// The PRODUCTION station wiring — `main.dart`'s `_openPanel` — driven through
 /// a real [HenryHome] on a fake socket.
@@ -420,6 +432,126 @@ void main() {
       await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
 
       expect(find.byType(ConnectorsPanelView), findsNothing);
+    });
+  });
+
+  // ---- sign-in gating: the login screen, and the handoff into the shell ----
+  //
+  // Every test above builds HenryHome with an explicit `connection`, which
+  // bypasses sign-in entirely (see HenryHome.connection's doc) — the exact
+  // shape every other drawer/routing test in this repo wants. These tests
+  // instead exercise the OTHER path: no injected connection, so HenryHome
+  // must build a real AuthController, show LoginScreen until it settles, and
+  // only dial a connection once an AuthCodeLink exchanges successfully.
+  group('sign-in gating', () {
+    // A fresh in-memory keystore per test, exactly as token_store_test.dart
+    // does it, so no test observes another's stored token.
+    TokenStore freshStore() {
+      FlutterSecureStoragePlatform.instance =
+          TestFlutterSecureStoragePlatform(<String, String>{});
+      return TokenStore(storage: const FlutterSecureStorage());
+    }
+
+    testWidgets('signed out shows the login screen, not the voice shell',
+        (tester) async {
+      phone(tester);
+      final auth = AuthController(store: freshStore());
+      addTearDown(auth.dispose);
+      await tester.pumpWidget(MaterialApp(home: HenryHome(auth: auth)));
+      // One pump for the widget tree, one for the store read's Future to
+      // resolve and notifyListeners() to land.
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(find.byType(MeridianVoiceScreen), findsNothing);
+    });
+
+    testWidgets(
+        "tapping Sign in launches Authentik's login in the EXTERNAL browser",
+        (tester) async {
+      phone(tester);
+      final fakeLauncher = FakeUrlLauncher.register();
+      final auth = AuthController(store: freshStore());
+      addTearDown(auth.dispose);
+      await tester.pumpWidget(MaterialApp(home: HenryHome(auth: auth)));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('login-screen-sign-in')));
+      await tester.pump();
+
+      expect(fakeLauncher.launches, hasLength(1));
+      expect(fakeLauncher.launches.single.mode,
+          PreferredLaunchMode.externalApplication);
+    });
+
+    testWidgets(
+        'an auth error link keeps the login screen up and shows why',
+        (tester) async {
+      phone(tester);
+      final auth = AuthController(store: freshStore());
+      addTearDown(auth.dispose);
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+      await tester.pumpWidget(
+          MaterialApp(home: HenryHome(auth: auth, deepLinks: links.stream)));
+      await tester.pump();
+      await tester.pump();
+
+      links.add(Uri.parse('orbital://auth?status=error'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(find.byKey(const Key('login-screen-error')), findsOneWidget);
+    });
+
+    testWidgets(
+        'an auth code link exchanges, stores the token, and hands off to '
+        'the connected shell — without ever dialing a real socket',
+        (tester) async {
+      phone(tester);
+      final store = freshStore();
+      final client = MockClient((request) async =>
+          http.Response(jsonEncode({'token': 'exchanged-token'}), 200));
+      final auth = AuthController(store: store, httpClient: client);
+      addTearDown(auth.dispose);
+      final fake = FakeSocket();
+      final links = StreamController<Uri>.broadcast();
+      addTearDown(links.close);
+
+      await tester.pumpWidget(MaterialApp(
+        home: HenryHome(
+          auth: auth,
+          deepLinks: links.stream,
+          // The seam that keeps this test from dialing the configured
+          // server: HenryHome hands the freshly-signed-in token to this
+          // instead of building a default AppConnection.
+          buildConnection: (token) => AppConnection(
+            connector: () async => fake.socket,
+            rejoinBackoff: const [Duration(days: 1)],
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(LoginScreen), findsOneWidget);
+
+      links.add(Uri.parse('orbital://auth?code=the-code'));
+      // A stream event, an HTTP round trip (MockClient still hops a
+      // microtask), the store write, and connect()'s own await on the
+      // connector — several pumps, not one.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(LoginScreen), findsNothing);
+      expect(find.byType(MeridianVoiceScreen), findsOneWidget,
+          reason: 'a successful exchange must open the same shell every '
+              'other test in this file reaches via an injected connection');
+      expect(await store.read(), 'exchanged-token');
     });
   });
 }

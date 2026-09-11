@@ -33,16 +33,18 @@ if [ -z "$DEVICE" ]; then
   exit 1
 fi
 
+PORT=8787
+
 # The app reaches the Mac's Phoenix server over USB. This dies on every unplug, so re-arm it.
 # Target the chosen device explicitly — with two devices attached (the script's own
 # documented "Pixel as control, Lenovo as verdict" workflow), plain `adb reverse` fails
 # with "more than one device/emulator".
-"$ADB" -s "$DEVICE" reverse tcp:8787 tcp:8787 >/dev/null
+"$ADB" -s "$DEVICE" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
 echo "▸ device:  $DEVICE"
-echo "▸ tunnel:  device:8787 -> mac:8787"
+echo "▸ tunnel:  device:$PORT -> mac:$PORT"
 
-if ! lsof -nP -iTCP:8787 -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "⚠  Nothing is listening on :8787 — start the server first (./dev.sh from the repo root)." >&2
+if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "⚠  Nothing is listening on :$PORT — start the server first (./dev.sh from the repo root)." >&2
 fi
 
 cat <<'EOF'
@@ -65,5 +67,7 @@ EOF
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
 echo "▸ build:   $SHA"
+echo "▸ target:  127.0.0.1:$PORT"
 
-exec flutter run --profile -d "$DEVICE" --dart-define=BUILD_SHA="$SHA"
+exec flutter run --profile -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
+  --dart-define=SERVER_HOST=127.0.0.1 --dart-define=SERVER_PORT="$PORT"

@@ -3,15 +3,16 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
-import '../config.dart';
 import '../meridian/tokens.dart';
 import '../phoenix/phoenix_channel.dart';
 import '../phoenix/phoenix_socket.dart';
+import '../server_config.dart';
 
 enum ConnState { idle, connecting, joined, error }
 
 /// Opens (or re-opens) the socket. Injectable so the reconnect logic is testable
-/// headless; production uses [defaultSocketConnector].
+/// headless; production uses [defaultSocketConnector] closed over the signed-in
+/// token (see [AppConnection.new]'s `token` parameter).
 typedef SocketConnector = Future<PhoenixSocket> Function();
 
 /// Handed each channel a registered topic gets, the moment it is CREATED.
@@ -36,8 +37,8 @@ class _WantedTopic {
   final listeners = <ChannelListener>[];
 }
 
-Future<PhoenixSocket> defaultSocketConnector() =>
-    connectSocket(kSocketUrl(kSocketToken));
+Future<PhoenixSocket> defaultSocketConnector(String token) =>
+    connectSocket(kSocketUrl(token));
 
 /// Owns THE connection: one socket, the reconnect machine, and the registry of
 /// open topics. Consumers (VoiceController, panel clients) ask for a channel and
@@ -47,11 +48,18 @@ Future<PhoenixSocket> defaultSocketConnector() =>
 /// inherits it. Left in the conversation, each panel would either reinvent it
 /// badly or silently have none.
 class AppConnection extends ChangeNotifier {
+  /// [token] is the signed-in socket token — see `AuthController.token` in
+  /// `auth/auth_controller.dart`. It is read ONCE, here, at construction: this
+  /// app has no concept of a token changing under a live connection, so a
+  /// caller whose token changes (sign-out, then sign back in) is expected to
+  /// build a fresh [AppConnection] rather than mutate this one. Ignored
+  /// entirely when [connector] is supplied, which is what every test does.
   AppConnection({
     SocketConnector? connector,
+    String? token,
     List<Duration>? rejoinBackoff,
     Duration joinTimeout = const Duration(seconds: 15),
-  })  : _connector = connector ?? defaultSocketConnector,
+  })  : _connector = connector ?? (() => defaultSocketConnector(token ?? '')),
         _joinTimeout = joinTimeout,
         _rejoinBackoff = rejoinBackoff ??
             const [

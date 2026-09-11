@@ -55,7 +55,7 @@ echo "▸ device:  $DEVICE"
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
 echo "▸ build:   $SHA"
-
+echo "▸ target:  127.0.0.1:$PORT"
 
 # Trust nothing: prove the tunnel is actually registered before blaming the app.
 if "$ADB" -s "$DEVICE" reverse --list 2>/dev/null | grep -q "tcp:$PORT"; then
@@ -91,4 +91,5 @@ A red connection dot means the socket could not reach the server. In order:
 
 EOF
 
-exec flutter run -d "$DEVICE" --dart-define=BUILD_SHA="$SHA"
+exec flutter run -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
+  --dart-define=SERVER_HOST=127.0.0.1 --dart-define=SERVER_PORT="$PORT"
