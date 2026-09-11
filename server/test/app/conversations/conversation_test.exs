@@ -119,6 +119,41 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:locked, false}}, 500
       assert_receive {:to_client, {:locked, true}}, 1000
     end
+
+    test "wake_detected unlocks a locked conversation" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+    end
+
+    test "wake_detected while already unlocked is a no-op" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+
+      Conversation.wake_detected(pid)
+      refute_receive {:to_client, {:locked, _}}, 100
+    end
+
+    test "wake_detected with voice activation off is a no-op" do
+      pid = start_conv()
+      Conversation.wake_detected(pid)
+      refute_receive {:to_client, {:locked, _}}, 100
+    end
+
+    test "ptt_press unlocks while locked — explicit intent always gets through" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.ptt_press(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+    end
   end
 
   describe "voice activation v2: endpoint gate" do

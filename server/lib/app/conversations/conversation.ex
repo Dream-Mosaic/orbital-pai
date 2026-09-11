@@ -67,6 +67,16 @@ defmodule App.Conversations.Conversation do
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
   def ptt_press(pid), do: :gen_statem.cast(pid, :ptt_press)
+
+  @doc """
+  The CLIENT's local keyword spotter fired. Unlocks immediately rather than waiting to
+  re-recognize the name in a transcript whose opening the server may only partially hold —
+  the device gates the audio, so the first syllables may predate the socket opening.
+
+  Idempotent: a no-op when already unlocked or when voice activation is off.
+  """
+  def wake_detected(pid), do: :gen_statem.cast(pid, :wake_detected)
+
   def eager_end(pid, text), do: :gen_statem.cast(pid, {:stt_eager_end, text})
   def resume(pid), do: :gen_statem.cast(pid, {:stt_resume})
   def turn_start(pid), do: :gen_statem.cast(pid, {:stt_turn_start})
@@ -350,6 +360,16 @@ defmodule App.Conversations.Conversation do
     {:keep_state, data, actions}
   end
 
+  # Device-side wake: the local keyword spotter fired. Only meaningful while locked (else
+  # a no-op) — mirrors WakeWord's transcript-driven unlock but skips waiting for a transcript
+  # the server may never fully see (see wake_detected/1 doc).
+  def handle_event(:cast, :wake_detected, _s, %{voice_activation: true, locked: true} = data) do
+    Logger.info("[wake] unlocked by device keyword spotter")
+    {:keep_state, unlock(data)}
+  end
+
+  def handle_event(:cast, :wake_detected, _s, _data), do: :keep_state_and_data
+
   def handle_event(:cast, {:set_relock_ms, ms}, _s, data) when is_integer(ms) and ms > 0,
     do: {:keep_state, %{data | relock_ms: ms}}
 
@@ -377,6 +397,14 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :clear_memory, _s, data),
     do: {:keep_state, reset_turn_fields(data)}
+
+  # Explicit intent always wins: a locked conversation unlocks first, then falls through
+  # (direct function recursion, not a re-cast) to the ordinary press handling below so a
+  # user physically holding the button is never dropped.
+  def handle_event(:cast, :ptt_press, s, %{locked: true} = data) do
+    Logger.info("[wake] unlocked by ptt_press (explicit intent)")
+    handle_event(:cast, :ptt_press, s, unlock(data))
+  end
 
   # PTT press while listening: just mark the button held (start of a fresh utterance).
   def handle_event(:cast, :ptt_press, _s, %{ptt_mode: true, policy: %{phase: :listening}} = data),

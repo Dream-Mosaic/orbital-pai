@@ -114,6 +114,11 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  def handle_in("wake_detected", _payload, socket) do
+    Conversation.wake_detected(socket.assigns.conversation)
+    {:noreply, socket}
+  end
+
   def handle_in("relock", %{"seconds" => seconds}, socket) do
     ms = seconds |> to_int() |> max(10) |> min(30) |> Kernel.*(1000)
     Conversation.set_relock_ms(socket.assigns.conversation, ms)

@@ -223,6 +223,14 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "stop_playback", %{}
   end
 
+  test "an inbound wake_detected unlocks a locked conversation", %{socket: socket} do
+    push(socket, "voice_activation", %{"enabled" => true})
+    assert_push "locked", %{locked: true}
+
+    push(socket, "wake_detected", %{})
+    assert_push "locked", %{locked: false}
+  end
+
   test "an inbound ptt_release finalizes the STT", %{socket: socket} do
     Process.register(self(), :fake_stt_observer)
 
