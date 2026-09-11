@@ -3,10 +3,12 @@ defmodule App.Config do
 
   defstruct name: "Henry",
             # Per-tier models: smarter for the brain (+ memory summaries), fast for reflex (+ bridges).
-            model_brain: "gemini-3.5-flash",
-            model_reflex: "gemini-3-flash-preview",
+            # The reflex stays on 3.6 because 3.7+/3.8 Flash reject `minimal` (400), and at `low`
+            # they think 0–500 tokens → 2–3.5s tail (probed 2026-09-11; 3.6@minimal p90 ≈ 1.0s).
+            model_brain: "gemini-3.8-flash",
+            model_reflex: "gemini-3.6-flash",
             reflex_thinking: "minimal",
-            brain_thinking: "low",
+            brain_thinking: "medium",
             # voice_id: "1fcd23d0-bf12-4896-8f60-4f21ef5c9b98",   # Austin
             # voice_id: "3e39e9a5-585c-4f5f-bac6-5e4905c51095",   # Cole
             # voice_id: "630ed21c-2c5c-41cf-9d82-10a7fd668370",   # Corey

@@ -179,9 +179,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - **SQLite single-writer:** DB-touching tests are `async: false`; `conversation_test` uses a shared
   Ecto sandbox so background persist tasks don't `OwnershipError`. A residual intermittent
   `App.Google.AccountsTest` **"Database busy"** flake exists (passes on re-run) — not a regression.
-- **Model IDs:** per-tier Gemini (`App.Config :model_brain` = `gemini-3.5-flash`, `:model_reflex` =
-  `gemini-3-flash-preview`), Cartesia STT `ink-2` (`:stt_model`), Cartesia TTS Sonic (`:tts_model`).
-  Re-check preview suffixes before relying on them.
+- **Model IDs:** per-tier Gemini (`App.Config :model_brain` = `gemini-3.8-flash` @ `medium`,
+  `:model_reflex` = `gemini-3.6-flash` @ `minimal`), Cartesia STT `ink-2` (`:stt_model`), Cartesia
+  TTS Sonic (`:tts_model`). **3.7+/3.8 Flash reject `minimal` thinking (400)** — the reflex must stay
+  on a model that accepts it; at `low` those models think 0–500 tokens (2–3.5s tail, blows the
+  24-token reflex cap). Probed 2026-09-11.
 - **Two-user model:** `App.Users` + `:allowed_users` allowlist (each entry = canonical `email` +
   optional `aliases`, all log into one instance, keyed by canonical email).
   Per-user scoping by `user_id` across turns/reminders/profile_facts/summary/google_accounts.

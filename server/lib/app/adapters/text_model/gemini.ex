@@ -1,11 +1,11 @@
 defmodule App.Adapters.TextModel.Gemini do
   @moduledoc """
-  Gemini 3 Flash via the Google Generative Language API. Thinking is the latency
-  lever: `minimal` for the reflex (instant lead-in), `low` for the brain.
+  Gemini 3.x Flash via the Google Generative Language API. Thinking is the latency
+  lever: `minimal` for the reflex (instant lead-in), `medium` for the brain.
 
-  Verified 2026-06-14: model `gemini-3-flash-preview`, `x-goog-api-key` header,
-  `generationConfig.thinkingConfig.thinkingLevel`. Re-check the model id (preview
-  suffixes change) before relying on it.
+  Verified 2026-09-11: brain `gemini-3.8-flash`, reflex `gemini-3.6-flash`,
+  `x-goog-api-key` header, `generationConfig.thinkingConfig.thinkingLevel`. 3.7+/3.8
+  Flash reject `minimal` — check a model's supported levels before moving the reflex.
   """
   @behaviour App.Adapters.TextModel
 
@@ -379,8 +379,9 @@ defmodule App.Adapters.TextModel.Gemini do
   defp max_output_tokens(:reflex), do: 24
   defp max_output_tokens(:memory), do: 1024
   # Generous: the brain THINKS (thinking tokens count here) AND may run a tool round before its
-  # spoken answer; 512 occasionally got eaten by thinking → MAX_TOKENS → empty reply.
-  defp max_output_tokens(_brain), do: 2048
+  # spoken answer; 512 occasionally got eaten by thinking → MAX_TOKENS → empty reply. 4096 since
+  # the brain moved to `medium` thinking.
+  defp max_output_tokens(_brain), do: 4096
 
   defp system_for(:reflex, cfg, _ctx), do: reflex_prompt(cfg.name)
 

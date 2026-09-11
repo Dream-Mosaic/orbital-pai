@@ -5,7 +5,10 @@ defmodule App.ConfigTest do
   test "default/0 has distinct thinking per tier and sane audio defaults" do
     c = Config.default()
     assert c.reflex_thinking == "minimal"
-    assert c.brain_thinking == "low"
+    assert c.brain_thinking == "medium"
+    # 3.7+/3.8 Flash reject "minimal" (400), so the reflex must stay on a model that accepts it.
+    assert c.model_reflex == "gemini-3.6-flash"
+    assert c.model_brain == "gemini-3.8-flash"
     assert c.stt_sample_rate == 16_000
     assert c.stt_model == "ink-2"
     assert c.eager_reflex == true
