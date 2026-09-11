@@ -81,13 +81,28 @@ Future<bool?> defaultSessionChecker(String token) async {
           headers: {'authorization': 'Bearer $token'},
         )
         .timeout(const Duration(seconds: 8));
-    if (resp.statusCode == 401) return true;
-    if (resp.statusCode == 200) return false;
-    return null;
+    return rejectionFromStatus(resp.statusCode);
   } catch (_) {
     return null;
   }
 }
+
+/// The decision [defaultSessionChecker] makes, extracted so it can be tested without a socket
+/// or an HTTP client.
+///
+/// It lives apart because every test of the rejection path injects a fake [SessionChecker] and
+/// therefore never runs the real one — which left the mapping below, the thing that actually
+/// decides whether a valid token gets thrown away, with no coverage at all. Widening it to
+/// "anything that isn't 200" passed the entire suite.
+///
+/// `true` ONLY for 401. `false` for 200. `null` — cannot confirm — for everything else, which
+/// is the case that matters: Cloudflare's 502 during a redeploy, a captive portal's 302, a 404
+/// from a misrouted host. Those must keep the token and keep retrying.
+bool? rejectionFromStatus(int status) => switch (status) {
+      401 => true,
+      200 => false,
+      _ => null,
+    };
 
 /// Owns THE connection: one socket, the reconnect machine, and the registry of
 /// open topics. Consumers (VoiceController, panel clients) ask for a channel and

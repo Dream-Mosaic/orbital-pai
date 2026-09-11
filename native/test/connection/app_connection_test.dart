@@ -15,6 +15,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../support/fake_socket.dart';
 
 void main() {
+  _rejectionFromStatusTests();
   group('rejected vs unreachable — the defect that cost a debugging session', () {
     // A 30-day token expiry used to be indistinguishable from a dead server:
     // both just retried forever. AppConnection's connector-level catch must
@@ -643,5 +644,27 @@ void main() {
 
     expect(seen, hasLength(1),
         reason: 'a dropped listener must not be handed the reconnect’s channel');
+  });
+}
+
+void _rejectionFromStatusTests() {
+  group('rejectionFromStatus', () {
+    // Only a 401 may throw a token away. Every other answer means "could not confirm",
+    // and the caller must then behave exactly as it does for an unreachable server.
+    test('401 is the only confirmed rejection', () {
+      expect(rejectionFromStatus(401), isTrue);
+    });
+
+    test('200 confirms the token is still good', () {
+      expect(rejectionFromStatus(200), isFalse);
+    });
+
+    // The cases that cost a valid token if this widens: a Coolify redeploy behind
+    // Cloudflare, a captive portal, a misrouted host.
+    test('502, 302, 404 and 500 are all "cannot confirm", not rejections', () {
+      for (final s in [502, 302, 404, 500, 503, 403]) {
+        expect(rejectionFromStatus(s), isNull, reason: '$s must not clear the token');
+      }
+    });
   });
 }
