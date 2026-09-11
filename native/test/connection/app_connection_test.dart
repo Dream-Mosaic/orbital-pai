@@ -1,13 +1,87 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_secure_storage/test/test_flutter_secure_storage_platform.dart';
+import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/auth/auth_controller.dart';
+import 'package:orbital_pai/auth/token_store.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/meridian/tokens.dart';
 import 'package:orbital_pai/phoenix/phoenix_channel.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../support/fake_socket.dart';
 
 void main() {
+  group('rejected vs unreachable — the defect that cost a debugging session', () {
+    // A 30-day token expiry used to be indistinguishable from a dead server:
+    // both just retried forever. AppConnection's connector-level catch must
+    // tell them apart, and the two outcomes are deliberately asymmetric — see
+    // AppConnection.onRejected and AuthController.handleSocketRejected.
+    late TokenStore store;
+
+    setUp(() {
+      FlutterSecureStoragePlatform.instance =
+          TestFlutterSecureStoragePlatform(<String, String>{});
+      store = TokenStore(storage: const FlutterSecureStorage());
+    });
+
+    test('a REJECTED socket clears the token and signs the user out',
+        () async {
+      await store.write('stored-token');
+      final auth = AuthController(store: store);
+      await auth.ready;
+      expect(auth.state, AuthState.signedIn);
+
+      final conn = AppConnection(
+        connector: () async => throw WebSocketChannelException(
+            "Connection to 'ws://host/socket/websocket' was not upgraded to websocket"),
+        onRejected: auth.handleSocketRejected,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      addTearDown(conn.dispose);
+
+      await conn.connect();
+      await pumpEventQueue();
+
+      expect(await store.read(), isNull,
+          reason: 'a refused token must never be retried against — clear it');
+      expect(auth.state, AuthState.signedOut,
+          reason: 'a rejected socket must send the user back to the login screen');
+    });
+
+    test('an UNREACHABLE socket keeps the token and keeps retrying', () async {
+      await store.write('stored-token');
+      final auth = AuthController(store: store);
+      await auth.ready;
+
+      var attempts = 0;
+      final conn = AppConnection(
+        connector: () async {
+          attempts++;
+          throw const SocketException('Connection refused');
+        },
+        onRejected: auth.handleSocketRejected,
+        rejoinBackoff: const [Duration(milliseconds: 10)],
+      );
+      addTearDown(conn.dispose);
+
+      await conn.connect();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await pumpEventQueue();
+
+      expect(attempts, greaterThan(1),
+          reason: 'the existing rejoin backoff must keep retrying');
+      // The point of this test: clearing the token here would sign the user
+      // out on every wifi drop, mistaking an outage for a refusal.
+      expect(await store.read(), 'stored-token',
+          reason: 'an unreachable server must NEVER clear the token');
+      expect(auth.state, AuthState.signedIn);
+    });
+  });
+
   test('connStatus maps the socket state onto the header dot', () async {
     final conn = AppConnection(
       connector: () async => FakeSocket().socket,

@@ -135,8 +135,8 @@ class AuthController extends ChangeNotifier {
 
   /// Forgets the stored token and returns to signedOut.
   ///
-  /// Not wired to any UI element yet — a future Settings entry point calls
-  /// this — but part of the interface this controller commits to.
+  /// Called from two places: a future Settings entry point, and
+  /// [handleSocketRejected] below.
   Future<void> signOut() async {
     await _store.clear();
     _token = null;
@@ -144,6 +144,18 @@ class AuthController extends ChangeNotifier {
     _state = AuthState.signedOut;
     notifyListeners();
   }
+
+  /// Adapts this controller to `AppConnection.onRejected`
+  /// (`connection/app_connection.dart`): the socket reported that the server
+  /// refused it outright — a dead token — so forget it and drop back to
+  /// signedOut. Reuses [signOut] rather than duplicating its clear-and-reset.
+  ///
+  /// This is the REJECTED half of a deliberate asymmetry: an unreachable
+  /// server must never reach here, and `AppConnection` only calls this
+  /// hook for an actual refusal — see its `_isRejection` — never for a
+  /// connection that simply could not be established. Getting that backwards
+  /// would sign the user out every time their wifi dropped.
+  Future<void> handleSocketRejected() => signOut();
 
   @override
   void dispose() {

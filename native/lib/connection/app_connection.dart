@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../meridian/tokens.dart';
 import '../phoenix/phoenix_channel.dart';
@@ -40,6 +41,22 @@ class _WantedTopic {
 Future<PhoenixSocket> defaultSocketConnector(String token) =>
     connectSocket(kSocketUrl(token));
 
+/// True when [error] means the server ACTIVELY refused this socket outright
+/// — in production, `AppWeb.UserSocket.connect/3` returning `:error`, which
+/// fails the websocket upgrade itself before any channel ever gets to join
+/// — as opposed to the connection attempt never reaching a server at all
+/// (DNS failure, connection refused, a timeout).
+///
+/// `connectSocket`'s `await ws.ready` (via `web_socket_channel`) wraps every
+/// connect-time failure except a bare timeout in a
+/// [WebSocketChannelException]; the one whose message names a failed
+/// upgrade is the one case where a real HTTP exchange happened and the
+/// server said no, rather than nothing answering at all. Getting this
+/// backwards is worse than not checking: see [AppConnection.onRejected].
+bool _isRejection(Object error) =>
+    error is WebSocketChannelException &&
+    (error.message?.contains('not upgraded to websocket') ?? false);
+
 /// Owns THE connection: one socket, the reconnect machine, and the registry of
 /// open topics. Consumers (VoiceController, panel clients) ask for a channel and
 /// never touch the transport.
@@ -59,6 +76,7 @@ class AppConnection extends ChangeNotifier {
     String? token,
     List<Duration>? rejoinBackoff,
     Duration joinTimeout = const Duration(seconds: 15),
+    this.onRejected,
   })  : _connector = connector ?? (() => defaultSocketConnector(token ?? '')),
         _joinTimeout = joinTimeout,
         _rejoinBackoff = rejoinBackoff ??
@@ -72,6 +90,18 @@ class AppConnection extends ChangeNotifier {
   final SocketConnector _connector;
   final List<Duration> _rejoinBackoff;
   final Duration _joinTimeout;
+
+  /// Called when the socket reports the server refused it outright —
+  /// `_isRejection` recognized the failure the connector threw — rather than
+  /// merely being unreachable. Production wiring is
+  /// `AuthController.handleSocketRejected` (`auth/auth_controller.dart`),
+  /// which forgets the dead token and drops the app back to signedOut.
+  ///
+  /// The asymmetry is the whole point and is easy to get backwards: an
+  /// UNREACHABLE server (wifi drop, a restart) must NOT call this and must
+  /// NOT stop retrying — only an actual rejection does either. See
+  /// [_isRejection] and the `catch` in [connect].
+  final Future<void> Function()? onRejected;
 
   /// The user's intent, set by connect() and cleared by disconnect()/dispose().
   /// Without it a deliberate teardown races the backoff straight back onto the
@@ -178,6 +208,19 @@ class AppConnection extends ChangeNotifier {
         unawaited(failed.close());
       }
       if (_disposed || !_wantConnected) return;
+      if (_isRejection(e)) {
+        // A refused token will refuse again forever — no backoff, and no
+        // further attempt from this connection. AuthController clears it
+        // (onRejected) and this connection's job is done; a fresh sign-in
+        // builds a fresh one (see the token doc on the constructor).
+        _wantConnected = false;
+        _rejoinTimer?.cancel();
+        _rejoinTimer = null;
+        _state = ConnState.error;
+        _safeNotify();
+        unawaited(onRejected?.call());
+        return;
+      }
       _state = ConnState.error;
       _safeNotify();
       _scheduleRejoin();
