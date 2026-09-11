@@ -215,6 +215,54 @@ defmodule AppWeb.AuthControllerTest do
     assert json_response(a, 401) == json_response(b, 401)
   end
 
+  # Every way an APP-flow login can fail must still return the user to the app. Stranding them in
+  # a browser tab on /login, with the app behind it showing no sign anything happened, is the
+  # exact failure this flow was shaped to avoid -- and the branch that prevents it had no test:
+  # deleting `if app_return?` from login_failed/2 left the whole file green.
+  test "an app-flow state mismatch deep-links back with an error", %{conn: conn} do
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "expected", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=WRONG&code=c1")
+
+    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    refute get_session(conn, :user_id)
+  end
+
+  test "an app-flow login by a non-allowlisted subject deep-links back with an error",
+       %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-9", "email" => "stranger@x.com", "name" => "S"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    refute get_session(conn, :user_id)
+  end
+
+  test "an app-flow cancellation at the IdP deep-links back with an error", %{conn: conn} do
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&error=access_denied")
+
+    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+  end
+
+  # The pre-hop failure: the browser never even leaves our domain, so without this the
+  # app-launched tab just sits on /login.
+  test "an app-flow login with an unreachable IdP deep-links back with an error", %{conn: conn} do
+    Application.put_env(:app, :oidc_req_opts, plug: {Req.Test, LoginDiscoFailStub})
+    Req.Test.stub(LoginDiscoFailStub, fn c -> Plug.Conn.send_resp(c, 500, "nope") end)
+    App.Auth.Oidc.reset_discovery_cache()
+
+    conn = get(conn, ~p"/auth/login?return=app")
+
+    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+  end
+
   test "a web-flow login does NOT deep-link", %{conn: conn} do
     stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
 
