@@ -251,12 +251,31 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   the same machine. `127.0.0.1` and `localhost` are different cookie hosts: the session carrying
   `:oidc_state` is stored against whichever the app opened, Authentik redirects back to whichever
   `OIDC_REDIRECT_URI` names, and if they differ the cookie is not sent — state mismatch, every
-  time, on an otherwise perfect flow. Cost a live smoke session; `run-dev.sh` and
-  `run-profile.sh` now both say `localhost` to match `.env`. (adb reverse serves both names.)
+  time, on an otherwise perfect flow. Cost a live smoke session; the run scripts all say
+  `localhost` to match `.env`. (adb reverse serves both names.)
 - **The server address is `--dart-define`d** (`native/lib/server_config.dart`), defaulting to
-  production; `run-dev.sh`/`run-profile.sh` pass the laptop's. TLS is inferred from the port
-  rather than configured separately — two knobs that must agree is one too many, and the failure
-  (`ws://` against a `wss://` endpoint) is a silent hang.
+  production. TLS is inferred from the port rather than configured separately — two knobs that
+  must agree is one too many, and the failure (`ws://` against a `wss://` endpoint) is a silent
+  hang.
+- **`native/_target.sh` is the ONE place a run script decides where a build points**, arms the
+  `adb reverse` tunnel, and prints the `▸ target:` banner; `run-dev.sh` (debug) and
+  `run-profile.sh` (profile) default local, `run-build.sh` (release APK: build + install +
+  launch) defaults prod, and each takes `--prod`/`--local` plus an optional device id. It reads
+  the PROD host/port by parsing the `defaultValue`s out of `server_config.dart` rather than
+  repeating them, so the banner cannot describe a build that wasn't made. That structure is the
+  fix for two drift bugs in one week: `run-profile.sh`'s banner still advertised `127.0.0.1`
+  after `run-dev.sh` moved to `localhost`, and a comment placed BETWEEN two `\` continuations
+  commented out the rest of the joined line and silently dropped both `--dart-define`s, pointing
+  a "dev" run at production.
+- **One app at a time on the device, by choice.** Every build type shares `applicationId`
+  `com.orbital.pai`, so a release install replaces a debug one. The obvious fix — an
+  `applicationIdSuffix` on debug — is worse: both apps would register the `orbital://`
+  intent-filter, so every auth/connector return pops the Android chooser and the single-use login
+  code goes to whichever app wins. Switching targets costs a **sign-in, not a reinstall**:
+  release is signed with the DEBUG keystore (`build.gradle.kts`) so `install -r` works both ways
+  and secure storage survives, but the stored token was signed with the other server's
+  `SECRET_KEY_BASE` → socket refused → `/api/auth/session` confirms 401 → token cleared → login
+  screen. That is the designed path, and the first real exercise of the rejection classifier.
 - **Cloudflare fronts `auth.clausens.cloud` and blocks non-browser POSTs** to the Authentik API
   with `403 error code: 1010` (its browser-signature check). GETs pass. `curl` gets through;
   Python `urllib` does not. If a script against that API 403s with a body that is not JSON, it is

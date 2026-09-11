@@ -5,47 +5,18 @@
 # several times slower than what a user would actually get. Profile mode is AOT-compiled like a
 # release build but keeps the tracing hooks DevTools needs, so it is the mode to measure in.
 #
-#   ./run-profile.sh                 # first connected device
+#   ./run-profile.sh                 # local server, first connected device
+#   ./run-profile.sh --prod          # measure against the live server (real network latency)
 #   ./run-profile.sh <device-id>     # e.g. 41051FDJH000DM  (see: flutter devices)
 #
-# NOTE: an emulator is NOT a valid perf target — its GPU behaviour says nothing about real hardware.
-# Use the Pixel as a control and the Lenovo Tab as the verdict.
+# NOTE: an emulator is NOT a valid perf target — its GPU behaviour says nothing about real
+# hardware. Use the Pixel as a control and the Lenovo Tab as the verdict.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export PATH="$HOME/flutter/bin:$PATH"
-ADB="$HOME/Library/Android/sdk/platform-tools/adb"
-if [ ! -x "$ADB" ]; then
-  if command -v adb >/dev/null 2>&1; then
-    ADB="$(command -v adb)"
-  else
-    echo "No adb found (checked $HOME/Library/Android/sdk/platform-tools/adb and PATH)." >&2
-    exit 1
-  fi
-fi
-
-DEVICE="${1:-}"
-if [ -z "$DEVICE" ]; then
-  DEVICE="$("$ADB" devices | awk 'NR>1 && $2=="device" {print $1; exit}')"
-fi
-if [ -z "$DEVICE" ]; then
-  echo "No device. Plug one in, unlock it, accept the USB-debugging prompt." >&2
-  exit 1
-fi
-
-PORT=8787
-
-# The app reaches the Mac's Phoenix server over USB. This dies on every unplug, so re-arm it.
-# Target the chosen device explicitly — with two devices attached (the script's own
-# documented "Pixel as control, Lenovo as verdict" workflow), plain `adb reverse` fails
-# with "more than one device/emulator".
-"$ADB" -s "$DEVICE" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
-echo "▸ device:  $DEVICE"
-echo "▸ tunnel:  device:$PORT -> mac:$PORT"
-
-if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "⚠  Nothing is listening on :$PORT — start the server first (./dev.sh from the repo root)." >&2
-fi
+DEFAULT_TARGET=local
+source ./_target.sh
+target_init "$@"
 
 cat <<'EOF'
 
@@ -64,10 +35,4 @@ work? If yes, the 24/7 wall-power lever isn't there yet.
 
 EOF
 
-SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
-echo "▸ build:   $SHA"
-echo "▸ target:  localhost:$PORT"
-
-exec flutter run --profile -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
-  --dart-define=SERVER_HOST=localhost --dart-define=SERVER_PORT="$PORT"
+exec flutter run --profile -d "$DEVICE" "${DART_DEFINES[@]}"
