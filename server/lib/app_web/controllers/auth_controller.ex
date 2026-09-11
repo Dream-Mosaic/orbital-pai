@@ -102,23 +102,5 @@ defmodule AppWeb.AuthController do
     |> redirect(to: ~p"/login")
   end
 
-  @doc """
-  Deliberately temporary cutover fallback (spec 2026-09-05 §6): "land Authentik alongside
-  Google login... if the bind is wrong, recovery is one login away rather than a database
-  restore." Nothing else in `lib/` sets `:google_oauth_flow` any more (Task 4 replaced the
-  function that did), so `GoogleAuthController`'s `flow == "login"` branch was unreachable and
-  a mis-set `OIDC_*` on deploy locked everyone out of the web with no second way in. This does
-  exactly what `login/2` used to do before c000745. DELETE this together with
-  `GoogleAuthController`'s `flow == "login"` branch once the Authentik migration is verified.
-  """
-  def login_via_google(conn, _params) do
-    state = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-
-    conn
-    |> put_session(:google_oauth_state, state)
-    |> put_session(:google_oauth_flow, "login")
-    |> redirect(external: App.Google.OAuth.authorize_url(state, ["openid", "email"]))
-  end
-
   def logout(conn, _params), do: UserAuth.log_out_user(conn)
 end

@@ -161,19 +161,6 @@ defmodule AppWeb.AuthControllerTest do
     assert redirected_to(conn) == "/auth/google/connect?return=app&calendar=read"
   end
 
-  # I-2: the Google login branch (GoogleAuthController's flow == "login") was unreachable --
-  # nothing in lib/ set :google_oauth_flow any more. This fallback route restores a second way
-  # into the web app while the Authentik migration is verified in production.
-  test "GET /auth/login/google sets the login-flow session keys and redirects to Google", %{
-    conn: conn
-  } do
-    conn = get(conn, ~p"/auth/login/google")
-
-    assert redirected_to(conn, 302) =~ "accounts.google.com"
-    assert get_session(conn, :google_oauth_state) != nil
-    assert get_session(conn, :google_oauth_flow) == "login"
-  end
-
   defp id_token(claims),
     do: "h." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".sig"
 

@@ -4,7 +4,10 @@ defmodule App.Users do
   `%{email, name, aliases?}` — the first entry is the primary, who owns pre-existing connections).
   An entry's `:email` is the CANONICAL identity; optional `:aliases` are extra Google emails that
   log into the SAME instance (one user can sign in from several accounts/browsers). Emails are
-  stored downcased, keyed by the canonical. `upsert_allowed/1` is the login path; `ensure_allowlisted/0`
+  stored downcased, keyed by the canonical. `upsert_from_oidc/1` is the login path (Authentik,
+  keyed on the OIDC subject); `upsert_allowed/1` creates an allowlisted user from an email alone and
+  has NO production caller since the Google login path was removed -- it survives as a test fixture
+  used by ~78 call sites, which is the only reason it was not deleted with that path. `ensure_allowlisted/0`
   is the seed path.
   """
   import Ecto.Query

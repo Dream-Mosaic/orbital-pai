@@ -342,91 +342,12 @@ defmodule AppWeb.GoogleAuthControllerTest do
       assert redirected_to(conn) == "/login"
       assert get_session(conn, :user_return_to) == nil
     end
-
-    test "signing in resumes the remembered request instead of landing home", %{anon: anon} do
-      stub_login_exchange("alice@x.com")
-
-      conn =
-        anon
-        |> init_test_session(%{
-          google_oauth_state: "s1",
-          google_oauth_flow: "login",
-          user_return_to: "/auth/google/connect?return=app&calendar=read"
-        })
-        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
-
-      assert redirected_to(conn) == "/auth/google/connect?return=app&calendar=read"
-    end
-
-    test "signing in with nothing remembered still lands home", %{anon: anon} do
-      stub_login_exchange("alice@x.com")
-
-      conn =
-        anon
-        |> init_test_session(%{google_oauth_state: "s1", google_oauth_flow: "login"})
-        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
-
-      assert redirected_to(conn) == ~p"/"
-    end
-  end
-
-  # The Google LOGIN branch (`google_oauth_flow == "login"`), which stays live until the
-  # Authentik migration is verified against production data and is then deleted in its own
-  # commit. These two moved here from auth_controller_test.exs when that file was rewritten for
-  # Authentik (c000745); they were dropped as "already covered", but the surviving flow:"login"
-  # tests above only assert the REDIRECT TARGET and never that anyone was signed in, and the
-  # denial branch had no test at all. Delete these together with the branch, not before.
-  describe "the Google login branch (retained until the Authentik cutover)" do
-    setup do
-      %{anon: Phoenix.ConnTest.build_conn()}
-    end
-
-    test "an allowlisted email is actually signed in, not merely redirected", %{anon: anon} do
-      stub_login_exchange("alice@x.com")
-
-      conn =
-        anon
-        |> init_test_session(%{google_oauth_state: "s1", google_oauth_flow: "login"})
-        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
-
-      assert redirected_to(conn) == ~p"/"
-      assert get_session(conn, :user_id), "the login flow must establish a session"
-    end
-
-    # The allowlist is what stops any stranger holding a Google account from reaching this
-    # instance's calendar and mail tools. It is a security control, so it stays tested for as
-    # long as the branch exists.
-    test "a non-allowlisted email is refused and signs nobody in", %{anon: anon} do
-      stub_login_exchange("stranger@x.com")
-
-      conn =
-        anon
-        |> init_test_session(%{google_oauth_state: "s1", google_oauth_flow: "login"})
-        |> get(~p"/auth/google/callback?state=s1&code=auth-code")
-
-      assert redirected_to(conn) == "/login"
-      refute get_session(conn, :user_id)
-      assert App.Users.get_by_email("stranger@x.com") == nil
-    end
   end
 
   defp stub_token_exchange(email) do
     Application.put_env(:app, :google_req_opts, plug: {Req.Test, TokenStub})
 
     Req.Test.stub(TokenStub, fn c ->
-      Req.Test.json(c, %{
-        "access_token" => "at-1",
-        "refresh_token" => "rt-1",
-        "expires_in" => 3599,
-        "id_token" => id_token(email)
-      })
-    end)
-  end
-
-  defp stub_login_exchange(email) do
-    Application.put_env(:app, :google_req_opts, plug: {Req.Test, LoginStub})
-
-    Req.Test.stub(LoginStub, fn c ->
       Req.Test.json(c, %{
         "access_token" => "at-1",
         "refresh_token" => "rt-1",

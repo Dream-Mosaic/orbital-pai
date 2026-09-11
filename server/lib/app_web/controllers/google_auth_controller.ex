@@ -57,9 +57,6 @@ defmodule AppWeb.GoogleAuthController do
       is_nil(expected) or state != expected ->
         finish(conn, :error, "Google connection failed (state mismatch). Please try again.")
 
-      get_session(conn, :google_oauth_flow) == "login" ->
-        handle_login(conn, params)
-
       params["error"] ->
         finish(conn, :error, "Google connection cancelled.")
 
@@ -70,45 +67,6 @@ defmodule AppWeb.GoogleAuthController do
 
   def callback(conn, _params),
     do: finish(conn, :error, "Google connection failed.")
-
-  defp handle_login(conn, %{"code" => code}) do
-    with {:ok, oauth} <- OAuth.exchange_code(code),
-         email when is_binary(email) <- OAuth.email_from_id_token(oauth.id_token) do
-      Logger.info("[auth] login callback resolved email: #{email}")
-
-      case App.Users.upsert_allowed(email) do
-        {:ok, user} ->
-          # Read BEFORE log_in_user/2, which renews the session and so CLEARS everything stored
-          # in it -- this key included. Without this, a signed-out browser sent here by
-          # `UserAuth.require_user/2` loses whatever it was originally asking for: for the
-          # native app that is the entire connector grant, silently discarded.
-          return_to = get_session(conn, :user_return_to) || ~p"/"
-
-          conn
-          |> AppWeb.UserAuth.log_in_user(user)
-          |> put_flash(:info, "Welcome, #{user.name}.")
-          |> redirect(to: return_to)
-
-        {:error, :not_allowed} ->
-          Logger.warning("[auth] login denied — #{email} is not in the allowlist")
-          login_failed(conn, "That account isn't allowed.")
-      end
-    else
-      error ->
-        Logger.warning("[auth] login failed before the allowlist check: #{inspect(error)}")
-        login_failed(conn, "Sign-in failed.")
-    end
-  end
-
-  defp handle_login(conn, _), do: finish(conn, :error, "Sign-in failed (no code).")
-
-  defp login_failed(conn, message) do
-    conn
-    |> delete_session(:google_oauth_flow)
-    |> delete_session(:google_oauth_state)
-    |> put_flash(:error, message)
-    |> redirect(to: ~p"/login")
-  end
 
   defp handle_code(conn, _user, nil),
     do: finish(conn, :error, "Google connection failed (no code).")
