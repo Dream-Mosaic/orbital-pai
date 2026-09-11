@@ -163,13 +163,21 @@ class _HenryHomeState extends State<HenryHome> {
   /// the result, so recording into a closed client and opening afterwards
   /// would show nothing at all.
   void _onDeepLink(Uri uri) {
-    final result = parseConnectorsLink(uri);
+    final link = parseAppLink(uri);
     // Null is every link this app does not positively recognize — including
     // anything another app on the device fired at our scheme. Ignored, never
-    // guessed at. See parseConnectorsLink.
-    if (result == null || !mounted) return;
-    if (!_connectors.isOpen) _openPanel(MeridianTab.connectors);
-    _connectors.noteOauthResult(result);
+    // guessed at. See parseAppLink.
+    if (link == null || !mounted) return;
+    switch (link) {
+      case ConnectorsResultLink(:final result):
+        if (!_connectors.isOpen) _openPanel(MeridianTab.connectors);
+        _connectors.noteOauthResult(result);
+      case AuthCodeLink():
+      case AuthErrorLink():
+        // The login flow itself is wired in a later task; for now these
+        // links are recognized but intentionally left unhandled.
+        break;
+    }
   }
 
   /// Every station is native. A `switch` over the enum, with no default arm,
