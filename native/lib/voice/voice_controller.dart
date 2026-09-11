@@ -85,6 +85,26 @@ class VoiceController extends ChangeNotifier {
   /// it has to remember to bump. The handle IS the generation token.
   MicState _micState = MicState.idle;
 
+  /// Backoff for a mic the PLATFORM ended without being asked (an alarm or
+  /// any app taking audio focus, revoked permission, another app seizing the
+  /// recorder) — see [_onMicStreamEnded]. Visible for tests, and for Task 5's
+  /// restart behaviour to build on. Three tries, then give up and log: a
+  /// permanently unavailable microphone must not become a hot loop hammering
+  /// the platform forever.
+  static const List<Duration> micRestartBackoff = [
+    Duration(milliseconds: 400),
+    Duration(seconds: 2),
+    Duration(seconds: 8),
+  ];
+
+  Timer? _micRestartTimer;
+
+  /// Index into [micRestartBackoff] for the NEXT attempt. Reset to 0 by any
+  /// successful [startMic] — including a manual one — so a mic that recovers
+  /// on its own, or that the user restarts by hand, does not inherit a stale
+  /// backoff position from an earlier outage.
+  int _micRestartAttempt = 0;
+
   // Mirrors index.js's `this.pttHeld`: read by the `state` snapshot merge and
   // written by pttPress/pttRelease.
   bool _pttHeld = false;
@@ -887,6 +907,12 @@ class VoiceController extends ChangeNotifier {
           // hole left in "derived, therefore cannot lie".
           onDone: () => _onMicStreamEnded(session));
       _micState = _micState.listening(session, sub);
+      // A successful open cancels any pending unasked-end restart and starts
+      // the backoff over — this session earned it, whether it came from a
+      // user tap or from _attemptMicRestart.
+      _micRestartTimer?.cancel();
+      _micRestartTimer = null;
+      _micRestartAttempt = 0;
       _talking = true;
       _turnState = TurnState.idle;
       _syncOrb();
@@ -908,21 +934,36 @@ class VoiceController extends ChangeNotifier {
 
   /// The platform ended [ended]'s stream without being asked to.
   ///
-  /// Two halves, and a fix that does only the first is the same lie the other
-  /// way round: the indicator has to go off, AND the recorder has to actually
-  /// be let go of — otherwise the next start opens on top of a session nobody
-  /// stopped. Deliberately does NOT re-open: the conversation is honestly off,
-  /// the log says why, and a tap works again. Silently re-arming a microphone
-  /// the platform just took away is how a retry loop starts.
+  /// Three halves now, and a fix that does only the first two is the same lie
+  /// a third way round: the indicator has to go off, the recorder has to
+  /// actually be let go of, AND — an alarm firing, any app taking audio
+  /// focus, the OS revoking the record permission, another app seizing the
+  /// mic — the assistant has to try to get it back on its own. A live alarm
+  /// measured what "does NOT re-open" actually cost: Henry stayed deaf until
+  /// the user power-cycled the app by hand. [_scheduleMicRestart] is the
+  /// bounded version of "silently re-arm on a stream the platform just took
+  /// away" — bounded because that IS how a retry loop starts if it is not.
   void _onMicStreamEnded(MicSession ended) {
     if (_disposed) return;
-    // Defensive, like startMic()'s post-await guard and just as unfalsifiable:
-    // every teardown path cancels the subscription BEFORE the stop that closes
-    // the stream, so a done for a session we no longer hold is not deliverable
-    // today. If one ever were, tearing down on it would stop whatever session
-    // is live now — the exact move that produced Criticals 5, 6 and 7.
+    // Still defensive, like startMic()'s post-await guard: every DELIBERATE
+    // teardown path (stopMic, the loan paths) cancels the subscription before
+    // the stop that would close the stream, so a done for a session we no
+    // longer hold never reaches here from any of them. Tearing down on one
+    // would stop whatever session is live now — the exact move that produced
+    // Criticals 5, 6 and 7 — so the guard stays even though the path that
+    // reaches this point at all is no longer hypothetical: the platform
+    // itself can end a session we still hold, and that is precisely the case
+    // below exists to recover from.
     final held = _micState;
     if (!identical(held.session, ended)) return;
+    // Read BEFORE the transition, not after: captureOff() always resets
+    // `wanted` to false (it says what the conversation HAS, not what anybody
+    // WANTED), so asking `_micState.wanted` on the far side of it would read
+    // false unconditionally and this would never restart anything. Every
+    // deliberate path that could make `wanted` false already short-circuited
+    // on the `identical` guard above, so reaching here means the user's
+    // intent was still "on" — but read it off `held`, not off the belief.
+    final wasWanted = held.wanted;
     // Invariant A: the whole-value transition first, the teardown of what it
     // gave up second.
     _micState = held.captureOff();
@@ -933,6 +974,46 @@ class VoiceController extends ChangeNotifier {
     _log('mic stream ended by the platform');
     _safeNotify();
     unawaited(_release(held));
+    if (wasWanted) _scheduleMicRestart();
+  }
+
+  /// Arm (or re-arm) the next backoff attempt after an unasked stream end.
+  /// Never fights a loan or a deliberate disconnect: [_attemptMicRestart]
+  /// re-checks both right before it touches anything, and [startMic] itself
+  /// already turns an attempt made during a loan into a no-op recorded
+  /// intent rather than a second recording session.
+  void _scheduleMicRestart() {
+    if (_disposed || !_connection.wantConnected) return;
+    if (_micRestartAttempt >= micRestartBackoff.length) {
+      _log('mic restart exhausted after ${micRestartBackoff.length} '
+          'attempts; giving up');
+      return;
+    }
+    final delay = micRestartBackoff[_micRestartAttempt];
+    _micRestartAttempt++;
+    _log('mic ended unasked; restart #$_micRestartAttempt in '
+        '${delay.inMilliseconds}ms');
+    _micRestartTimer?.cancel();
+    _micRestartTimer = Timer(delay, _attemptMicRestart);
+  }
+
+  /// One backoff attempt. Chains to the next step on failure — including a
+  /// failure that is really "nothing to do yet" (the mic is on loan, or the
+  /// connection is down) — so a microphone that stays unavailable for a
+  /// while is retried a bounded number of times rather than just once.
+  void _attemptMicRestart() {
+    if (_disposed || !_connection.wantConnected) return;
+    unawaited(startMic().then((_) {
+      if (_disposed) return;
+      // Loaned: do not chain another attempt on top of it. The loan's own
+      // resumeMic() owns getting the microphone back once it ends (via
+      // resumeWanted, exactly like a channel-death restore); startMic()
+      // above already turned this attempt into a no-op recorded intent
+      // rather than a second recording session, so there is nothing left
+      // for a further backoff step to do here.
+      if (_micState.on || _micState.loaned) return;
+      _scheduleMicRestart();
+    }));
   }
 
   /// **Invariant A.** One synchronous transition — the conversation holds
@@ -942,6 +1023,12 @@ class VoiceController extends ChangeNotifier {
   /// never answers cannot leave the microphone claiming to be on.
   Future<void> stopMic() async {
     final held = _micState;
+    // Cancel any pending unasked-end restart too, same reasoning as `wasOn`
+    // below: a deliberate stop must stay stopped even if the platform had
+    // already ended the stream once and armed a backoff attempt for it.
+    _micRestartTimer?.cancel();
+    _micRestartTimer = null;
+    _micRestartAttempt = 0;
     // `wasOn`: a deliberate stop must never be resurrected by a later
     // reconnect, even if a socket death upstream had already armed it.
     // `resumeWanted`: nor by a loan cycle. Cleared unconditionally, not just
@@ -966,6 +1053,8 @@ class VoiceController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _micRestartTimer?.cancel();
+    _micRestartTimer = null;
     // The socket belongs to AppConnection: drop our handles on it, never close
     // it. Its own dispose() is the app's job.
     _connection.removeListener(_onConnectionChanged);
