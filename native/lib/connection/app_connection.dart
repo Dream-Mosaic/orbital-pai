@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../meridian/tokens.dart';
@@ -57,6 +58,37 @@ bool _isRejection(Object error) =>
     error is WebSocketChannelException &&
     (error.message?.contains('not upgraded to websocket') ?? false);
 
+/// Confirms whether the server has genuinely rejected [token] — as opposed to some other
+/// networking failure that merely LOOKS like a rejection at the `WebSocketChannelException`
+/// level. dart:io raises the exact same "not upgraded to websocket" message for a 403 as it
+/// does for a Cloudflare 502 during a Coolify redeploy or a captive portal answering the
+/// upgrade with its own login page, and `package:web_socket` discards the real HTTP status code
+/// before `_isRejection` ever sees it — so the string alone cannot tell a dead token from an
+/// unreachable/misbehaving server.
+///
+/// Returns `true` only for a definite 401 from `GET /api/auth/session`
+/// (`AppWeb.AuthController.session/2`) — the one answer that means "clear the token." A `200`
+/// (`false`) or the request not completing at all (`null`, on any exception including a
+/// timeout) both mean "cannot confirm a rejection," and the caller must treat that exactly like
+/// an ordinary unreachable server: keep the token, keep retrying.
+typedef SessionChecker = Future<bool?> Function(String token);
+
+Future<bool?> defaultSessionChecker(String token) async {
+  try {
+    final resp = await http
+        .get(
+          Uri.parse('$kHttpBase/api/auth/session'),
+          headers: {'authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 8));
+    if (resp.statusCode == 401) return true;
+    if (resp.statusCode == 200) return false;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Owns THE connection: one socket, the reconnect machine, and the registry of
 /// open topics. Consumers (VoiceController, panel clients) ask for a channel and
 /// never touch the transport.
@@ -77,7 +109,10 @@ class AppConnection extends ChangeNotifier {
     List<Duration>? rejoinBackoff,
     Duration joinTimeout = const Duration(seconds: 15),
     this.onRejected,
+    SessionChecker? sessionChecker,
   })  : _connector = connector ?? (() => defaultSocketConnector(token ?? '')),
+        _token = token ?? '',
+        _sessionChecker = sessionChecker ?? defaultSessionChecker,
         _joinTimeout = joinTimeout,
         _rejoinBackoff = rejoinBackoff ??
             const [
@@ -88,6 +123,8 @@ class AppConnection extends ChangeNotifier {
             ];
 
   final SocketConnector _connector;
+  final String _token;
+  final SessionChecker _sessionChecker;
   final List<Duration> _rejoinBackoff;
   final Duration _joinTimeout;
 
@@ -209,17 +246,28 @@ class AppConnection extends ChangeNotifier {
       }
       if (_disposed || !_wantConnected) return;
       if (_isRejection(e)) {
-        // A refused token will refuse again forever — no backoff, and no
-        // further attempt from this connection. AuthController clears it
-        // (onRejected) and this connection's job is done; a fresh sign-in
-        // builds a fresh one (see the token doc on the constructor).
-        _wantConnected = false;
-        _rejoinTimer?.cancel();
-        _rejoinTimer = null;
-        _state = ConnState.error;
-        _safeNotify();
-        unawaited(onRejected?.call());
-        return;
+        // "Not upgraded to websocket" is ambiguous on its own — see
+        // _isRejection and defaultSessionChecker's docs — so confirm it against
+        // the server before believing it. Only a definite 401 counts.
+        final confirmed = await _sessionChecker(_token);
+        if (_disposed || !_wantConnected) return;
+        if (confirmed == true) {
+          // A refused token will refuse again forever — no backoff, and no
+          // further attempt from this connection. AuthController clears it
+          // (onRejected) and this connection's job is done; a fresh sign-in
+          // builds a fresh one (see the token doc on the constructor).
+          _wantConnected = false;
+          _rejoinTimer?.cancel();
+          _rejoinTimer = null;
+          _state = ConnState.error;
+          _safeNotify();
+          unawaited(onRejected?.call());
+          return;
+        }
+        // confirmed == false (the token is still good) or null (the session
+        // check itself could not be completed): fall through to the ordinary
+        // unreachable-server path below rather than clearing a token on a
+        // guess.
       }
       _state = ConnState.error;
       _safeNotify();

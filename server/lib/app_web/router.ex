@@ -41,6 +41,7 @@ defmodule AppWeb.Router do
     pipe_through :api
 
     post "/auth/exchange", AuthController, :exchange
+    get "/auth/session", AuthController, :session
   end
 
   # Enable LiveDashboard in development

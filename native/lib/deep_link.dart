@@ -65,8 +65,20 @@ class ConnectorsResultLink extends AppLink {
 }
 
 /// A single-use login code, minted by the server after an Authentik sign-in completes, waiting to
-/// be exchanged over HTTP for a real token. The token itself never travels in a URL — only this
-/// short-lived code does.
+/// be exchanged over HTTP for a real token.
+///
+/// The token never travels in THIS deep link -- only this short-lived code does. That is not the
+/// same as saying the token never appears in a URL at all: `server_config.dart`'s `kSocketUrl`
+/// puts it in the websocket URL's query string (pre-existing, not introduced by this flow), so it
+/// still reaches Cloudflare's access logs on every connect.
+///
+/// Single-use + a 60s TTL only defeats a LATER replay of a captured code (browser history, an
+/// intent log, a nosy reader) -- it does nothing against INTERCEPTION, because the intent filter
+/// (`orbital://auth`) is open to every app on the device, not just this one. Any app that also
+/// declares the scheme can win Android's chooser and take the code first. The real mitigation for
+/// that is PKCE, deliberately not implemented here: this is a two-user personal instance, so that
+/// exposure is accepted rather than engineered against. See `AppWeb.AppLink.auth/1` on the server
+/// for the matching note.
 class AuthCodeLink extends AppLink {
   const AuthCodeLink(this.code);
 

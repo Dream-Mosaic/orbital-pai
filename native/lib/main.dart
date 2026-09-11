@@ -179,9 +179,43 @@ class _HenryHomeState extends State<HenryHome> {
     if (auth == null || !mounted) return;
     if (auth.state == AuthState.signedIn && _conn == null) {
       setState(() => _buildShell(_connectionFor(auth.token)));
+    } else if (auth.state == AuthState.signedOut && _conn != null) {
+      // The signedIn -> signedOut edge: a rejected token (AppConnection's
+      // onRejected -> AuthController.signOut) or a future manual sign-out.
+      // Without tearing the shell down, `build()` keeps returning
+      // MeridianVoiceScreen forever — `_conn` is otherwise never reset to
+      // null — so the user is left on a dead shell with no way back to
+      // LoginScreen short of killing the app. See branch-review.md Critical 1.
+      setState(_teardownShell);
     } else {
       setState(() {});
     }
+  }
+
+  /// Undoes [_buildShell]: disposes every client built alongside the
+  /// connection, the connection itself, and the VoiceController, then nulls
+  /// every field so [build] falls through to [LoginScreen]. Mirrors
+  /// [dispose]'s disposal list exactly, minus `_auth` (which outlives the
+  /// shell — a fresh sign-in reuses the same [AuthController]).
+  void _teardownShell() {
+    _books?.dispose();
+    _connectors?.dispose();
+    _voiceLock?.dispose();
+    _memory?.dispose();
+    _settings?.dispose();
+    _reminders?.dispose();
+    _badges?.dispose();
+    _vc?.dispose();
+    _conn?.dispose();
+    _conn = null;
+    _vc = null;
+    _badges = null;
+    _reminders = null;
+    _settings = null;
+    _memory = null;
+    _voiceLock = null;
+    _connectors = null;
+    _books = null;
   }
 
   /// Wires the one connection to every client that rides on it, then tells
@@ -232,15 +266,7 @@ class _HenryHomeState extends State<HenryHome> {
   @override
   void dispose() {
     unawaited(_linkSub?.cancel());
-    _books?.dispose();
-    _connectors?.dispose();
-    _voiceLock?.dispose();
-    _memory?.dispose();
-    _settings?.dispose();
-    _reminders?.dispose();
-    _badges?.dispose();
-    _vc?.dispose();
-    _conn?.dispose();
+    _teardownShell();
     if (_ownsAuth) {
       _auth?.dispose();
     } else {

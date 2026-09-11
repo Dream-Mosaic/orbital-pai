@@ -40,6 +40,9 @@ void main() {
             "Connection to 'ws://host/socket/websocket' was not upgraded to websocket"),
         onRejected: auth.handleSocketRejected,
         rejoinBackoff: const [Duration(days: 1)],
+        // The server CONFIRMS the 401 — see the "ambiguous" test below for
+        // the case where it cannot.
+        sessionChecker: (_) async => true,
       );
       addTearDown(conn.dispose);
 
@@ -50,6 +53,40 @@ void main() {
           reason: 'a refused token must never be retried against — clear it');
       expect(auth.state, AuthState.signedOut,
           reason: 'a rejected socket must send the user back to the login screen');
+    });
+
+    test(
+        'an ambiguous "not upgraded" the server cannot confirm keeps the '
+        'token and keeps retrying', () async {
+      await store.write('stored-token');
+      final auth = AuthController(store: store);
+      await auth.ready;
+
+      var attempts = 0;
+      final conn = AppConnection(
+        connector: () async {
+          attempts++;
+          throw WebSocketChannelException(
+              "Connection to 'ws://host/socket/websocket' was not upgraded to websocket");
+        },
+        onRejected: auth.handleSocketRejected,
+        rejoinBackoff: const [Duration(milliseconds: 10)],
+        // Neither a confirmed 401 (Cloudflare's 502 during a redeploy) nor a
+        // reachable session endpoint (a network blip checking it) — either
+        // way, this must NOT be treated as a rejection.
+        sessionChecker: (_) async => null,
+      );
+      addTearDown(conn.dispose);
+
+      await conn.connect();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await pumpEventQueue();
+
+      expect(attempts, greaterThan(1),
+          reason: 'an unconfirmed rejection must keep retrying like any other outage');
+      expect(await store.read(), 'stored-token',
+          reason: 'an unconfirmed rejection must NEVER clear the token');
+      expect(auth.state, AuthState.signedIn);
     });
 
     test('an UNREACHABLE socket keeps the token and keeps retrying', () async {

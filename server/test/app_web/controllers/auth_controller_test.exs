@@ -274,6 +274,36 @@ defmodule AppWeb.AuthControllerTest do
     assert redirected_to(conn) == ~p"/"
   end
 
+  describe "GET /api/auth/session" do
+    test "a valid bearer token is confirmed ok" do
+      Application.put_env(:app, :allowed_users, [%{email: "alice@x.com", name: "Alice"}])
+      {:ok, user} = App.Users.upsert_allowed("alice@x.com")
+      token = AppWeb.UserAuth.socket_token(user.id)
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get(~p"/api/auth/session")
+
+      assert json_response(conn, 200) == %{"ok" => true}
+    end
+
+    test "a garbage bearer token is rejected" do
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer not-a-real-token")
+        |> get(~p"/api/auth/session")
+
+      assert json_response(conn, 401) == %{"ok" => false}
+    end
+
+    test "a missing authorization header is rejected" do
+      conn = get(build_conn(), ~p"/api/auth/session")
+
+      assert json_response(conn, 401) == %{"ok" => false}
+    end
+  end
+
   defp id_token(claims),
     do: "h." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".sig"
 

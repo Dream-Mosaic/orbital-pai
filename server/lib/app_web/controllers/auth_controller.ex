@@ -160,4 +160,26 @@ defmodule AppWeb.AuthController do
 
   def exchange(conn, _params),
     do: conn |> put_status(401) |> json(%{"error" => "invalid_code"})
+
+  @doc """
+  `GET /api/auth/session` — lets the app tell a GENUINE rejection (the socket token was refused)
+  apart from an ambiguous upgrade failure it cannot classify on its own: dart:io raises the same
+  "not upgraded to websocket" message for a 403 as it does for a Cloudflare 502 during a
+  redeploy or a captive portal's login page, and `package:web_socket` discards the real status
+  code before the app ever sees it (see `AppConnection._isRejection`'s doc on the client). Only a
+  definite 401 from here should ever clear a stored token — a 200 confirms it is still good, and
+  a request that never completes at all must be treated the same as a 200 (assume the token is
+  fine, keep retrying the socket).
+
+  Lives in the `:api` pipeline (no session, no CSRF) since the app calls it with nothing but the
+  bearer token it already has.
+  """
+  def session(conn, _params) do
+    with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
+         {:ok, _user_id} <- UserAuth.verify_socket_token(token) do
+      json(conn, %{"ok" => true})
+    else
+      _ -> conn |> put_status(401) |> json(%{"ok" => false})
+    end
+  end
 end

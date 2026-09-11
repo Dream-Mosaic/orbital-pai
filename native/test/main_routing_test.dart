@@ -593,6 +593,10 @@ void main() {
       expect(await store.read(), isNull,
           reason: 'a refused token must be cleared, not retried');
       expect(auth.state, AuthState.signedOut);
+      expect(find.byType(LoginScreen), findsOneWidget,
+          reason: 'signOut() clearing the store is not enough — the shell must actually tear '
+              'down and fall through to the login screen, or the user is stuck on a dead '
+              'MeridianVoiceScreen with no way back in short of killing the app');
     });
   });
 }

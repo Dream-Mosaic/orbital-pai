@@ -221,14 +221,32 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   from `config.dart`; tapping Sign in opens `/auth/login?return=app` in the SYSTEM browser (an
   embedded webview is refused by most IdPs), the server deep-links back `orbital://auth?code=…`
   with a **single-use 60s code**, and the app exchanges it at `POST /api/auth/exchange` for a
-  token it keeps in platform secure storage. The code exists so a 30-day credential never rides
-  a URL through browser history or Android's intent system.
+  token it keeps in platform secure storage. Single-use + 60s only defeats a *later* replay of a
+  captured code (browser history, Android's intent log, a nosy reader) — it does NOT defend
+  against *interception*, since the `orbital` intent-filter is open to every app on the device and
+  any of them can win the chooser and take the code first. PKCE is the real mitigation for that
+  and is deliberately not implemented, on the reasoning that this is a two-user personal instance.
+  Don't overstate the code's guarantee as "the token never rides a URL" either — that's true only
+  of *this deep link*; the token still rides the socket URL's query string (`kSocketUrl`,
+  pre-existing), which reaches Cloudflare's access logs on every connect.
 - **A refused token and an unreachable server are different, and the app must keep treating them
   so.** Rejected → clear the stored token and show the login screen. Unreachable → **keep** the
   token and retry on the existing backoff. Backwards, and you are signed out every time wifi
   drops. `AppConnection.onRejected` carries this, and `main.dart` must PASS it — it shipped
   unwired once, fully tested and completely inert, because the test seam supplied its own
-  connection. That seam now takes `onRejected` as a parameter for exactly that reason.
+  connection. That seam now takes `onRejected` as a parameter for exactly that reason. The
+  classifier itself (`_isRejection`) can only see a `WebSocketChannelException` whose message
+  names a failed upgrade — `dart:io` raises that exact string for **every** non-101 response, so a
+  Cloudflare 502 mid-redeploy or a captive portal's login page look identical to an actual 403 at
+  that layer. `AppConnection` confirms the ambiguous case against `GET /api/auth/session`
+  (bearer token; 401 = genuinely rejected, anything else including a network failure = treat as
+  unreachable) before ever clearing a token — only a confirmed 401 reaches `onRejected`.
+- **The app never sets its own connection back to null on sign-out — `_teardownShell` in
+  `main.dart` does it.** `_conn` used to be assigned once and never reset, so a rejected token
+  cleared correctly but left the user staring at a dead `MeridianVoiceScreen` with no way back to
+  `LoginScreen` short of an app restart. `_onAuthChanged`'s `signedIn → signedOut` edge now tears
+  the shell down (disposes every client built alongside the connection, then nulls them) so
+  `build()` falls through to the login screen again.
 - **The server address is `--dart-define`d** (`native/lib/server_config.dart`), defaulting to
   production; `run-dev.sh`/`run-profile.sh` pass the laptop's. TLS is inferred from the port
   rather than configured separately — two knobs that must agree is one too many, and the failure

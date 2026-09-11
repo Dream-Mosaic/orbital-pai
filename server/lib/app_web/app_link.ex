@@ -39,8 +39,12 @@ defmodule AppWeb.AppLink do
   @doc """
   The link that hands a freshly minted single-use code back to the app after a successful
   Authentik login (see `App.Auth.AppCode`). Carries a `code`, not a token -- the app exchanges
-  it over `POST /api/auth/exchange` for the real `Phoenix.Token`, which never has to appear in a
-  URL.
+  it over `POST /api/auth/exchange` for the real `Phoenix.Token`, which never has to appear in
+  THIS URL. That is narrower than "never appears in a URL" at all: the resulting socket token
+  still rides `kSocketUrl`'s query string (pre-existing), and single-use + a short TTL only
+  defeats a later replay of a captured code, not interception by another app declaring this same
+  scheme -- see `App.Auth.AppCode`'s moduledoc for the full caveat and why PKCE, not this, would
+  be the real fix for that.
   """
   def auth(code), do: "#{@scheme}://auth?" <> URI.encode_query(%{"code" => code})
 

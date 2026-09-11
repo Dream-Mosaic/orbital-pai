@@ -7,11 +7,26 @@ defmodule App.Auth.AppCode do
   it directly in a deep-link URL means it lands in the browser's history, in Android's intent
   logs, and in the hands of any other app that also registered the `orbital` scheme. This module
   mints a code instead: it is worthless 60 seconds after minting and worthless after the first
-  exchange, so capturing it later (from history, from logs, from a nosy app) buys an attacker
+  exchange, so capturing it LATER (from history, from logs, from a nosy reader) buys an attacker
   nothing. The app exchanges the code for the real token over a direct HTTPS POST
   (`POST /api/auth/exchange`), which never touches a URL bar or a log line the way a deep link
-  does. This is the OAuth authorization-code pattern applied one layer down, for the same reason
-  it exists one layer up.
+  does.
+
+  Be precise about what that guarantee is NOT: single-use + a short TTL defeats a later replay of
+  a captured code, but does nothing against INTERCEPTION, because the `orbital` intent-filter is
+  open to every app on the device, not just this server's own -- the interceptor is first in
+  line, not late, so being single-use doesn't help. `POST /api/auth/exchange` is public and
+  unauthenticated, so whichever app the OS hands the code to can exchange it for a real token.
+  PKCE is the standard mitigation for exactly this (a public client's authorization code getting
+  intercepted before it reaches the legitimate app) and is deliberately NOT implemented here --
+  this is a two-user personal instance, so that exposure is accepted rather than engineered
+  against. This is the OAuth authorization-code pattern applied one layer down, for the same
+  reason it exists one layer up, minus the PKCE binding that pattern normally carries.
+
+  Also worth being honest about: the exchange keeps the CODE off a URL, but the resulting socket
+  token still isn't URL-free end to end -- `native/lib/server_config.dart`'s `kSocketUrl` puts it
+  in the websocket URL's query string (pre-existing, not introduced by this module), so it still
+  reaches Cloudflare's access logs on every connect.
 
   Storage is an in-memory map on this GenServer: `%{code => {user_id, expires_at}}`. That's
   correct for something that lives seconds — losing every outstanding code on a restart costs at
