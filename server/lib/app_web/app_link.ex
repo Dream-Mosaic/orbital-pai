@@ -36,6 +36,17 @@ defmodule AppWeb.AppLink do
   def connectors(kind),
     do: "#{@scheme}://connectors?" <> URI.encode_query(%{"status" => status(kind)})
 
+  @doc """
+  The link that hands a freshly minted single-use code back to the app after a successful
+  Authentik login (see `App.Auth.AppCode`). Carries a `code`, not a token -- the app exchanges
+  it over `POST /api/auth/exchange` for the real `Phoenix.Token`, which never has to appear in a
+  URL.
+  """
+  def auth(code), do: "#{@scheme}://auth?" <> URI.encode_query(%{"code" => code})
+
+  @doc "The link the app flow deep-links to when login fails -- no code, just a status."
+  def auth_error, do: "#{@scheme}://auth?" <> URI.encode_query(%{"status" => "error"})
+
   defp status(:info), do: "ok"
   defp status(_), do: "error"
 end

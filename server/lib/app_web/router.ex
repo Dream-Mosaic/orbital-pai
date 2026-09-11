@@ -37,10 +37,11 @@ defmodule AppWeb.Router do
     post "/kiosk/switch_user", KioskController, :switch_user
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", AppWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", AppWeb do
+    pipe_through :api
+
+    post "/auth/exchange", AuthController, :exchange
+  end
 
   # Enable LiveDashboard in development
   if Application.compile_env(:app, :dev_routes) do

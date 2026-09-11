@@ -32,6 +32,8 @@ defmodule App.Application do
       {Registry, keys: :unique, name: App.Conversations.Registry},
       {Task.Supervisor, name: App.Conversations.TaskSup},
       {DynamicSupervisor, name: App.Conversations.Sup, strategy: :one_for_one},
+      # One-time codes for native sign-in (orbital://auth?code=...) -- see its moduledoc.
+      App.Auth.AppCode,
       # Start to serve requests, typically the last entry
       AppWeb.Endpoint
     ]

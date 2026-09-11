@@ -161,6 +161,71 @@ defmodule AppWeb.AuthControllerTest do
     assert redirected_to(conn) == "/auth/google/connect?return=app&calendar=read"
   end
 
+  test "an app-flow login deep-links back with a code, not a token", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    url = redirected_to(conn, 302)
+    assert String.starts_with?(url, "orbital://auth?")
+    code = URI.decode_query(URI.parse(url).query)["code"]
+    assert is_binary(code)
+    # The 30-day credential must NOT be in the URL.
+    refute url =~ "token"
+  end
+
+  test "the code exchanges for a token that authenticates that user", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    url = redirected_to(conn, 302)
+    code = URI.decode_query(URI.parse(url).query)["code"]
+    user = App.Users.get_by_email("alice@x.com")
+
+    resp = post(build_conn(), ~p"/api/auth/exchange", %{"code" => code})
+    assert %{"token" => token} = json_response(resp, 200)
+    assert {:ok, user_id} = AppWeb.UserAuth.verify_socket_token(token)
+    assert user_id == user.id
+  end
+
+  test "a replayed code is refused with the same error as an unknown one", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    url = redirected_to(conn, 302)
+    code = URI.decode_query(URI.parse(url).query)["code"]
+
+    # Spend the code once so the replay below finds it already used.
+    assert %{"token" => _} =
+             json_response(post(build_conn(), ~p"/api/auth/exchange", %{"code" => code}), 200)
+
+    a = post(build_conn(), ~p"/api/auth/exchange", %{"code" => code})
+    b = post(build_conn(), ~p"/api/auth/exchange", %{"code" => "never-minted"})
+    assert json_response(a, 401) == json_response(b, 401)
+  end
+
+  test "a web-flow login does NOT deep-link", %{conn: conn} do
+    stub_oidc_exchange(%{"sub" => "s-1", "email" => "alice@x.com", "name" => "Alice"})
+
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st"})
+      |> get(~p"/auth/oidc/callback?state=st&code=c1")
+
+    assert redirected_to(conn) == ~p"/"
+  end
+
   defp id_token(claims),
     do: "h." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".sig"
 
