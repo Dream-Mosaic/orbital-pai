@@ -22,6 +22,9 @@ defmodule AppWeb.Endpoint do
   # Binary audio + control transport for the voice companion.
   socket "/socket", AppWeb.UserSocket, websocket: true, longpoll: false
 
+  # Container healthcheck — first, so probes skip logging, session and auth.
+  plug AppWeb.HealthPlug
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

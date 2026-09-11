@@ -58,14 +58,16 @@ RUN mkdir config
 COPY config/config.exs config/${MIX_ENV}.exs config/
 RUN mix deps.compile
 
-# Copy assets BEFORE assets.setup: this project's `assets.setup` runs
-# `npm install --prefix assets`, which needs assets/package.json present.
-COPY assets assets
+# Only the npm manifests before assets.setup (`npm install --prefix assets` needs them): copying
+# all of assets/ here re-ran npm install + the tailwind/esbuild downloads on every CSS/JS edit.
+COPY assets/package.json assets/package-lock.json assets/
 RUN mix assets.setup
 
 COPY priv priv
 
 COPY lib lib
+
+COPY assets assets
 
 # Compile the release
 RUN mix compile
@@ -77,7 +79,15 @@ RUN mix assets.deploy
 COPY config/runtime.exs config/
 
 COPY rel rel
-RUN mix release
+# Split the release in two so the final stage can copy it as two layers: /release/deps (ERTS +
+# every dependency, ~600MB+ of it EXLA's XLA library) and /release/app (our code, bin/ incl. the
+# rel/overlays scripts, releases/ incl. the per-build random COOKIE). The deps half is
+# byte-identical across code-only changes, so its COPY below stays cached.
+RUN mix release \
+  && mkdir -p /release/app/lib \
+  && mv _build/${MIX_ENV}/rel/app /release/deps \
+  && mv /release/deps/lib/app-* /release/app/lib/ \
+  && mv /release/deps/bin /release/deps/releases /release/app/
 
 # start a new build stage so that the final image will only contain
 # the compiled release and other runtime necessities
@@ -117,15 +127,16 @@ RUN chown nobody /app
 # set runner ENV
 ENV MIX_ENV="prod"
 
-# Only copy the final release from the build stage
-COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/app ./
+# Only copy the final release from the build stage — deps first (cached unless deps changed),
+# then the app (a few MB, rebuilt every deploy). See the split in the builder stage.
+COPY --from=builder --chown=nobody:root /release/deps ./
+COPY --from=builder --chown=nobody:root /release/app ./
 
 # NOTE: we intentionally run as root (no `USER nobody`). The SQLite DB lives on a Coolify
 # persistent volume, bind-mounted root-owned; running as `nobody` would fail to create/write
 # app.db. Acceptable for this single-tenant, auth-gated home app — harden with gosu (chown the
 # volume, then drop privileges) later if desired.
-
-RUN chmod +x /app/bin/docker-entrypoint.sh
+# (No `chmod +x` on docker-entrypoint.sh: it is committed 100755 and mix release keeps the mode.)
 
 # Ensure the DB volume dir exists, run migrations, then start the server.
 CMD ["/app/bin/docker-entrypoint.sh"]

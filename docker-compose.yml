@@ -40,6 +40,14 @@ services:
     expose:
       - "4000"
     restart: unless-stopped
+    # Hits AppWeb.HealthPlug (curl ships in the runner image). 127.0.0.1, not localhost: IPv6 is
+    # disabled above. start_period covers the entrypoint's migrations + boot.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     depends_on:
       qdrant:
         condition: service_healthy

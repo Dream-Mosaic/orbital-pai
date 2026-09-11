@@ -19,7 +19,9 @@ manual finalize) + barge-in (Ink `turn.start`). The brain answer text **streams 
 
 **Source of truth for what's shipped:** `docs/superpowers/2026-06-14-phoenix-build-status.md` (read
 it first — it has a changelog + checkpoints). Designs: `docs/superpowers/specs/`. Plans:
-`docs/superpowers/plans/`. Wishlist/roadmap: `IDEAS.md`.
+`docs/superpowers/plans/`. **Backlog: the Forgejo issue board**
+(`code.clausens.cloud/kalcode/personal-assistant/issues`, via `tea`; skill `tracking-issues`). New
+bugs, debt and ideas go there, not into `IDEAS.md` or "Known debt" below (both predate the board).
 
 ## How we work (workflow)
 
@@ -232,7 +234,8 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   SQLite on a persistent `/data` volume (else redeploys wipe data), container runs as root for
   volume writes; register BOTH redirect URIs (localhost + prod) in the Google Cloud console; deploy
   is `App.version`-stamped — bump `version:` in mix.exs before deploying (shows in footer + boot
-  log).
+  log). **But** a `mix.exs` edit invalidates the Docker deps layers (cold Rust + EXLA rebuild):
+  read issue #1 before bumping.
 - **Gmail = second connector via the same pattern**: one `@connectors` registry entry +
   `App.Google.Gmail` adapter (`list_messages/2`, `get_message/2`, `send_message/2`) + pure helpers
   `App.Google.Gmail.Body` (MIME→plaintext) and `App.Google.Gmail.Mime` (attrs→RFC 2822, header-
