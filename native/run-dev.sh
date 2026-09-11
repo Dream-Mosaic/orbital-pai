@@ -55,7 +55,7 @@ echo "▸ device:  $DEVICE"
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if ! git diff --quiet HEAD 2>/dev/null; then SHA="$SHA+"; fi
 echo "▸ build:   $SHA"
-echo "▸ target:  127.0.0.1:$PORT"
+echo "▸ target:  localhost:$PORT"
 
 # Trust nothing: prove the tunnel is actually registered before blaming the app.
 if "$ADB" -s "$DEVICE" reverse --list 2>/dev/null | grep -q "tcp:$PORT"; then
@@ -91,9 +91,14 @@ A red connection dot means the socket could not reach the server. In order:
 
 EOF
 
-exec flutter run -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
-  # localhost, NOT 127.0.0.1: the session cookie carrying :oidc_state is stored against the
-  # host the app opened, and Authentik redirects back to whatever OIDC_REDIRECT_URI names
-  # (localhost). Different host = no cookie = state mismatch = a silent bounce to /login.
-  # These two must agree; adb reverse serves both names identically.
-  --dart-define=SERVER_HOST=localhost --dart-define=SERVER_PORT="$PORT"
+# SERVER_HOST is localhost, NOT 127.0.0.1: the session cookie carrying :oidc_state is stored
+# against the host the app opened, and Authentik redirects back to whatever OIDC_REDIRECT_URI
+# names (localhost). Different host = no cookie = state mismatch. adb reverse serves both names.
+#
+# Keep these on ONE logical line with no comments between the continuations: a `#` inside a
+# `\`-continued command comments out the REST of the line, which silently dropped SERVER_HOST
+# entirely and sent the dev build at production.
+exec flutter run -d "$DEVICE" \
+  --dart-define=BUILD_SHA="$SHA" \
+  --dart-define=SERVER_HOST=localhost \
+  --dart-define=SERVER_PORT="$PORT"
