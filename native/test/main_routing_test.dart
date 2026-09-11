@@ -528,7 +528,7 @@ void main() {
           // The seam that keeps this test from dialing the configured
           // server: HenryHome hands the freshly-signed-in token to this
           // instead of building a default AppConnection.
-          buildConnection: (token) => AppConnection(
+          buildConnection: (token, onRejected) => AppConnection(
             connector: () async => fake.socket,
             rejoinBackoff: const [Duration(days: 1)],
           ),
@@ -552,6 +552,47 @@ void main() {
           reason: 'a successful exchange must open the same shell every '
               'other test in this file reaches via an injected connection');
       expect(await store.read(), 'exchanged-token');
+    });
+
+    // The rejected-token classifier lives in AppConnection, but it is inert unless main.dart
+    // actually hands it somewhere to report to. It shipped unwired and every test stayed green,
+    // because the injection seam supplied its own connection and never exercised what
+    // main.dart passes. So this asserts the WIRING, not the classifier: that HenryHome gives
+    // the connection a non-null onRejected, and that invoking it signs the user out.
+    testWidgets('a rejected socket is wired back to sign-out', (tester) async {
+      phone(tester);
+      final store = freshStore();
+      await store.write('stored-token');
+      final client = MockClient((_) async => http.Response('{}', 500));
+      final auth = AuthController(store: store, httpClient: client);
+      addTearDown(auth.dispose);
+      final fake = FakeSocket();
+      Future<void> Function()? captured;
+
+      await tester.pumpWidget(MaterialApp(
+        home: HenryHome(
+          auth: auth,
+          buildConnection: (token, onRejected) {
+            captured = onRejected;
+            return AppConnection(
+              connector: () async => fake.socket,
+              rejoinBackoff: const [Duration(days: 1)],
+            );
+          },
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      expect(captured, isNotNull,
+          reason: 'main.dart must pass onRejected, or a refused token retries forever');
+
+      await captured!();
+      await tester.pump();
+
+      expect(await store.read(), isNull,
+          reason: 'a refused token must be cleared, not retried');
+      expect(auth.state, AuthState.signedOut);
     });
   });
 }

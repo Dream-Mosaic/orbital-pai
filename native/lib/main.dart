@@ -102,7 +102,12 @@ class HenryHome extends StatefulWidget {
   /// back an [AppConnection] wired to a fake socket instead — see
   /// `main_routing_test.dart`'s "deep links back from the browser" ->
   /// sign-in group.
-  final AppConnection Function(String token)? buildConnection;
+  /// Injected connection factory. It takes `onRejected` as a PARAMETER rather than letting the
+  /// default supply it privately, because the seam must not hide the wiring it stands in for:
+  /// when this took only a token, `main.dart` forgot to pass `onRejected` at all and every test
+  /// still passed — the rejected-token classifier was correct and completely inert in production.
+  final AppConnection Function(String token, Future<void> Function()? onRejected)?
+      buildConnection;
 
   @override
   State<HenryHome> createState() => _HenryHomeState();
@@ -158,8 +163,16 @@ class _HenryHomeState extends State<HenryHome> {
     }
   }
 
+  /// The `onRejected` wiring is what makes Task 4's classifier reach production: without it
+  /// `AppConnection` correctly identifies a refused token and then has nobody to tell, so the
+  /// app retries forever exactly as it did before — the whole point of distinguishing a
+  /// rejection from an outage, silently inert.
   AppConnection _connectionFor(String? token) =>
-      (widget.buildConnection ?? (t) => AppConnection(token: t))(token ?? '');
+      (widget.buildConnection ??
+          (t, onRejected) => AppConnection(token: t, onRejected: onRejected))(
+        token ?? '',
+        _auth?.handleSocketRejected,
+      );
 
   void _onAuthChanged() {
     final auth = _auth;
