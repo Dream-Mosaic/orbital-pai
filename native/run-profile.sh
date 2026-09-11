@@ -70,4 +70,6 @@ echo "▸ build:   $SHA"
 echo "▸ target:  127.0.0.1:$PORT"
 
 exec flutter run --profile -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
-  --dart-define=SERVER_HOST=127.0.0.1 --dart-define=SERVER_PORT="$PORT"
+  # localhost, NOT 127.0.0.1 -- see the note in run-dev.sh: the OIDC session cookie is keyed to
+  # the host the app opened, and Authentik redirects back to OIDC_REDIRECT_URI's host.
+  --dart-define=SERVER_HOST=localhost --dart-define=SERVER_PORT="$PORT"

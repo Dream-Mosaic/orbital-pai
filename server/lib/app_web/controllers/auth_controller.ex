@@ -126,6 +126,12 @@ defmodule AppWeb.AuthController do
   end
 
   defp login_failed(conn, message) do
+    # Logged, because this path was silent and that cost a live debugging session: an app login
+    # bounced here on every attempt with nothing in the log to say why, and the browser's
+    # pre-existing session then forwarded to "/" so it looked like a redirect rather than a
+    # failure. A refusal that names no reason is barely better than no refusal.
+    Logger.warning("[auth] login refused: #{message}")
+
     app_return? = get_session(conn, :oidc_return) == "app"
 
     conn =

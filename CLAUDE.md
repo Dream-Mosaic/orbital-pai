@@ -247,6 +247,12 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `LoginScreen` short of an app restart. `_onAuthChanged`'s `signedIn → signedOut` edge now tears
   the shell down (disposes every client built alongside the connection, then nulls them) so
   `build()` falls through to the login screen again.
+- **The app's `SERVER_HOST` and `OIDC_REDIRECT_URI`'s host must be the SAME STRING**, not merely
+  the same machine. `127.0.0.1` and `localhost` are different cookie hosts: the session carrying
+  `:oidc_state` is stored against whichever the app opened, Authentik redirects back to whichever
+  `OIDC_REDIRECT_URI` names, and if they differ the cookie is not sent — state mismatch, every
+  time, on an otherwise perfect flow. Cost a live smoke session; `run-dev.sh` and
+  `run-profile.sh` now both say `localhost` to match `.env`. (adb reverse serves both names.)
 - **The server address is `--dart-define`d** (`native/lib/server_config.dart`), defaulting to
   production; `run-dev.sh`/`run-profile.sh` pass the laptop's. TLS is inferred from the port
   rather than configured separately — two knobs that must agree is one too many, and the failure

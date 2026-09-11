@@ -92,4 +92,8 @@ A red connection dot means the socket could not reach the server. In order:
 EOF
 
 exec flutter run -d "$DEVICE" --dart-define=BUILD_SHA="$SHA" \
-  --dart-define=SERVER_HOST=127.0.0.1 --dart-define=SERVER_PORT="$PORT"
+  # localhost, NOT 127.0.0.1: the session cookie carrying :oidc_state is stored against the
+  # host the app opened, and Authentik redirects back to whatever OIDC_REDIRECT_URI names
+  # (localhost). Different host = no cookie = state mismatch = a silent bounce to /login.
+  # These two must agree; adb reverse serves both names identically.
+  --dart-define=SERVER_HOST=localhost --dart-define=SERVER_PORT="$PORT"
