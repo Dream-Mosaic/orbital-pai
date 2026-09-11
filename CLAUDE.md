@@ -217,13 +217,22 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   original row, or that row's turns/facts/connectors are stranded under an id nobody logs into. An allowlisted email whose row
   is already bound to a DIFFERENT subject is `{:error, :subject_conflict}` — refuse, never rebind,
   or one user silently inherits the other's turns, facts and connectors.
-- **`GET /auth/login/google` is a deliberately TEMPORARY cutover fallback.** `/auth/login` goes to
-  Authentik; this second route is the only thing that still sets `:google_oauth_flow`, and so the
-  only door into `GoogleAuthController`'s login branch. It exists because a mis-set `OIDC_*` on a
-  deploy would otherwise lock everyone out of the web with no second way in. **Delete it together
-  with that branch** once the Authentik bind is verified against production — the whole-branch
-  review found the branch had already gone unreachable once, silently, when the function that set
-  the session key was replaced.
+- **The native app signs in like the web — there is no token to paste.** `kSocketToken` is gone
+  from `config.dart`; tapping Sign in opens `/auth/login?return=app` in the SYSTEM browser (an
+  embedded webview is refused by most IdPs), the server deep-links back `orbital://auth?code=…`
+  with a **single-use 60s code**, and the app exchanges it at `POST /api/auth/exchange` for a
+  token it keeps in platform secure storage. The code exists so a 30-day credential never rides
+  a URL through browser history or Android's intent system.
+- **A refused token and an unreachable server are different, and the app must keep treating them
+  so.** Rejected → clear the stored token and show the login screen. Unreachable → **keep** the
+  token and retry on the existing backoff. Backwards, and you are signed out every time wifi
+  drops. `AppConnection.onRejected` carries this, and `main.dart` must PASS it — it shipped
+  unwired once, fully tested and completely inert, because the test seam supplied its own
+  connection. That seam now takes `onRejected` as a parameter for exactly that reason.
+- **The server address is `--dart-define`d** (`native/lib/server_config.dart`), defaulting to
+  production; `run-dev.sh`/`run-profile.sh` pass the laptop's. TLS is inferred from the port
+  rather than configured separately — two knobs that must agree is one too many, and the failure
+  (`ws://` against a `wss://` endpoint) is a silent hang.
 - **Cloudflare fronts `auth.clausens.cloud` and blocks non-browser POSTs** to the Authentik API
   with `403 error code: 1010` (its browser-signature check). GETs pass. `curl` gets through;
   Python `urllib` does not. If a script against that API 403s with a body that is not JSON, it is
