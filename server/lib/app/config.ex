@@ -18,7 +18,7 @@ defmodule App.Config do
             # Toby
             voice_id: "3d5ce2fb-e56c-42f0-9ed9-4662484063b4",
             # Cartesia TTS, shared by the reflex HTTP path and the streaming WS path.
-            tts_model: "sonic-3.5",
+            tts_model: "sonic-3.6",
             # 0.6–1.5
             tts_speed: 1.0,
             # 0.5–2.0
