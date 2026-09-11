@@ -3,6 +3,9 @@ defmodule App.Adapters.TextModel.GeminiTest do
   alias App.Adapters.TextModel.Gemini
   alias App.Config
 
+  defp call(name, extra \\ %{}),
+    do: Map.merge(%{name: name, args: %{}, sig: nil, id: nil}, extra)
+
   test "maybe_put_tools/3 with tools? = false strips the tools block (forced final answer round)" do
     body = %{contents: []}
     cfg = %Config{web_search: false}
@@ -19,7 +22,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
     # It records the tools? flag of every round so we can prove the final one disabled tools.
     round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
       send(parent, {:round, tools?})
-      {:ok, [{"noop", %{}, nil}]}
+      {:ok, [call("noop")]}
     end
 
     cfg = %Config{}
@@ -60,7 +63,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
     round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
       if tools? and not Process.get(:sent_calls, false) do
         Process.put(:sent_calls, true)
-        {:ok, [{"sleep_a", %{}, nil}, {"sleep_b", %{}, nil}]}
+        {:ok, [call("sleep_a"), call("sleep_b")]}
       else
         {:ok, []}
       end
@@ -92,7 +95,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
     round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
       if tools? and not Process.get(:sent_calls, false) do
         Process.put(:sent_calls, true)
-        {:ok, [{"sleep_a", %{}, nil}, {"sleep_b", %{}, nil}]}
+        {:ok, [call("sleep_a"), call("sleep_b")]}
       else
         {:ok, []}
       end
@@ -255,17 +258,39 @@ defmodule App.Adapters.TextModel.GeminiTest do
       ]
     }
 
-    assert Gemini.extract_calls(decoded) == [{"get_weather", %{"location" => "STL"}, "sig-abc"}]
+    assert Gemini.extract_calls(decoded) == [
+             call("get_weather", %{args: %{"location" => "STL"}, sig: "sig-abc"})
+           ]
   end
 
-  test "extract_calls keeps a nil signature when the part has none" do
+  test "extract_calls carries the functionCall id (Gemini 3.x sends one per call)" do
+    decoded = %{
+      "candidates" => [
+        %{
+          "content" => %{
+            "parts" => [
+              %{"functionCall" => %{"id" => "c1", "name" => "get_weather", "args" => %{}}},
+              %{"functionCall" => %{"id" => "c2", "name" => "list_reminders", "args" => %{}}}
+            ]
+          }
+        }
+      ]
+    }
+
+    assert Gemini.extract_calls(decoded) == [
+             call("get_weather", %{id: "c1"}),
+             call("list_reminders", %{id: "c2"})
+           ]
+  end
+
+  test "extract_calls keeps a nil signature and id when the part has neither" do
     decoded = %{
       "candidates" => [
         %{"content" => %{"parts" => [%{"functionCall" => %{"name" => "f", "args" => %{}}}]}}
       ]
     }
 
-    assert Gemini.extract_calls(decoded) == [{"f", %{}, nil}]
+    assert Gemini.extract_calls(decoded) == [call("f")]
   end
 
   test "extract_calls is [] when there are no function calls" do
@@ -274,7 +299,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
   end
 
   test "model_call_parts echoes the thought_signature back (Gemini 3 requires it)" do
-    calls = [{"get_weather", %{"location" => "STL"}, "sig-abc"}]
+    calls = [call("get_weather", %{args: %{"location" => "STL"}, sig: "sig-abc"})]
 
     assert Gemini.model_call_parts(calls) == [
              %{
@@ -284,33 +309,91 @@ defmodule App.Adapters.TextModel.GeminiTest do
            ]
   end
 
-  test "model_call_parts omits the signature key when there isn't one" do
-    assert Gemini.model_call_parts([{"f", %{}, nil}]) == [
+  test "model_call_parts echoes the functionCall id back as received" do
+    assert Gemini.model_call_parts([call("f", %{id: "c1"})]) == [
+             %{functionCall: %{id: "c1", name: "f", args: %{}}}
+           ]
+  end
+
+  test "model_call_parts omits the signature and id keys when there aren't any" do
+    assert Gemini.model_call_parts([call("f")]) == [
              %{functionCall: %{name: "f", args: %{}}}
            ]
   end
 
-  test "function_response_parts builds the tool-result content parts" do
-    results = [{"get_weather", %{result: %{temp_f: 70}}}]
+  test "function_response_parts pairs each response with its call's id and name" do
+    calls = [call("get_weather", %{id: "c1"}), call("list_reminders", %{id: "c2"})]
+    responses = [%{result: %{temp_f: 70}}, %{error: "timeout"}]
 
-    assert Gemini.function_response_parts(results) == [
+    assert Gemini.function_response_parts(calls, responses) == [
+             %{
+               functionResponse: %{
+                 id: "c1",
+                 name: "get_weather",
+                 response: %{result: %{temp_f: 70}}
+               }
+             },
+             %{
+               functionResponse: %{
+                 id: "c2",
+                 name: "list_reminders",
+                 response: %{error: "timeout"}
+               }
+             }
+           ]
+  end
+
+  test "function_response_parts omits the id key when the call had none" do
+    assert Gemini.function_response_parts([call("get_weather")], [%{result: %{temp_f: 70}}]) == [
              %{functionResponse: %{name: "get_weather", response: %{result: %{temp_f: 70}}}}
            ]
   end
 
+  test "a tool round's continuation echoes each call id on both the call and its response" do
+    cfg = %App.Config{tools: [], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    me = self()
+
+    round_fun = fn contents, _system, _cfg, _thinking, _target, tools? ->
+      if tools? and not Process.get(:sent_calls, false) do
+        Process.put(:sent_calls, true)
+        {:ok, [call("tool_a", %{id: "c1", sig: "s1"}), call("tool_b", %{id: "c2"})]}
+      else
+        send(me, {:continuation, contents})
+        {:ok, []}
+      end
+    end
+
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, me, 0, round_fun)
+
+    assert_receive {:continuation, [model_turn, response_turn]}
+
+    assert %{role: "model", parts: [%{functionCall: %{id: "c1"}}, %{functionCall: %{id: "c2"}}]} =
+             model_turn
+
+    # Unknown tools error — the error response must still be paired with its own call's id.
+    assert %{
+             role: "user",
+             parts: [
+               %{functionResponse: %{id: "c1", name: "tool_a", response: %{error: _}}},
+               %{functionResponse: %{id: "c2", name: "tool_b", response: %{error: _}}}
+             ]
+           } = response_turn
+  end
+
   test "bridge_phrase is nil when tool_bridges is off" do
-    assert Gemini.bridge_phrase([{"get_weather", %{}, nil}], %Config{tool_bridges: false}) == nil
+    assert Gemini.bridge_phrase([call("get_weather")], %Config{tool_bridges: false}) == nil
   end
 
   test "bridge_phrase picks a declared phrase for a phrase-bearing call" do
     cfg = %Config{tools: [App.Tools.Weather], tool_bridges: true}
-    phrase = Gemini.bridge_phrase([{"get_weather", %{}, nil}], cfg)
+    phrase = Gemini.bridge_phrase([call("get_weather")], cfg)
     assert phrase in App.Tools.Weather.bridge("get_weather")
   end
 
   test "bridge_phrase is nil when no call has a phrase" do
     cfg = %Config{tools: [App.Tools.Reminders], tool_bridges: true}
-    assert Gemini.bridge_phrase([{"list_reminders", %{}, nil}], cfg) == nil
+    assert Gemini.bridge_phrase([call("list_reminders")], cfg) == nil
   end
 
   test "bridge_phrase picks the FIRST phrase-bearing call" do
@@ -318,7 +401,7 @@ defmodule App.Adapters.TextModel.GeminiTest do
 
     phrase =
       Gemini.bridge_phrase(
-        [{"get_weather", %{}, nil}, {"get_calendar_events", %{}, nil}],
+        [call("get_weather"), call("get_calendar_events")],
         cfg
       )
 

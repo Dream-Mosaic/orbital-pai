@@ -97,21 +97,21 @@ defmodule App.Adapters.TextModel.Gemini do
 
       {:ok, calls} ->
         # announce each call so the UI can show a live "checking your calendar…" chip
-        Enum.each(calls, fn {name, _args, _sig} -> send(target, {:gemini_tool_call, name}) end)
+        Enum.each(calls, fn %{name: name} -> send(target, {:gemini_tool_call, name}) end)
 
         if phrase = bridge_phrase(calls, cfg), do: send(target, {:gemini_bridge, phrase})
 
         # Gemini can emit several calls in one round (parallel function calling) — run them
-        # concurrently. ordered: true keeps results aligned with `calls` for the
-        # functionResponse parts. 20s > the largest per-tool cap (Gmail 18s), so on_timeout
-        # only fires if a tool's own cap machinery wedged.
-        results =
+        # concurrently. ordered: true keeps responses aligned with `calls`, which is how each
+        # functionResponse gets its call's id + name. 20s > the largest per-tool cap (Gmail
+        # 18s), so on_timeout only fires if a tool's own cap machinery wedged.
+        responses =
           calls
           |> Task.async_stream(
-            fn {name, args, _sig} ->
+            fn %{name: name, args: args} ->
               case App.Tools.execute(name, args, tool_ctx) do
                 {:ok, r} ->
-                  {name, %{result: r}}
+                  %{result: r}
 
                 {:error, e} ->
                   # Proves the failure path: the brain SEES this error and (via B1/B2) must
@@ -121,7 +121,7 @@ defmodule App.Adapters.TextModel.Gemini do
                     "[gemini] tool #{name} errored: #{error_string(e)} — fed back to brain"
                   )
 
-                  {name, %{error: error_string(e)}}
+                  %{error: error_string(e)}
               end
             end,
             max_concurrency: 4,
@@ -131,18 +131,18 @@ defmodule App.Adapters.TextModel.Gemini do
           )
           |> Enum.zip(calls)
           |> Enum.map(fn
-            {{:ok, result}, _call} ->
-              result
+            {{:ok, response}, _call} ->
+              response
 
-            {{:exit, reason}, {name, _args, _sig}} ->
+            {{:exit, reason}, %{name: name}} ->
               Logger.warning("[gemini] tool #{name} task exited: #{inspect(reason)}")
-              {name, %{error: "timeout"}}
+              %{error: "timeout"}
           end)
 
         contents =
           contents ++
             [%{role: "model", parts: model_call_parts(calls)}] ++
-            [%{role: "user", parts: function_response_parts(results)}]
+            [%{role: "user", parts: function_response_parts(calls, responses)}]
 
         run_rounds(contents, system, cfg, thinking, tool_ctx, target, hops + 1, round_fun)
     end
@@ -450,16 +450,18 @@ defmodule App.Adapters.TextModel.Gemini do
   defp raw_text(_), do: ""
 
   @doc false
-  # Each call is `{name, args, thought_signature}`. Gemini 3 thinking models attach a
+  # Each call is `%{name, args, sig, id}`. Gemini 3 thinking models attach a
   # `thoughtSignature` (a part-level sibling of `functionCall`) that MUST be echoed back in
   # the continuation's model turn, or the next request 400s ("missing a thought_signature").
+  # 3.x also gives each call an `id`; the docs require it on the matching functionResponse.
+  # Either may be nil (older models, or a part without one) — the key is then omitted.
   def extract_calls(%{"candidates" => [%{"content" => %{"parts" => parts}} | _]})
       when is_list(parts) do
     parts
     |> Enum.filter(& &1["functionCall"])
     |> Enum.map(fn part ->
       fc = part["functionCall"]
-      {fc["name"], fc["args"] || %{}, part["thoughtSignature"]}
+      %{name: fc["name"], args: fc["args"] || %{}, sig: part["thoughtSignature"], id: fc["id"]}
     end)
   end
 
@@ -467,18 +469,23 @@ defmodule App.Adapters.TextModel.Gemini do
 
   @doc false
   def model_call_parts(calls) do
-    Enum.map(calls, fn {name, args, sig} ->
-      part = %{functionCall: %{name: name, args: args}}
+    Enum.map(calls, fn %{name: name, args: args, sig: sig, id: id} ->
+      part = %{functionCall: put_id(%{name: name, args: args}, id)}
       if sig, do: Map.put(part, :thoughtSignature, sig), else: part
     end)
   end
 
   @doc false
-  def function_response_parts(results) do
-    Enum.map(results, fn {name, response} ->
-      %{functionResponse: %{name: name, response: response}}
+  # `responses` is aligned with `calls` (one per call, in order), so each functionResponse
+  # carries its own call's id + name — a timed-out or errored tool included.
+  def function_response_parts(calls, responses) do
+    Enum.zip_with(calls, responses, fn %{name: name, id: id}, response ->
+      %{functionResponse: put_id(%{name: name, response: response}, id)}
     end)
   end
+
+  defp put_id(map, nil), do: map
+  defp put_id(map, id), do: Map.put(map, :id, id)
 
   @doc false
   # The bridge phrase to speak before running `calls` (nil when disabled or no call declares one).
@@ -486,7 +493,7 @@ defmodule App.Adapters.TextModel.Gemini do
   def bridge_phrase(_calls, %{tool_bridges: false}), do: nil
 
   def bridge_phrase(calls, cfg) do
-    Enum.find_value(calls, fn {name, _args, _sig} ->
+    Enum.find_value(calls, fn %{name: name} ->
       case App.Tools.bridge(name, cfg) do
         [] -> nil
         phrases -> Enum.random(phrases)
