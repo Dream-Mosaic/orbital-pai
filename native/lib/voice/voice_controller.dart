@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../audio/audio_track_player.dart';
+import '../audio/keyword_spotter.dart';
 import '../audio/mic_capture.dart';
+import '../audio/wake_gate.dart';
 import '../connection/app_connection.dart';
 import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
@@ -20,9 +22,13 @@ class VoiceController extends ChangeNotifier {
     required AppConnection connection,
     MicCapture? mic,
     AudioTrackPlayer? player,
+    WakeSpotter? spotter,
+    WakeGate? gate,
   })  : _connection = connection,
         _mic = mic ?? MicCapture(),
-        _player = player ?? AudioTrackPlayer() {
+        _player = player ?? AudioTrackPlayer(),
+        _spotter = spotter ?? SherpaWakeSpotter(),
+        _gate = gate ?? WakeGate() {
     // Register the topic once and take delivery of every channel the
     // connection makes for it — the one that already exists if we were built
     // after the connect, and a fresh one after every reconnect. Both, because
@@ -123,6 +129,13 @@ class VoiceController extends ChangeNotifier {
   final AudioTrackPlayer _player;
   bool _playerReady = false;
 
+  /// On-device wake-word spotter and the pure gate that decides, per PCM
+  /// chunk, whether it may leave the device. Both are injected (defaulted to
+  /// the real implementations) so gating is testable headless — see the
+  /// mic `listen` callback in [startMic] for where they meet the audio.
+  final WakeSpotter _spotter;
+  final WakeGate _gate;
+
   // ---- Meridian chrome state ----
   /// index.js reads this from a data attribute; the native client has no such
   /// channel, and the server-side default is "Henry".
@@ -187,6 +200,20 @@ class VoiceController extends ChangeNotifier {
     if (_disposed) return;
     orbFrame.state = orbState;
     _safeNotify();
+  }
+
+  /// The single place `_wakeLocked` is assigned. Reached from BOTH paths the
+  /// server uses to tell us it locked — the `locked` event and the `state`
+  /// reconnect snapshot — so the gate can never see one without the other.
+  ///
+  /// **Fail open:** when the spotter failed to load (`!_spotter.available`),
+  /// `onLocked` is left uncalled — never fed a `true` — so the gate's
+  /// `_locked` stays false and `open` reads true unconditionally. A wake
+  /// engine that cannot load must degrade to streaming everything (expensive)
+  /// rather than to gating with nothing able to ever open it again (deaf).
+  void _applyWakeLocked(bool locked) {
+    _wakeLocked = locked;
+    if (_spotter.available) _gate.onLocked(locked);
   }
 
   /// Map a server turn-state event onto the orb, ported from index.js.
@@ -361,6 +388,7 @@ class VoiceController extends ChangeNotifier {
     if (!_pttEnabled || _pttHeld) return;
     _pttHeld = true;
     _turnState = TurnState.listening; // amber while held (ambient if wake-locked)
+    _gate.onPttHeld(true);
     _live?.push('ptt_press', const {});
     _syncOrb();
   }
@@ -369,6 +397,7 @@ class VoiceController extends ChangeNotifier {
     if (!_pttHeld) return;
     _pttHeld = false;
     _turnState = TurnState.idle;
+    _gate.onPttHeld(false);
     _live?.push('ptt_release', const {});
     _syncOrb();
   }
@@ -486,6 +515,13 @@ class VoiceController extends ChangeNotifier {
   /// stream — so it is bounded here, with the same bound the hardware gets,
   /// and its failure is logged rather than allowed to skip the rest.
   Future<void> _release(MicState held) async {
+    // The spotter is tied to the mic session's lifetime, not to any one
+    // teardown path — this is the one place every path (deliberate stop,
+    // dispose, a dead channel, a platform-ended stream, a loan-out) already
+    // converges on to give up the session, so it is where the spotter gives
+    // up too. startMic() calls `_spotter.start()` again on the next attempt,
+    // auto-restart included, so nothing here needs its own re-arm.
+    unawaited(_spotter.stop());
     // Issued FIRST and synchronously, before this method's own first await:
     // MicCapture serialises opens behind a stop, so a start requested in the
     // same breath queues correctly behind this one.
@@ -650,7 +686,7 @@ class VoiceController extends ChangeNotifier {
         _showThinking();
         _applyTurnEvent(m.event);
       case 'locked':
-        _wakeLocked = (p['locked'] as bool?) ?? false;
+        _applyWakeLocked((p['locked'] as bool?) ?? false);
         _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         _log('locked: $_wakeLocked');
         _syncOrb();
@@ -658,7 +694,12 @@ class VoiceController extends ChangeNotifier {
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']}');
         _clearThinking();
         _brainIndex = null;
-        _wakeLocked = (p['locked'] as bool?) ?? _wakeLocked;
+        // The reconnect path: after a socket drop the server re-sends its
+        // current lock state INSIDE the snapshot rather than as a `locked`
+        // event, so this write must drive the gate exactly like the one
+        // above \u2014 a gate wired only to the `locked` event desyncs on every
+        // reconnect and streams while the server believes it is locked.
+        _applyWakeLocked((p['locked'] as bool?) ?? _wakeLocked);
         _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
@@ -878,6 +919,18 @@ class VoiceController extends ChangeNotifier {
         unawaited(session.stop());
         return;
       }
+      // Started here, not in the constructor: one spotter engine per mic
+      // session, so an auto-restart (Task 1's backoff) gets a freshly-started
+      // spotter exactly as it gets a freshly-started recorder. Awaited before
+      // the subscription below so the very first chunk is already gated.
+      await _spotter.start();
+      // A dispose or a newer session superseding this one during that await
+      // is the same race the identical() check above guards — checked again
+      // rather than assumed, for the same reason.
+      if (_disposed || !identical(_micState.session, session)) {
+        unawaited(session.stop());
+        return;
+      }
       // Subscribe BEFORE recording that we are listening. `stream.listen` can
       // throw, and with the state flipped first that throw landed in the catch
       // below still claiming a live microphone with no subscription and not
@@ -887,12 +940,31 @@ class VoiceController extends ChangeNotifier {
         // Same race as _handleAudio: cancelling the subscription is async, so a
         // chunk can still arrive after orbFrame.dispose() ran synchronously.
         if (_disposed) return;
-        _live?.pushBinary('audio', chunk);
-        // Set the TARGET only — OrbFrame.advance() smooths it once per frame, so
-        // the orb's responsiveness never depends on the device's audio buffer size.
+        // Orb feedback runs for EVERY chunk, gated or not — a locked device
+        // that never updates its level looks dead rather than gated. Set the
+        // TARGET only — OrbFrame.advance() smooths it once per frame, so the
+        // orb's responsiveness never depends on the device's audio buffer size.
         if (orbFrame.state == OrbState.listening) {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
           orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
+        }
+        // The spotter always gets a look at the chunk (so it keeps hearing
+        // through an unlocked stretch too); only a fresh detection while the
+        // gate is still closed announces itself — an already-open gate (a
+        // second false-ish fire, or the gate opened by PTT instead) must not
+        // re-push wake_detected.
+        if (_spotter.available && _spotter.offer(chunk)) {
+          if (!_gate.open) {
+            _gate.onWakeDetected();
+            _live?.push('wake_detected', const {});
+          }
+        }
+        final decision = _gate.offer(chunk);
+        if (decision.send) {
+          for (final pre in decision.preRoll) {
+            _live?.pushBinary('audio', pre);
+          }
+          _live?.pushBinary('audio', chunk);
         }
       },
           onError: (Object e) => _log('mic error: $e'),

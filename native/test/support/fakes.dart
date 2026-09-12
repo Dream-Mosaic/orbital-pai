@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:orbital_pai/audio/audio_track_player.dart';
+import 'package:orbital_pai/audio/keyword_spotter.dart';
 import 'package:orbital_pai/audio/mic_capture.dart';
 import 'package:record/record.dart';
 
@@ -365,6 +366,42 @@ class FakePlayer implements AudioTrackPlayer {
 
   @override
   Future<void> dispose() async => disposeCalls++;
+}
+
+/// Headless [WakeSpotter]: no sherpa-onnx, no assets, no FFI.
+///
+/// [fireNext] arms exactly one detection: the next [offer] call returns
+/// `true` and disarms it, mirroring the real spotter's one-shot fire (it
+/// resets its internal decoder on a hit) without any of the audio math. Every
+/// call is counted so a test can assert the spotter kept seeing chunks even
+/// while the gate stayed closed, and [available] defaults to `true` so a test
+/// has to opt into the fail-open scenario rather than get it by accident.
+class FakeSpotter implements WakeSpotter {
+  FakeSpotter({this.available = true});
+
+  @override
+  final bool available;
+
+  /// Set by a test right before the chunk that should "hear" the wake word.
+  bool fireNext = false;
+
+  int startCalls = 0;
+  int stopCalls = 0;
+  int offerCalls = 0;
+
+  @override
+  Future<void> start() async => startCalls++;
+
+  @override
+  bool offer(Uint8List pcm16) {
+    offerCalls++;
+    if (!fireNext) return false;
+    fireNext = false;
+    return true;
+  }
+
+  @override
+  Future<void> stop() async => stopCalls++;
 }
 
 /// Drain a handful of event-loop turns. `Future.delayed(Duration.zero)` (not
