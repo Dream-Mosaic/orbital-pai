@@ -82,6 +82,15 @@ void main() {
     Stream<Uri>? deepLinks,
   }) async {
     phone(tester);
+    // VoiceController now resolves a DeviceId (`SecureDeviceIdStore`, backed
+    // by `FlutterSecureStorage`) before it ever registers `voice:henry`'s
+    // topic. Left unmocked, a `testWidgets` binding never completes that
+    // platform-channel read at all (unlike a plain `test()`, where a missing
+    // handler throws promptly) — so without this, `voice:henry` would never
+    // join and every assertion below would see it silently missing. Same
+    // fake the 'sign-in gating' group already uses for `TokenStore`, whose
+    // storage this shares.
+    FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
     // Only the two panels whose CONTENT a test drives (the Settings layer
     // rows) need a state frame; every other station is asserted on its
     // routing, which does not depend on what the server pushed.
@@ -309,7 +318,11 @@ void main() {
     // both topics are genuinely joined at boot — so "opening a panel disturbs
     // neither" is falsifiable.
     final (conn, fake) = await pumpHome(tester);
-    expect(fake.joinedTopics, ['voice:henry', 'badges:henry'],
+    // Unordered: VoiceController's join now waits on an async DeviceId
+    // resolution before it registers its topic, so it lands a beat after
+    // BadgesClient's synchronous one — an implementation detail of ordering,
+    // not something either topic's presence depends on.
+    expect(fake.joinedTopics, unorderedEquals(['voice:henry', 'badges:henry']),
         reason: 'sanity: the conversation and its badges are up before any tap');
 
     for (final tab in MeridianTab.values) {

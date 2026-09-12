@@ -4,6 +4,7 @@ import '../audio/audio_track_player.dart';
 import '../audio/keyword_spotter.dart';
 import '../audio/mic_capture.dart';
 import '../audio/wake_gate.dart';
+import '../auth/device_id.dart';
 import '../connection/app_connection.dart';
 import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
@@ -24,36 +25,55 @@ class VoiceController extends ChangeNotifier {
     AudioTrackPlayer? player,
     WakeSpotter? spotter,
     WakeGate? gate,
+    DeviceId? deviceId,
   })  : _connection = connection,
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer(),
         _spotter = spotter ?? SherpaWakeSpotter(),
-        _gate = gate ?? WakeGate() {
-    // Register the topic once and take delivery of every channel the
-    // connection makes for it — the one that already exists if we were built
-    // after the connect, and a fresh one after every reconnect. Both, because
-    // a consumer that only works when it is built first is a trap for every
-    // future panel client.
-    //
-    // Delivery is at channel CREATION, not at join, and that is load-bearing:
-    // the server pushes `state` and `history` immediately behind its join
-    // reply, so a listener attached on a "joined" signal misses both on every
-    // single connect. `essential: true` because a refused `voice:henry` means
-    // a dead token — there is nothing to stay connected for.
-    _connection.openChannel(
-      _topic,
-      joinPayload: _joinPayload,
-      essential: true,
-      onChannel: _adoptChannel,
-    );
+        _gate = gate ?? WakeGate(),
+        _deviceId = deviceId ?? DeviceId() {
     // The other half of the mic-restore contract: a deliberate teardown that
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
     _connection.addListener(_onConnectionChanged);
+    // Registering the topic has to wait on the device id, which is async
+    // (`DeviceId.get()` may hit the platform keystore) — but a constructor
+    // cannot await, so this is a fire-and-forget task rather than something
+    // the constructor blocks on. `DeviceId.get()` itself never throws (it
+    // degrades to an in-memory id on a broken store rather than failing the
+    // join), so there is no slow-or-failing-store case that leaves this
+    // topic unregistered — only the ordinary time it takes to resolve.
+    unawaited(_registerTopic());
   }
 
   static const String _topic = 'voice:henry';
-  static const Map<String, dynamic> _joinPayload = {'kiosk': false};
+
+  /// Resolved once and injected, never read directly elsewhere: everything
+  /// this controller knows about "which device am I" lives in the join
+  /// payload it sends and the `bound` state the server answers with.
+  final DeviceId _deviceId;
+
+  /// Register the topic once the device id is known and take delivery of
+  /// every channel the connection makes for it — the one that already exists
+  /// if we were built after the connect, and a fresh one after every
+  /// reconnect. Both, because a consumer that only works when it is built
+  /// first is a trap for every future panel client.
+  ///
+  /// Delivery is at channel CREATION, not at join, and that is load-bearing:
+  /// the server pushes `state` and `history` immediately behind its join
+  /// reply, so a listener attached on a "joined" signal misses both on every
+  /// single connect. `essential: true` because a refused `voice:henry` means
+  /// a dead token — there is nothing to stay connected for.
+  Future<void> _registerTopic() async {
+    final id = await _deviceId.get();
+    if (_disposed) return;
+    _connection.openChannel(
+      _topic,
+      joinPayload: {'kiosk': false, 'device_id': id},
+      essential: true,
+      onChannel: _adoptChannel,
+    );
+  }
 
   final AppConnection _connection;
   PhoenixChannel? _channel;
@@ -164,6 +184,12 @@ class VoiceController extends ChangeNotifier {
   // ---- Meridian orb state ----
   bool _talking = false;
   bool _wakeLocked = false;
+
+  /// Whether the server says THIS device currently owns the conversation.
+  /// Defaults true — see [WakeGate]'s `_bound` doc — so a client that has
+  /// never heard a `bound` push (an old server, or one not yet received)
+  /// behaves exactly as it did before this feature existed.
+  bool _bound = true;
   TurnState _turnState = TurnState.idle;
   final OrbFrame orbFrame = OrbFrame();
 
@@ -234,6 +260,18 @@ class VoiceController extends ChangeNotifier {
   void _applyWakeLocked(bool locked) {
     _wakeLocked = locked;
     _gate.onLocked(locked);
+  }
+
+  /// The single place the "am I the bound device" fact is applied, reached
+  /// from BOTH the `bound` event and the `state` reconnect snapshot — same
+  /// shape as [_applyWakeLocked] and for the same reason: the snapshot is
+  /// the reconnect path, so a gate wired only to the event desyncs on every
+  /// reconnect. `locked` and `bound` are deliberately separate facts ("the
+  /// conversation is locked" vs. "I am not the owner") and are never folded
+  /// into each other here.
+  void _applyBound(bool bound) {
+    _bound = bound;
+    _gate.onBound(bound);
   }
 
   /// Map a server turn-state event onto the orb, ported from index.js.
@@ -710,8 +748,15 @@ class VoiceController extends ChangeNotifier {
         _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         _log('locked: $_wakeLocked');
         _syncOrb();
+      case 'bound':
+        // The server's own event, deliberately NOT folded into `locked` \u2014
+        // "the conversation is locked" and "I am not the owner" are
+        // different facts. `bound` defaults true (see WakeGate), so this
+        // only ever narrows a client that has actually been told otherwise.
+        _applyBound((p['bound'] as bool?) ?? true);
+        _log('bound: ${p['bound']}');
       case 'state':
-        _log('state snapshot: phase=${p['phase']} locked=${p['locked']}');
+        _log('state snapshot: phase=${p['phase']} locked=${p['locked']} bound=${p['bound']}');
         _clearThinking();
         _brainIndex = null;
         // The reconnect path: after a socket drop the server re-sends its
@@ -720,6 +765,12 @@ class VoiceController extends ChangeNotifier {
         // above \u2014 a gate wired only to the `locked` event desyncs on every
         // reconnect and streams while the server believes it is locked.
         _applyWakeLocked((p['locked'] as bool?) ?? _wakeLocked);
+        // Same reconnect-path reasoning as `locked`, for `bound`: the
+        // snapshot carries it alongside `phase`/`locked` precisely so a
+        // rebind re-syncs it too. An ABSENT key must not clobber whatever
+        // this client already knows, exactly like `phase` below \u2014 so this
+        // reads from the gate's current state, not a hardcoded default.
+        _applyBound((p['bound'] as bool?) ?? _bound);
         _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.

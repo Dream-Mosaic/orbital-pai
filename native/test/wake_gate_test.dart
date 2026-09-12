@@ -75,4 +75,31 @@ void main() {
     expect(d.preRoll.length, 1);
     expect(d.preRoll.single.length, 320);
   });
+
+  test('a gate told it is not bound stays closed even while unlocked', () {
+    final g = WakeGate()..onLocked(false);
+    expect(g.offer(chunk(320)).send, isTrue);
+    g.onBound(false);
+    expect(g.offer(chunk(320)).send, isFalse,
+        reason: 'a standby device must not stream even when the conversation is unlocked');
+  });
+
+  test('bound defaults true so an untold client behaves as today', () {
+    expect(WakeGate().offer(chunk(320)).send, isTrue);
+  });
+
+  test('regaining bound reopens the gate', () {
+    final g = WakeGate()..onBound(false);
+    g.onBound(true);
+    expect(g.offer(chunk(320)).send, isTrue);
+  });
+
+  test('PTT does not override a standby device\'s bound state', () {
+    // A standby device's PTT press is a CLAIM, not proof it already holds
+    // the conversation — the gate only opens once the server answers with
+    // bound: true.
+    final g = WakeGate()..onBound(false);
+    g.onPttHeld(true);
+    expect(g.offer(chunk(320)).send, isFalse);
+  });
 }

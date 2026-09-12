@@ -42,12 +42,24 @@ class WakeGate {
   bool _wakeOpen = false;
   bool _flushPending = false;
 
+  /// Whether the server says THIS device owns the conversation. Defaults
+  /// true so a client never told about binding (an old server, or a client
+  /// that hasn't heard from the new one yet) behaves exactly as before this
+  /// feature existed.
+  bool _bound = true;
+
   final Queue<Uint8List> _ring = Queue<Uint8List>();
   int _ringBytes = 0;
 
-  /// Whether audio currently passes through: unlocked, push-to-talk held,
-  /// or a wake word opened the gate.
-  bool get open => !_locked || _ptt || _wakeOpen;
+  /// Whether audio currently passes through: bound to this device, AND
+  /// (unlocked, push-to-talk held, or a wake word opened the gate).
+  ///
+  /// `_bound` gates ahead of everything else, deliberately including PTT: a
+  /// standby device's PTT press is a *claim* on the conversation, not proof
+  /// it already holds it. The gate only opens once the server answers that
+  /// claim with `bound: true` — overriding it here would let a second
+  /// device's audio race the first device's live turn onto the wire.
+  bool get open => _bound && (!_locked || _ptt || _wakeOpen);
 
   /// Mirrors the server's lock state. A relock (`locked == true`) must close
   /// a gate a prior wake detection opened, and drops any buffered pre-roll —
@@ -68,6 +80,14 @@ class WakeGate {
   /// lock state.
   void onPttHeld(bool held) {
     _ptt = held;
+  }
+
+  /// Mirrors the server's `bound` fact: whether THIS device currently owns
+  /// the conversation. A standby device (`bound == false`) must not stream
+  /// even while unlocked or mid-PTT-press — see [open]'s doc for why PTT
+  /// does not override this.
+  void onBound(bool bound) {
+    _bound = bound;
   }
 
   /// The on-device keyword spotter fired. Opens the gate and arms a

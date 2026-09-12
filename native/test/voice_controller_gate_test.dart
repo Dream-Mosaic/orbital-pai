@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/audio/wake_gate.dart';
+import 'package:orbital_pai/auth/device_id.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/phoenix/phoenix_socket.dart';
@@ -11,6 +12,21 @@ import 'package:orbital_pai/voice/voice_controller.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'support/fakes.dart';
+
+/// A [DeviceIdStore] that already has a value on disk — stands in for "this
+/// device already has a persisted id," so [DeviceId.get] takes the
+/// read-and-adopt path deterministically rather than generating a random
+/// one this test would then have no way to assert against. `read()` still
+/// resolves via a real (if immediate) `Future`, so the join genuinely waits
+/// on it rather than the test accidentally exercising a synchronous path.
+class _FixedDeviceIdStore implements DeviceIdStore {
+  _FixedDeviceIdStore(this.value);
+  final String value;
+  @override
+  Future<String?> read() => Future.value(value);
+  @override
+  Future<void> write(String value) async {}
+}
 
 // Harness copied from voice_controller_reconnect_test.dart / mic_loan_test's
 // FakeSocket/build shape (own copy, so this file has no compile-time
@@ -57,6 +73,21 @@ class FakeSocket {
       .map((f) => (jsonDecode(f) as List<dynamic>)[3] as String)
       .toList();
 
+  /// The payload of the `phx_join` frame this client sent for [topic] — the
+  /// only way to see what the constructor's async device-id resolution
+  /// actually put on the wire, since `DeviceId.get()` resolves after the
+  /// controller is already built.
+  Map<String, dynamic>? joinPayload(String topic) {
+    for (final f in sent) {
+      if (f is! String) continue;
+      final p = jsonDecode(f) as List<dynamic>;
+      if (p[3] == 'phx_join' && p[2] == topic) {
+        return (p[4] as Map).cast<String, dynamic>();
+      }
+    }
+    return null;
+  }
+
   Future<void> kill() => ctrl.foreign.sink.close();
 }
 
@@ -65,6 +96,7 @@ class FakeSocket {
 ({AppConnection conn, VoiceController vc, FakeSocket fake, FakeMic mic}) build({
   FakeSpotter? spotter,
   WakeGate? gate,
+  DeviceId? deviceId,
 }) {
   final fake = FakeSocket();
   final mic = FakeMic();
@@ -75,6 +107,7 @@ class FakeSocket {
     player: FakePlayer(),
     spotter: spotter ?? FakeSpotter(),
     gate: gate ?? WakeGate(),
+    deviceId: deviceId,
   );
   return (conn: conn, vc: vc, fake: fake, mic: mic);
 }
@@ -419,5 +452,143 @@ void main() {
         reason: 'a dispose() that lands mid-load must not be resurrected '
             'once the loader resolves — the engine would then leak forever, '
             'since dispose() has already run and will not run again');
+  });
+
+  test('sends the resolved device id in the join payload', () async {
+    final b = build(deviceId: DeviceId(store: _FixedDeviceIdStore('phone-1')));
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    expect(b.fake.joinPayload('voice:henry'), containsPair('device_id', 'phone-1'));
+  });
+
+  test('the bound push closes the sink', () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isEmpty);
+  });
+
+  test('bound in the state snapshot also closes the sink', () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    // The reconnect path: `bound` arrives inside `state`, not as a `bound`
+    // event.
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'state',
+      json: {'bound': false},
+    ));
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isEmpty,
+        reason: 'the snapshot is the reconnect path; a gate wired only to the event desyncs');
+  });
+
+  test('regaining bound reopens the sink', () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': true},
+    ));
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isNotEmpty);
+  });
+
+  test('an absent bound key in a later state snapshot does not clobber a known standby state',
+      () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+    // A later snapshot that says nothing about `bound` must not silently
+    // reopen a gate the server explicitly closed — same idiom as the
+    // existing `locked` handling.
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'state',
+      json: {'locked': false},
+    ));
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isEmpty,
+        reason: 'an absent bound key must not clobber what the client already knows');
+  });
+
+  test('a standby device\'s PTT press does not stream — bound closes the '
+      'sink even while PTT is held', () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+    b.vc.setPtt(true);
+    b.vc.pttPress();
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isEmpty,
+        reason: 'a standby device\'s PTT press is a claim, not proof it already holds the '
+            'conversation — it must not stream until the server answers bound: true');
   });
 }
