@@ -377,10 +377,24 @@ class FakePlayer implements AudioTrackPlayer {
 /// while the gate stayed closed, and [available] defaults to `true` so a test
 /// has to opt into the fail-open scenario rather than get it by accident.
 class FakeSpotter implements WakeSpotter {
-  FakeSpotter({this.available = true});
+  /// [available] is the fixed, immediately-true-or-false shape (the default,
+  /// and what most tests want). [loadAfter], when given, models the REAL
+  /// spotter's not-yet-loaded window instead: [available] starts `false` and
+  /// only flips `true` once `start()`'s await on [loadAfter] resolves — so a
+  /// test can drive a `state`/`locked` message BEFORE the model finishes
+  /// loading and assert what the controller does with it in the meantime,
+  /// which a constant-`true` fake can never express. Passing a `Completer`
+  /// that is never completed models a wedged loader for the start()-timeout
+  /// path.
+  FakeSpotter({bool available = true, Future<void>? loadAfter})
+      : _available = loadAfter == null ? available : false,
+        _loadAfter = loadAfter;
+
+  bool _available;
+  final Future<void>? _loadAfter;
 
   @override
-  final bool available;
+  bool get available => _available;
 
   /// Set by a test right before the chunk that should "hear" the wake word.
   bool fireNext = false;
@@ -390,7 +404,13 @@ class FakeSpotter implements WakeSpotter {
   int offerCalls = 0;
 
   @override
-  Future<void> start() async => startCalls++;
+  Future<void> start() async {
+    startCalls++;
+    final loadAfter = _loadAfter;
+    if (loadAfter == null) return;
+    await loadAfter;
+    _available = true;
+  }
 
   @override
   bool offer(Uint8List pcm16) {

@@ -238,4 +238,66 @@ void main() {
     expect(spotter.offerCalls, greaterThan(0),
         reason: 'the restarted session must actually feed the spotter');
   });
+
+  test('a lock that arrives before the spotter finishes loading still gates '
+      'once loading completes (Critical 1)', () async {
+    // The server pushes `state` (with `locked`) on every (re)bind, milliseconds
+    // after join — before the mic is ever asked to start, and therefore before
+    // the on-device model has even begun loading. `FakeSpotter(available:
+    // false, loadAfter: ...)` is what lets this test express "not yet loaded",
+    // unlike a constant-true fake, which made this exact defect invisible.
+    final spotter = FakeSpotter(available: false, loadAfter: Future<void>.value());
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    expect(spotter.available, isFalse, reason: 'sanity: not loaded yet');
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'state',
+      json: {'locked': true},
+    ));
+
+    await b.vc.startMic();
+    await settle();
+    expect(spotter.available, isTrue,
+        reason: 'sanity: loaded by the time startMic() returns');
+
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.binaryFrames, isEmpty,
+        reason: 'the lock recorded while the spotter was still loading must '
+            'not be lost — there is no later event that replays it');
+  });
+
+  test('a wedged spotter load does not permanently brick startMic() '
+      '(Critical 2)', () async {
+    // The spotter's start() never resolves — a wedged ONNX/asset loader.
+    // startMic()'s await on it must be BOUNDED, or `_micState` sticks at
+    // `wanted` forever: no subscription, no restart, permanently deaf.
+    final spotter = FakeSpotter(available: false, loadAfter: Completer<void>().future);
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final starting = b.vc.startMic();
+    await starting.timeout(const Duration(seconds: 10),
+        onTimeout: () => fail('startMic() never returned — the spotter '
+            'start() await must be bounded, not a bare `await`'));
+    await settle();
+
+    expect(b.vc.micOn, isTrue,
+        reason: 'a wedged spotter load must not prevent the mic from coming up');
+    expect(spotter.available, isFalse, reason: 'sanity: still never loaded');
+
+    // Fail open: the spotter never became available, so audio must still flow.
+    b.mic.emit(chunk(320));
+    await settle();
+    expect(b.fake.binaryFrames, isNotEmpty);
+  });
 }

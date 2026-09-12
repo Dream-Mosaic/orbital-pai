@@ -136,6 +136,13 @@ class VoiceController extends ChangeNotifier {
   final WakeSpotter _spotter;
   final WakeGate _gate;
 
+  /// Bound on [startMic]'s `await _spotter.start()`. The spotter's own
+  /// fail-open (a `throw` inside `start()`) is unconditional and needs no
+  /// timeout; this is the OTHER failure shape — a wedged loader that never
+  /// resolves either way — which would otherwise park `startMic` (and every
+  /// later call, and the auto-restart backoff riding on it) forever.
+  static const Duration _wakeSpotterStartTimeout = Duration(seconds: 5);
+
   // ---- Meridian chrome state ----
   /// index.js reads this from a data attribute; the native client has no such
   /// channel, and the server-side default is "Henry".
@@ -206,14 +213,27 @@ class VoiceController extends ChangeNotifier {
   /// server uses to tell us it locked — the `locked` event and the `state`
   /// reconnect snapshot — so the gate can never see one without the other.
   ///
-  /// **Fail open:** when the spotter failed to load (`!_spotter.available`),
-  /// `onLocked` is left uncalled — never fed a `true` — so the gate's
-  /// `_locked` stays false and `open` reads true unconditionally. A wake
-  /// engine that cannot load must degrade to streaming everything (expensive)
-  /// rather than to gating with nothing able to ever open it again (deaf).
+  /// Always feeds `_gate.onLocked`, UNCONDITIONALLY on spotter availability.
+  /// A `state` snapshot lands on every (re)bind — milliseconds after join,
+  /// before the mic is ever asked to start and long before the on-device
+  /// model finishes loading — so a guard here that skipped the call while
+  /// `!_spotter.available` would drop that lock on the floor with nothing to
+  /// ever replay it: the next `locked` push only arrives on a server
+  /// *transition*, which does not happen until a turn is heard, which is
+  /// exactly the paid streaming this whole feature exists to avoid. The gate
+  /// itself is inert bookkeeping (no sockets, no timers) so recording a lock
+  /// it cannot yet act on costs nothing.
+  ///
+  /// **Fail open** therefore lives entirely in the SEND path (the mic
+  /// listener in [startMic]), not here: while `!_spotter.available` every
+  /// chunk streams regardless of what the gate thinks, and the instant the
+  /// spotter finishes loading the gate already holds the correct lock state
+  /// — recorded here, whenever it actually arrived — so there is no separate
+  /// resync to forget and no ordering between "the lock arrived" and "the
+  /// model finished loading" that can desync it.
   void _applyWakeLocked(bool locked) {
     _wakeLocked = locked;
-    if (_spotter.available) _gate.onLocked(locked);
+    _gate.onLocked(locked);
   }
 
   /// Map a server turn-state event onto the orb, ported from index.js.
@@ -919,16 +939,37 @@ class VoiceController extends ChangeNotifier {
         unawaited(session.stop());
         return;
       }
-      // Started here, not in the constructor: one spotter engine per mic
-      // session, so an auto-restart (Task 1's backoff) gets a freshly-started
-      // spotter exactly as it gets a freshly-started recorder. Awaited before
-      // the subscription below so the very first chunk is already gated.
-      await _spotter.start();
+      // Started here, not in the constructor: startMic() is called on every
+      // mic acquire, auto-restart (Task 1's backoff) included, so this is
+      // the seam that keeps the spotter's engine current with the recorder's
+      // lifecycle. `SherpaWakeSpotter.start()` itself now caches the loaded
+      // engine across calls (see keyword_spotter.dart), so a restart is
+      // cheap rather than a full reload.
+      //
+      // BOUNDED, unlike a bare `await`: every other platform call in this
+      // file is (Invariant B, see `_release`) — a wedged model loader must
+      // not leave `startMic` parked forever with `_micState` stuck at
+      // `wanted`, which would silently brick every later start AND the
+      // auto-restart backoff along with it. A timeout does not cancel the
+      // underlying load (there is nothing to cancel it with); it only frees
+      // this call to move on, so a load that eventually finishes still flips
+      // `available` for the NEXT chunk to see.
+      await _spotter.start().timeout(_wakeSpotterStartTimeout, onTimeout: () {
+        _log('wake spotter start timed out after '
+            '${_wakeSpotterStartTimeout.inSeconds}s; streaming until it '
+            'finishes loading');
+      });
       // A dispose or a newer session superseding this one during that await
       // is the same race the identical() check above guards — checked again
-      // rather than assumed, for the same reason.
+      // rather than assumed, for the same reason. `_spotter.stop()` here is
+      // belt-and-braces: `SherpaWakeSpotter.start()` also defends itself
+      // against being entered twice without an intervening stop(), but
+      // freeing promptly rather than on the next start() is better hygiene
+      // when nothing guarantees there IS a next one (a superseded/failed
+      // attempt may be the last for a while).
       if (_disposed || !identical(_micState.session, session)) {
         unawaited(session.stop());
+        unawaited(_spotter.stop());
         return;
       }
       // Subscribe BEFORE recording that we are listening. `stream.listen` can
@@ -948,16 +989,23 @@ class VoiceController extends ChangeNotifier {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
           orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
-        // The spotter always gets a look at the chunk (so it keeps hearing
-        // through an unlocked stretch too); only a fresh detection while the
-        // gate is still closed announces itself — an already-open gate (a
-        // second false-ish fire, or the gate opened by PTT instead) must not
-        // re-push wake_detected.
-        if (_spotter.available && _spotter.offer(chunk)) {
-          if (!_gate.open) {
-            _gate.onWakeDetected();
-            _live?.push('wake_detected', const {});
-          }
+        // Fail-open lives HERE, not in whether the gate ever learns about a
+        // lock (see `_applyWakeLocked`): while the spotter has not finished
+        // loading (or failed to), there is no way to ever detect a wake word
+        // and open the gate again, so every chunk streams regardless of what
+        // `_gate` believes. The gate keeps recording whatever lock state
+        // arrives meanwhile, so the very next chunk after `available` flips
+        // true is already correctly gated — no separate resync needed.
+        if (!_spotter.available) {
+          _live?.pushBinary('audio', chunk);
+          return;
+        }
+        // Only a fresh detection while the gate is still closed announces
+        // itself — an already-open gate (a second false-ish fire, or the
+        // gate opened by PTT instead) must not re-push wake_detected.
+        if (_spotter.offer(chunk) && !_gate.open) {
+          _gate.onWakeDetected();
+          _live?.push('wake_detected', const {});
         }
         final decision = _gate.offer(chunk);
         if (decision.send) {
@@ -992,8 +1040,13 @@ class VoiceController extends ChangeNotifier {
       _safeNotify();
     } catch (e) {
       // A `stream.listen` that throws leaves a session running with nobody on
-      // it; close it. Also a no-op against a newer owner.
+      // it; close it. Also a no-op against a newer owner. The spotter may
+      // have started (or be mid-start) for this same attempt with nothing
+      // else left to stop it — belt-and-braces alongside
+      // `SherpaWakeSpotter.start()`'s own defence against being entered
+      // twice with no intervening stop().
       unawaited(session.stop());
+      unawaited(_spotter.stop());
       // Only OUR failure may clear the controller's intent — if a newer
       // session has taken over, the intent is its business now.
       if (identical(_micState.session, session)) {

@@ -29,5 +29,30 @@ void main() {
       expect(s.available, isFalse);
       expect(s.offer(Uint8List(320)), isFalse, reason: 'must fail open, never throw');
     });
+
+    test('a failed load can be retried — the "already loaded" short-circuit '
+        'only applies once available', () async {
+      // start() now short-circuits when `available` is already true, so a
+      // mic restart reuses the warm engine instead of reloading it (Important
+      // 1). That guard must not also latch a FAILED load: a spotter that
+      // never became available has nothing to reuse, and every later
+      // startMic() must keep trying.
+      var calls = 0;
+      final s = SherpaWakeSpotter(loader: () async {
+        calls++;
+        throw StateError('no asset');
+      });
+      await s.start();
+      expect(s.available, isFalse);
+      await s.start();
+      expect(calls, 2,
+          reason: 'a failed load must not be permanently latched by the reuse guard');
+    });
+
+    test('stop() before any successful start() is a safe no-op', () async {
+      final s = SherpaWakeSpotter(loader: () async => throw StateError('no asset'));
+      await s.stop();
+      expect(s.available, isFalse);
+    });
   });
 }

@@ -87,11 +87,29 @@ Future<KwsAssetPaths> _defaultLoader() async {
 }
 
 /// sherpa-onnx-backed [WakeSpotter] for the "Henry" wake word.
+///
+/// **`start()`/`stop()` are cheap after the first successful load, by
+/// design.** The caller (`VoiceController.startMic`/`_release`) calls
+/// `start()` on every mic acquire and `stop()` on every mic teardown,
+/// including every auto-restart backoff attempt (400ms/2s/8s) — so if this
+/// class re-copied its four asset files and rebuilt the ONNX engine on each
+/// call, every restart would reopen the mic with no subscriber for as long
+/// as a full model load takes. Instead:
+///  - the extracted asset PATHS are cached for the lifetime of this instance
+///    (the bundled files never change, so re-copying them bought nothing);
+///  - the ENGINE (`KeywordSpotter` + its `OnlineStream`) is built once and
+///    kept warm across `stop()`/`start()` cycles rather than freed and
+///    rebuilt — `stop()` only resets the decoder's in-flight state, so a
+///    keyword partway through decoding when the mic stops does not fire the
+///    instant the next session's first frame arrives.
 class SherpaWakeSpotter implements WakeSpotter {
   SherpaWakeSpotter({Future<KwsAssetPaths> Function()? loader})
       : _loader = loader ?? _defaultLoader;
 
   final Future<KwsAssetPaths> Function() _loader;
+
+  /// Cached once `_loader()` succeeds; reused by every later `start()`.
+  KwsAssetPaths? _paths;
 
   sherpa_onnx.KeywordSpotter? _spotter;
   sherpa_onnx.OnlineStream? _stream;
@@ -102,8 +120,16 @@ class SherpaWakeSpotter implements WakeSpotter {
 
   @override
   Future<void> start() async {
+    // Already loaded: reuse the live engine rather than tearing it down and
+    // rebuilding it. This is what makes a restart cheap, and it is also what
+    // makes `start()` safe to call twice in a row with no intervening
+    // `stop()` — a real path (a session superseded, or `stream.listen`
+    // throwing, right after this call) that used to leak a whole
+    // KeywordSpotter/OnlineStream pair per occurrence, since the second call
+    // would simply overwrite `_spotter`/`_stream` without freeing the first.
+    if (_available) return;
     try {
-      final paths = await _loader();
+      final paths = _paths ??= await _loader();
       sherpa_onnx.initBindings();
 
       final config = sherpa_onnx.KeywordSpotterConfig(
@@ -163,9 +189,21 @@ class SherpaWakeSpotter implements WakeSpotter {
 
   @override
   Future<void> stop() async {
-    _stream?.free();
-    _stream = null;
-    _spotter?.free();
-    _spotter = null;
+    // Deliberately does NOT free the engine — see the class doc. Resets the
+    // decoder state only, so the next `start()` (a no-op once loaded) begins
+    // clean rather than mid-keyword. Guarded because `available` may already
+    // be false here (a `stop()` reached before any successful `start()`, or
+    // after a load failure) with nothing live to reset.
+    final spotter = _spotter;
+    final stream = _stream;
+    if (spotter == null || stream == null) return;
+    try {
+      spotter.reset(stream);
+    } catch (e) {
+      // Same fail-open posture as offer(): a reset failure must not be
+      // allowed to propagate into a mic-teardown path that has to be
+      // non-throwing end to end.
+      debugPrint('SherpaWakeSpotter: reset on stop() failed: $e');
+    }
   }
 }
