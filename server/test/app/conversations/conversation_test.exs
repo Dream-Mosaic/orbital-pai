@@ -1683,8 +1683,6 @@ defmodule App.Conversations.ConversationTest do
 
   defp session_id_for_test_user, do: to_string(user_id_for_test_user())
 
-  # A process that forwards every message it receives to `test_pid`, wrapped as
-  # `{:proxied, msg}` — stands in for a rebinding client (a rejoining channel) in tests.
   # A stand-in for a second device: a process that forwards everything the Conversation sends
   # it to the test, tagged so two of them can be told apart in one test.
   defp spawn_client_proxy(test_pid, tag \\ :proxied) do

@@ -695,6 +695,125 @@ void main() {
         reason: 'an absent bound key must not clobber what the client already knows');
   });
 
+  test(
+      'a standby device still pushes wake_detected on a spotter hit — the '
+      'single hop the whole handoff feature rests on', () async {
+    // This is the claim mechanism: a standby device's local keyword spotter
+    // must keep announcing a wake hit to the server even though `bound:
+    // false` keeps ITS OWN gate closed (see WakeGate.open's `_bound &&`
+    // doc). A plausible-looking `if (!_bound) return;` guard here would make
+    // handoff impossible without turning anything else red.
+    final spotter = FakeSpotter();
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+    b.mic.emit(chunk(320));
+    await settle();
+
+    spotter.fireNext = true;
+    b.mic.emit(chunk(320));
+    await settle();
+
+    expect(b.fake.sentEvents.where((e) => e == 'wake_detected'), hasLength(1),
+        reason: 'a standby device claims the conversation by pushing '
+            'wake_detected even though bound keeps its own sink closed');
+    expect(b.fake.binaryFrames, isEmpty,
+        reason: 'sanity: still standby — a wake hit must not have opened '
+            'this device\'s own audio sink');
+  });
+
+  /// The event-named JSON pushes this client sent to [topic], decoded, in
+  /// order — unlike [FakeSocket.sentEvents] this keeps the payload, needed
+  /// to tell a `ptt: true` push apart from a `ptt: false` one.
+  List<Map<String, dynamic>> pushesOf(FakeSocket fake, String event) => fake.sent
+      .whereType<String>()
+      .map((f) => jsonDecode(f) as List<dynamic>)
+      .where((p) => p[3] == event)
+      .map((p) => (p[4] as Map).cast<String, dynamic>())
+      .toList();
+
+  test(
+      'regaining bound re-announces this device\'s toggles — a standby ptt '
+      'press must not claim into a server still running auto mode',
+      () async {
+    // The server drops control casts from a non-bound client
+    // (conversation.ex), so a standby device's `ptt: true` sent at join
+    // time never reached it. Without a re-announce on the transition, the
+    // claiming PTT press leaves the server on the auto Ink-2 endpoint, so
+    // `ptt_release`'s `finalize` is a no-op.
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    // Enabled AFTER the join's own announce, so the join's `ptt: false` is
+    // distinguishable from what the bound transition sends.
+    b.vc.setPtt(true);
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': false},
+    ));
+    await settle();
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': true},
+    ));
+    await settle();
+
+    final pttPushes = pushesOf(b.fake, 'ptt');
+    expect(pttPushes.last['enabled'], isTrue,
+        reason: 'the transition back to bound must re-send the CURRENT '
+            'toggle state, not the join-time default');
+    expect(pttPushes.length, 3,
+        reason: 'join announce (ptt: false) + setPtt(true) + the '
+            're-announce on regaining bound');
+  });
+
+  test('a controller told bound: true twice does not spam a re-announce',
+      () async {
+    // The cold-start path emits two `state` pushes, both `bound: true` —
+    // only a real false→true transition may re-announce.
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final beforeCount = pushesOf(b.fake, 'ptt').length;
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': true},
+    ));
+    await settle();
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'bound',
+      json: {'bound': true},
+    ));
+    await settle();
+
+    expect(pushesOf(b.fake, 'ptt').length, beforeCount,
+        reason: 'a redundant bound: true must not re-send toggles that were '
+            'never dropped in the first place');
+  });
+
   test('a standby device\'s PTT press does not stream — bound closes the '
       'sink even while PTT is held', () async {
     final b = build();

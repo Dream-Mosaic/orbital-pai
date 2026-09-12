@@ -102,4 +102,45 @@ void main() {
     g.onPttHeld(true);
     expect(g.offer(chunk(320)).send, isFalse);
   });
+
+  test(
+      'regaining bound carries the buffered ring as pre-roll — a claiming '
+      'PTT press must not lose the speech spoken before the server answers',
+      () {
+    // A standby PTT press claims the conversation, but the gate stays
+    // closed (bound: false) until the server answers. Speech spoken in
+    // that window buffers into the ring same as any other closed-gate
+    // audio; the false→true transition must flush it ahead of live audio,
+    // exactly like a wake detection does.
+    final g = WakeGate()..onBound(false);
+    g.onPttHeld(true);
+    for (var i = 0; i < 5; i++) {
+      g.offer(chunk(320));
+    }
+    g.onBound(true);
+    final d = g.offer(chunk(320));
+    expect(d.send, isTrue);
+    expect(d.preRoll, isNotEmpty,
+        reason: 'the claiming utterance\'s opening must reach the server, '
+            'not be silently dropped from the ring');
+  });
+
+  test('a redundant onBound(true) does not re-flush a stale ring', () {
+    // The cold-start path emits two `state` pushes, both `bound: true` —
+    // a gate that re-armed the flush on every redundant `true` would hand
+    // the server a SECOND, by-then-stale copy of the ring on the next offer.
+    final g = WakeGate()..onBound(false);
+    for (var i = 0; i < 5; i++) {
+      g.offer(chunk(320));
+    }
+    g.onBound(true);
+    final first = g.offer(chunk(320));
+    expect(first.preRoll, isNotEmpty, reason: 'sanity: the real transition flushed');
+
+    g.onBound(true); // redundant re-affirmation
+    final second = g.offer(chunk(320));
+    expect(second.preRoll, isEmpty,
+        reason: 'a redundant bound:true must not re-arm a flush of an '
+            'already-drained (and stale) ring');
+  });
 }

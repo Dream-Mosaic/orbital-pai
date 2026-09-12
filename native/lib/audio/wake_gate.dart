@@ -86,7 +86,18 @@ class WakeGate {
   /// the conversation. A standby device (`bound == false`) must not stream
   /// even while unlocked or mid-PTT-press — see [open]'s doc for why PTT
   /// does not override this.
+  ///
+  /// A false→true transition arms the same one-time pre-roll flush a wake
+  /// detection does: a standby PTT press is a claim on the conversation, and
+  /// speech spoken between that press and the server's `bound: true` answer
+  /// was buffered into the ring while the gate sat closed — without this it
+  /// would sit there until silently trimmed, clipping the front of the very
+  /// utterance that claimed the conversation. Deliberately gated on the
+  /// transition, not on every `bound: true`: the cold-start path (two `state`
+  /// pushes, both `bound: true`) and any other redundant re-affirmation must
+  /// not re-flush an already-drained (and by then stale) ring.
   void onBound(bool bound) {
+    if (bound && !_bound) _flushPending = true;
     _bound = bound;
   }
 

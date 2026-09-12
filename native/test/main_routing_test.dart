@@ -68,6 +68,62 @@ const String _memoryFrame = '[null,null,"panel:memory:henry","state",'
 const String _connectorsFrame = '[null,null,"panel:connectors:henry","state",'
     '{"connections":[],"catalog":[]}]';
 
+/// A [FlutterSecureStoragePlatform] whose `read()` takes a real, bounded
+/// delay — long enough to outlast the fake socket's near-instant connector,
+/// short enough to stay well under `_buildShell`'s 2s `deviceIdReady`
+/// timeout. This is what makes the device-id-gating test below able to fail:
+/// `TestFlutterSecureStoragePlatform` resolves in a single microtask, so
+/// against it `conn.connect()`'s own microtask-hop connector and
+/// `DeviceId.get()`'s read are close enough that either ordering could win
+/// by accident, and a regression to a bare `conn.connect()` might still
+/// happen to pass. A genuine, larger delay on the read forces the ordering:
+/// only code that actually AWAITS the device id before dialing can still
+/// have the first join carry it.
+class _DelayedSecureStoragePlatform extends FlutterSecureStoragePlatform {
+  final Map<String, String> data = <String, String>{};
+
+  @override
+  Future<bool> containsKey({
+    required String key,
+    required Map<String, String> options,
+  }) async =>
+      data.containsKey(key);
+
+  @override
+  Future<void> delete({
+    required String key,
+    required Map<String, String> options,
+  }) async =>
+      data.remove(key);
+
+  @override
+  Future<void> deleteAll({required Map<String, String> options}) async =>
+      data.clear();
+
+  @override
+  Future<String?> read({
+    required String key,
+    required Map<String, String> options,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    return data[key];
+  }
+
+  @override
+  Future<Map<String, String>> readAll({
+    required Map<String, String> options,
+  }) async =>
+      data;
+
+  @override
+  Future<void> write({
+    required String key,
+    required String value,
+    required Map<String, String> options,
+  }) async =>
+      data[key] = value;
+}
+
 void main() {
   /// The one viewport the chrome is laid out for; voice_screen_test.dart uses
   /// the same. The 800x600 default overflows it.
@@ -620,6 +676,40 @@ void main() {
           reason: 'signOut() clearing the store is not enough — the shell must actually tear '
               'down and fall through to the login screen, or the user is stuck on a dead '
               'MeridianVoiceScreen with no way back in short of killing the app');
+    });
+  });
+
+  group('device id gating', () {
+    // Pins `_buildShell`'s `unawaited(_connectOnceDeviceIdKnown(vc, conn))`.
+    // A prior fix round found that reverting it to a bare `conn.connect()`
+    // left all 725 tests green — nothing exercised the actual production
+    // wiring that makes the FIRST join deterministically carry the device
+    // id rather than racing it against the socket handshake.
+    testWidgets(
+        'the first join waits for the device id before dialing — a bare '
+        'conn.connect() would send it without one', (tester) async {
+      phone(tester);
+      FlutterSecureStoragePlatform.instance = _DelayedSecureStoragePlatform();
+      final fake = FakeSocket();
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+
+      await tester.pumpWidget(MaterialApp(home: HenryHome(connection: conn)));
+      // Advance the fake clock past the delayed device-id read, then let
+      // connect()'s own connector + join round trip settle.
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pump();
+      await tester.pump();
+
+      final join = fake.textFrames.firstWhere(
+          (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
+          orElse: () => fail('voice:henry never joined'));
+      expect((join[4] as Map)['device_id'], isNotNull,
+          reason: '_buildShell must await deviceIdReady before calling '
+              'conn.connect(), or the first join races the device-id read '
+              'and can land without one');
     });
   });
 }

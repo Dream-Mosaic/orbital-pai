@@ -337,9 +337,24 @@ class VoiceController extends ChangeNotifier {
   /// reconnect. `locked` and `bound` are deliberately separate facts ("the
   /// conversation is locked" vs. "I am not the owner") and are never folded
   /// into each other here.
+  ///
+  /// A false→true transition re-announces this device's toggles
+  /// (`_announceToggles`, same call `_onJoined` makes on every fresh join).
+  /// The server drops control casts from a client that isn't bound
+  /// (`conversation.ex`), so a standby device's `ptt`/`allow_interruptions`
+  /// pushed at join time was silently discarded — without this, claiming
+  /// the conversation (by wake or by PTT) leaves the server still running
+  /// whatever mode it was already in, e.g. auto-endpointing while this
+  /// device believes PTT is on, so `ptt_release`'s `finalize` is a no-op.
+  /// Gated on the TRANSITION, not on every `bound: true`, for the same
+  /// reason [WakeGate.onBound] is: the cold-start path emits two `state`
+  /// pushes, both `bound: true`, and only the real transition should
+  /// re-announce.
   void _applyBound(bool bound) {
+    final wasBound = _bound;
     _bound = bound;
     _gate.onBound(bound);
+    if (bound && !wasBound) _announceToggles();
   }
 
   /// Map a server turn-state event onto the orb, ported from index.js.
