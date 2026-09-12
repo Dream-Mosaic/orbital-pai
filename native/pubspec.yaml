@@ -14,6 +14,7 @@ dependencies:
   stream_channel: ^2.1.2
   record: ^5.1.2
   porcupine_flutter: ^3.0.3
+  sherpa_onnx: ^1.13.8
   path_provider: ^2.1.0
   permission_handler: ^11.3.0
   flutter_svg: ^2.0.10
@@ -47,6 +48,7 @@ flutter:
   assets:
     - assets/icons/
     - assets/fonts/
+    - assets/kws/
 
   # The exact families the web self-hosts (server/priv/static/fonts/*.woff2),
   # converted woff2 -> ttf. Both are VARIABLE (Space Grotesk wght 300-700, Inter
