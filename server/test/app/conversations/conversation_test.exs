@@ -186,6 +186,59 @@ defmodule App.Conversations.ConversationTest do
     end
   end
 
+  describe "voice activation pref seeds the gate at init (no client push required)" do
+    # Regression coverage for the whole-branch review's Critical 1: the FSM used to hardcode
+    # voice_activation: false at init and rely ENTIRELY on a client push (set_voice_activation /
+    # set_pref) to arm it -- a push the native client never sent outside kiosk mode. A session
+    # for a user whose stored pref is already true must come up locked on its own.
+    test "a fresh session for a user with voice_activation: true starts locked" do
+      Application.put_env(:app, :allowed_users, [%{email: "wake-init-on@x.com", name: "W"}])
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      {:ok, user} = App.Users.upsert_allowed("wake-init-on@x.com")
+      {:ok, user} = App.Users.update_prefs(user, %{voice_activation: true})
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(user.id)
+        )
+
+      # No set_voice_activation/set_pref call anywhere above -- if init still hardcoded
+      # `locked: false`, this snapshot would report locked: false and the assertion would fail.
+      assert_receive {:to_client, {:state, %{phase: "listening", locked: true}}}, 500
+
+      # ... and the gate is actually enforced: a no-name utterance gets no response.
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+      Conversation.endpoint(pid, "what's the weather like")
+      refute_receive {:to_client, {:speak_start, _src, _text}}, 500
+    end
+
+    test "a fresh session for a user with voice_activation: false starts unlocked" do
+      Application.put_env(:app, :allowed_users, [%{email: "wake-init-off@x.com", name: "W"}])
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      {:ok, user} = App.Users.upsert_allowed("wake-init-off@x.com")
+      {:ok, user} = App.Users.update_prefs(user, %{voice_activation: false})
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(user.id)
+        )
+
+      assert_receive {:to_client, {:state, %{phase: "listening", locked: false}}}, 500
+    end
+
+    test "a session with no session_id (unit-test shape) still defaults to unlocked" do
+      pid = start_conv()
+      assert_receive {:to_client, {:state, %{phase: "listening", locked: false}}}, 500
+      refute_receive {:to_client, {:locked, _}}, 100
+    end
+  end
+
   describe "voice activation v2: endpoint gate" do
     test "TV-blob prefix is stripped: the brain sees only the command" do
       Process.register(self(), :fake_brain_observer)
@@ -809,6 +862,9 @@ defmodule App.Conversations.ConversationTest do
     Application.put_env(:app, :allowed_users, [%{email: "d@x.com", name: "Alice"}])
     on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
     {:ok, user} = App.Users.upsert_allowed("d@x.com")
+    # voice_activation defaults to true and now seeds the wake gate at init (see
+    # user_id_for_test_user/0 above) -- this test is about barge-in persistence, not the gate.
+    {:ok, user} = App.Users.update_prefs(user, %{voice_activation: false})
 
     # a wide jitter buffer keeps the turn in :draining long enough to barge after brain_done
     stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
@@ -1513,7 +1569,10 @@ defmodule App.Conversations.ConversationTest do
       on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
       {:ok, user} = App.Users.upsert_allowed("agenda@x.com")
       now_hhmm = Calendar.strftime(DateTime.now!(App.Config.timezone()), "%H:%M")
-      {:ok, _} = App.Users.update_prefs(user, %{briefing_time: now_hhmm})
+      # voice_activation defaults to true and now seeds the wake gate at init -- this test is
+      # about the briefing pull, not the gate.
+      {:ok, user} =
+        App.Users.update_prefs(user, %{briefing_time: now_hhmm, voice_activation: false})
 
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
 
@@ -1611,10 +1670,14 @@ defmodule App.Conversations.ConversationTest do
 
   # Real user row (allowlisted + upserted), same pattern as the barge-in persistence test above —
   # session_id is `to_string(user.id)` so App.Users.id_from_session/1 resolves it back.
+  # voice_activation defaults to true on the User schema, and Conversation.init/1 now seeds the
+  # wake gate from that pref -- these tests exercise agenda/barge-in/persistence, not the gate,
+  # so pin the pref off or every endpoint() call below would be silently swallowed while locked.
   defp user_id_for_test_user do
     Application.put_env(:app, :allowed_users, [%{email: "agenda@x.com", name: "Agenda Test"}])
     on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
     {:ok, user} = App.Users.upsert_allowed("agenda@x.com")
+    {:ok, user} = App.Users.update_prefs(user, %{voice_activation: false})
     user.id
   end
 

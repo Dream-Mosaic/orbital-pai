@@ -201,6 +201,44 @@ defmodule AppWeb.Panels.SettingsChannelTest do
     end
   end
 
+  describe "set_pref voice_activation reaches a LIVE conversation" do
+    # Regression coverage for the whole-branch review's Critical 1: `set_pref` used to only
+    # persist the pref (Users.update_prefs) and never touch a conversation already running for
+    # that user, so a session started before the toggle never saw the change until its next
+    # (re)join pushed a fresh snapshot. Mirrors "set_relock" > "reaches a LIVE conversation"
+    # above, but asserts the FSM's own observable {:to_client, {:locked, _}} message rather than
+    # reaching into its internal state.
+    test "flipping the pref off unlocks the running FSM", %{socket: socket, alice: alice} do
+      sid = to_string(alice.id)
+      {:ok, _pid} = App.Conversations.Sessions.start(sid, self())
+      on_exit(fn -> App.Conversations.Sessions.stop(sid) end)
+
+      # Alice's voice_activation defaults to true (User schema default), so the FSM comes up
+      # locked on its own -- drain that init snapshot before asserting on the toggle.
+      assert_receive {:to_client, {:state, %{locked: true}}}, 500
+
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{voice_activation: true}
+
+      ref = push(socket, "set_pref", %{"pref" => "voice_activation", "value" => false})
+      assert_reply ref, :ok
+      assert_push "state", %{voice_activation: false}
+      assert Users.get(alice.id).voice_activation == false
+
+      # ... and the LIVE FSM actually unlocked, not just the stored pref.
+      assert_receive {:to_client, {:locked, false}}, 500
+    end
+
+    test "with no live session it still stores and replies ok", %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", _
+
+      ref = push(socket, "set_pref", %{"pref" => "voice_activation", "value" => false})
+      assert_reply ref, :ok
+      assert_push "state", %{voice_activation: false}
+    end
+  end
+
   describe "set_briefing" do
     test "a time turns the briefing on; nil turns it off",
          %{socket: socket, alice: alice} do

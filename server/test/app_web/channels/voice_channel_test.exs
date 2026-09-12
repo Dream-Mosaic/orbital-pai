@@ -16,6 +16,12 @@ defmodule AppWeb.VoiceChannelTest do
     on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
     {:ok, alice} = Users.upsert_allowed("alice@x.com")
     {:ok, bob} = Users.upsert_allowed("bob@x.com")
+    # voice_activation defaults to true on the User schema, and Conversation.init/1 now seeds
+    # the wake gate from it -- this file's tests are about join/rebind/inbound-event plumbing,
+    # not the gate itself (that's covered by conversation_test.exs's "voice activation pref
+    # seeds the gate at init" describe block), so pin it off here to keep every join in this
+    # file starting unlocked, as before.
+    {:ok, alice} = Users.update_prefs(alice, %{voice_activation: false})
 
     sid = to_string(alice.id)
     token = AppWeb.UserAuth.socket_token(alice.id)

@@ -35,6 +35,25 @@ defmodule AppWeb.Panels.SettingsChannel do
   }
 
   @impl true
+  def handle_in("set_pref", %{"pref" => "voice_activation", "value" => value}, socket)
+      when is_boolean(value) do
+    case write(socket, %{voice_activation: value}) do
+      {:ok, _socket} = result ->
+        # voice_activation is both a stored default AND a value the running FSM holds (the
+        # wake gate) -- same shape as set_relock above: the write has to reach both, or a
+        # session already live never sees the toggle until its next (re)join pushes it.
+        case Sessions.lookup(to_string(socket.assigns.user_id)) do
+          {:ok, pid} -> Conversation.set_voice_activation(pid, value)
+          :error -> :ok
+        end
+
+        reply_write(result)
+
+      error ->
+        reply_write(error)
+    end
+  end
+
   def handle_in("set_pref", %{"pref" => pref, "value" => value}, socket)
       when is_binary(pref) and is_boolean(value) do
     case Map.fetch(@settable, pref) do
