@@ -1868,4 +1868,56 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:fake_brain_image, nil}, 1000
     end
   end
+
+  describe "casts from a non-bound client" do
+    setup do
+      pid = start_conv()
+      # Drain the init state snapshot so it can't be mistaken for a reply to a cast under test.
+      assert_receive {:to_client, {:state, _}}, 500
+      # A second channel joins; it is NOT the bound client.
+      stale = spawn_link(fn -> Process.sleep(:infinity) end)
+      %{pid: pid, stale: stale}
+    end
+
+    test "wake_detected from a stale device does not unlock the bound client", %{
+      pid: pid,
+      stale: stale
+    } do
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      # The stale device "hears" the wake word. This must not reach the bound client.
+      :gen_statem.cast(pid, {:wake_detected, stale})
+      refute_receive {:to_client, {:locked, false}}, 200
+    end
+
+    test "ptt_press from a stale device does not start a turn", %{pid: pid, stale: stale} do
+      :gen_statem.cast(pid, {:ptt_press, stale})
+      refute_receive {:to_client, _}, 200
+    end
+
+    test "set_ptt from a stale device does not re-mode the bound client", %{
+      pid: pid,
+      stale: stale
+    } do
+      Process.register(self(), :fake_stt_observer)
+
+      on_exit(fn ->
+        if Process.whereis(:fake_stt_observer), do: Process.unregister(:fake_stt_observer)
+      end)
+
+      # A real (bound-client) set_ptt(true) reconnects STT in :manual mode, notifying the fake
+      # STT observer. A stale device's toggle must not cause that reconnect.
+      :gen_statem.cast(pid, {:set_ptt, true, stale})
+      refute_receive {:fake_stt_started, :manual}, 200
+    end
+
+    test "the bound client is still honoured", %{pid: pid} do
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      # from the test process = the bound client
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+    end
+  end
 end

@@ -57,16 +57,16 @@ defmodule App.Conversations.Conversation do
 
   @doc "Client report: how many ms of this turn's audio actually played before stop_playback."
   def played(pid, ms), do: :gen_statem.cast(pid, {:played, ms})
-  def ptt_release(pid), do: :gen_statem.cast(pid, :ptt_release)
+  def ptt_release(pid), do: :gen_statem.cast(pid, {:ptt_release, self()})
   def push_audio(pid, pcm16), do: :gen_statem.cast(pid, {:push_audio, pcm16, self()})
-  def set_ptt(pid, enabled), do: :gen_statem.cast(pid, {:set_ptt, enabled})
+  def set_ptt(pid, enabled), do: :gen_statem.cast(pid, {:set_ptt, enabled, self()})
 
   @doc "Rebind the outbound client (a rejoining channel). Cancels any linger and sends a state snapshot."
   def set_client(pid, client), do: :gen_statem.cast(pid, {:set_client, client})
 
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
-  def ptt_press(pid), do: :gen_statem.cast(pid, :ptt_press)
+  def ptt_press(pid), do: :gen_statem.cast(pid, {:ptt_press, self()})
 
   @doc """
   The CLIENT's local keyword spotter fired. Unlocks immediately rather than waiting to
@@ -75,7 +75,7 @@ defmodule App.Conversations.Conversation do
 
   Idempotent: a no-op when already unlocked or when voice activation is off.
   """
-  def wake_detected(pid), do: :gen_statem.cast(pid, :wake_detected)
+  def wake_detected(pid), do: :gen_statem.cast(pid, {:wake_detected, self()})
 
   def eager_end(pid, text), do: :gen_statem.cast(pid, {:stt_eager_end, text})
   def resume(pid), do: :gen_statem.cast(pid, {:stt_resume})
@@ -85,7 +85,7 @@ defmodule App.Conversations.Conversation do
   def vision_frame(pid, ref, image), do: :gen_statem.cast(pid, {:vision_frame, ref, image})
 
   def set_allow_interruptions(pid, enabled),
-    do: :gen_statem.cast(pid, {:set_allow_interruptions, enabled})
+    do: :gen_statem.cast(pid, {:set_allow_interruptions, enabled, self()})
 
   def set_voice_activation(pid, enabled),
     do: :gen_statem.cast(pid, {:set_voice_activation, enabled})
@@ -336,18 +336,24 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(
         :cast,
-        :ptt_release,
+        {:ptt_release, from},
         _s,
-        %{policy: %{phase: :listening}, stt_mod: mod, stt_pid: pid} = data
+        %{policy: %{phase: :listening}, stt_mod: mod, stt_pid: pid, client: from} = data
       )
       when is_pid(pid) do
     mod.finalize(pid)
     {:keep_state, %{data | holding: false, expecting_finalize: true}}
   end
 
-  def handle_event(:cast, :ptt_release, _s, _data), do: :keep_state_and_data
+  def handle_event(:cast, {:ptt_release, from}, _s, %{client: from} = data),
+    do: {:keep_state, data}
 
-  def handle_event(:cast, {:set_ptt, enabled}, _s, data) do
+  def handle_event(:cast, {:ptt_release, _from}, _s, data) do
+    Logger.debug("[conn] dropped ptt_release cast from a non-bound client")
+    {:keep_state, data}
+  end
+
+  def handle_event(:cast, {:set_ptt, enabled, from}, _s, %{client: from} = data) do
     # Auto and manual are different Ink-2 endpoints, so changing PTT reconnects the STT socket
     # in the matching mode. Skip the reconnect (and its brief deaf window) on a redundant toggle.
     # On a real change, drop any in-flight auto-mode speculative reflex so a stale head-start
@@ -363,8 +369,18 @@ defmodule App.Conversations.Conversation do
     {:keep_state, %{data | ptt_mode: enabled, holding: false, expecting_finalize: false}}
   end
 
-  def handle_event(:cast, {:set_allow_interruptions, enabled}, _s, data),
+  def handle_event(:cast, {:set_ptt, _enabled, _from}, _s, data) do
+    Logger.debug("[conn] dropped set_ptt cast from a non-bound client")
+    {:keep_state, data}
+  end
+
+  def handle_event(:cast, {:set_allow_interruptions, enabled, from}, _s, %{client: from} = data),
     do: {:keep_state, %{data | allow_interruptions: enabled}}
+
+  def handle_event(:cast, {:set_allow_interruptions, _enabled, _from}, _s, data) do
+    Logger.debug("[conn] dropped set_allow_interruptions cast from a non-bound client")
+    {:keep_state, data}
+  end
 
   # Idempotent on a redundant "on" (the client re-pushes this on every channel (re)join): don't
   # re-lock or re-notify if voice activation is already on — that would silence the user mid-turn
@@ -382,13 +398,24 @@ defmodule App.Conversations.Conversation do
   # Device-side wake: the local keyword spotter fired. Only meaningful while locked (else
   # a no-op) — mirrors WakeWord's transcript-driven unlock but skips waiting for a transcript
   # the server may never fully see (see wake_detected/1 doc).
-  def handle_event(:cast, :wake_detected, _s, %{voice_activation: true, locked: true} = data) do
+  def handle_event(
+        :cast,
+        {:wake_detected, from},
+        _s,
+        %{voice_activation: true, locked: true, client: from} = data
+      ) do
     Logger.info("[wake] unlocked by device keyword spotter")
     data = unlock(data)
     {:keep_state, data, [relock_action(data)]}
   end
 
-  def handle_event(:cast, :wake_detected, _s, _data), do: :keep_state_and_data
+  def handle_event(:cast, {:wake_detected, from}, _s, %{client: from} = data),
+    do: {:keep_state, data}
+
+  def handle_event(:cast, {:wake_detected, _from}, _s, data) do
+    Logger.debug("[conn] dropped wake_detected cast from a non-bound client")
+    {:keep_state, data}
+  end
 
   def handle_event(:cast, {:set_relock_ms, ms}, _s, data) when is_integer(ms) and ms > 0,
     do: {:keep_state, %{data | relock_ms: ms}}
@@ -423,7 +450,12 @@ defmodule App.Conversations.Conversation do
   # whose end would reactively re-arm the idle timer (feed/2's own cond does that for the
   # barge-in branch below) — so arm the relock ourselves here, same as the transcript-driven
   # unlock in handle_partial/2. Matched ahead of the generic recursion clause below.
-  def handle_event(:cast, :ptt_press, _s, %{locked: true, ptt_mode: false} = data) do
+  def handle_event(
+        :cast,
+        {:ptt_press, from},
+        _s,
+        %{locked: true, ptt_mode: false, client: from} = data
+      ) do
     Logger.info("[wake] unlocked by ptt_press (explicit intent)")
     data = unlock(data)
     {:keep_state, data, [relock_action(data)]}
@@ -432,26 +464,37 @@ defmodule App.Conversations.Conversation do
   # Explicit intent always wins: a locked conversation unlocks first, then falls through
   # (direct function recursion, not a re-cast) to the ordinary press handling below so a
   # user physically holding the button is never dropped.
-  def handle_event(:cast, :ptt_press, s, %{locked: true} = data) do
+  def handle_event(:cast, {:ptt_press, from}, s, %{locked: true, client: from} = data) do
     Logger.info("[wake] unlocked by ptt_press (explicit intent)")
-    handle_event(:cast, :ptt_press, s, unlock(data))
+    handle_event(:cast, {:ptt_press, from}, s, unlock(data))
   end
 
   # PTT press while listening: just mark the button held (start of a fresh utterance).
-  def handle_event(:cast, :ptt_press, _s, %{ptt_mode: true, policy: %{phase: :listening}} = data),
-    do: {:keep_state, %{data | holding: true, expecting_finalize: false}}
+  def handle_event(
+        :cast,
+        {:ptt_press, from},
+        _s,
+        %{ptt_mode: true, policy: %{phase: :listening}, client: from} = data
+      ),
+      do: {:keep_state, %{data | holding: true, expecting_finalize: false}}
 
   # PTT press while Henry is still speaking/thinking = take the floor. The button press is a
   # deliberate "talk now" (no echo risk like auto-mode), so it barges in regardless of
   # allow_interruptions — dropping Henry's audio and returning to :listening so the release-finalize
   # lands and the held speech becomes its own turn, instead of orphaning in the manual STT buffer
   # (which is what merged "previous + current" speech onto a later release).
-  def handle_event(:cast, :ptt_press, _s, %{ptt_mode: true} = data) do
+  def handle_event(:cast, {:ptt_press, from}, _s, %{ptt_mode: true, client: from} = data) do
     Logger.info("[turn] ⏹ PTT barge-in (press during #{data.policy.phase})")
     barge_in_feed(on_barge_in(%{data | holding: true, expecting_finalize: false}))
   end
 
-  def handle_event(:cast, :ptt_press, _s, _data), do: :keep_state_and_data
+  def handle_event(:cast, {:ptt_press, from}, _s, %{client: from} = data),
+    do: {:keep_state, data}
+
+  def handle_event(:cast, {:ptt_press, _from}, _s, data) do
+    Logger.debug("[conn] dropped ptt_press cast from a non-bound client")
+    {:keep_state, data}
+  end
 
   # The client delivered (image) or failed (nil) the frame we asked for. Match the ref so a stale
   # frame from an earlier request can't attach here; then start the brain (with the image, or
