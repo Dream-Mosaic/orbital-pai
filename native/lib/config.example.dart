@@ -7,4 +7,3 @@
 //
 // The server address lives in server_config.dart, set via --dart-define
 // (run-dev.sh points at the laptop; a release build defaults to production).
-const String kPicovoiceAccessKey = 'PASTE_PICOVOICE_ACCESS_KEY_HERE';

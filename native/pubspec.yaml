@@ -13,7 +13,6 @@ dependencies:
   web_socket_channel: ^3.0.0
   stream_channel: ^2.1.2
   record: ^5.1.2
-  porcupine_flutter: ^3.0.3
   sherpa_onnx: ^1.13.8
   path_provider: ^2.1.0
   permission_handler: ^11.3.0

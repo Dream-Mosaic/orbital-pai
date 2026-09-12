@@ -1,10 +1,11 @@
 # CLAUDE.md — working guide for this project
 
 Project-specific guidance for AI agents working on **P.A.I.** (Persona Assistant Interface), a
-voice assistant in Elixir/Phoenix. The assistant you talk to is **Henry** — that name is fixed by
-the trained Picovoice wake-word model and by `com.henry.henry_wall`, and is not up for debate.
-**Remi** was the original codename; it survives nowhere in live code and should not be
-reintroduced.
+voice assistant in Elixir/Phoenix. The assistant you talk to is **Henry** — that name is settled by
+`com.henry.henry_wall` and is not up for debate. (It is not fixed by any trained wake-word model:
+the wake word is a tokenized keyword string in `native/assets/kws/keywords.txt`, so renaming Henry
+is a one-line change plus a regenerated keywords file.) **Remi** was the original codename; it
+survives nowhere in live code and should not be reintroduced.
 For framework rules (Phoenix v1.8, LiveView, Ecto, HEEx), read **`AGENTS.md`** — this file is the
 *project* layer on top of it.
 
@@ -143,6 +144,10 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `{:stt_endpoint,_}` owner messages, so the FSM turn contract is unchanged.
 - **`Cartesia-Version` is a tested-date pin, NOT a model version** — one `App.Config :cartesia_version`
   (currently `2026-03-01`-era) shared by Sonic TTS + Ink-2 STT; bump it to the date you re-test against.
+- **Ink-2 bills 3 credits/second, not 1** — published sources disagree, and the user's own dashboard
+  settles it: a peak day of ~220K credits is 20.4h of audio at 3 credits/s versus a physically
+  impossible 61h at 1 credit/s. This is how July's 1,105,547 STT credits resolve to ~102h rather
+  than an impossible 307h — i.e. there is no leaked-socket bug to hunt.
 - **Cartesia TTS contexts expire 1s after their last AUDIO output** (their docs) — there is NO
   keepalive, and the timer is audio-based, so you CANNOT hold a context open with whitespace/empty
   continuations (they make no audio). When a tool round is slow, the **bridge** plays its ~2.5s of

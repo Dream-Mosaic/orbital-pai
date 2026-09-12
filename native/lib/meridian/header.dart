@@ -18,8 +18,8 @@ class MeridianHeader extends StatelessWidget {
   final String version;
   final String userName;
 
-  /// Dev-only entry for PorcupineSpikeScreen, which lost its home when the debug
-  /// UI's AppBar was deleted.
+  /// Dev-entry long-press hook on the version label; unwired now that the
+  /// debug wake-word spike screen it used to open is gone.
   final VoidCallback? onVersionLongPress;
 
   static const double _wordmarkSize = 15.2; // 0.95rem

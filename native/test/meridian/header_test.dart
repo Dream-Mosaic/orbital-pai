@@ -87,6 +87,7 @@ void main() {
         .pumpWidget(host(ConnStatus.connected, onLongPress: () => fired = true));
     await tester.longPress(find.text('P.A.I V0.1.0'));
     expect(fired, isTrue,
-        reason: 'PorcupineSpikeScreen must survive the debug-UI deletion');
+        reason: 'the dev-entry long-press hook must keep firing even though '
+            'nothing is wired to it right now');
   });
 }

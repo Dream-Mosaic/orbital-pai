@@ -26,7 +26,6 @@ import 'panels/memory_client.dart';
 import 'panels/reminders_client.dart';
 import 'panels/settings_client.dart';
 import 'panels/voice_lock_client.dart';
-import 'spike/porcupine_spike_screen.dart';
 import 'voice/voice_controller.dart';
 
 void main() {
@@ -397,14 +396,6 @@ class _HenryHomeState extends State<HenryHome> {
     }
   }
 
-  /// PorcupineSpikeScreen lost its home when the debug AppBar was deleted; it is
-  /// the harness for the deferred wake-word + AEC work, so it lives on here.
-  void _openSpike() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => const PorcupineSpikeScreen(),
-    ));
-  }
-
   @override
   Widget build(BuildContext context) {
     final conn = _conn;
@@ -427,7 +418,6 @@ class _HenryHomeState extends State<HenryHome> {
       userName: 'David',
       appVersion: kAppVersion,
       onOpenPanel: _openPanel,
-      onDevEntry: _openSpike,
     );
   }
 }
