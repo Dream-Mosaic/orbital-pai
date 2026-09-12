@@ -28,6 +28,21 @@ class _FixedDeviceIdStore implements DeviceIdStore {
   Future<void> write(String value) async {}
 }
 
+/// A [DeviceIdStore] whose `read()` NEVER completes — the empirically
+/// observed shape of an unmocked `FlutterSecureStorage` read under some
+/// bindings (see the Task 4 fix-round-1 report), and the one a fake MUST be
+/// able to express: `DeviceId.get()`'s own try/catch is inert against a
+/// hang, so a fake that eventually resolves (even slowly) cannot exercise
+/// the bug `_registerTopic`'s timeout exists to fix. The `Completer` is
+/// simply never completed, by any caller, for the lifetime of the test.
+class _NeverResolvingDeviceIdStore implements DeviceIdStore {
+  final Completer<String?> _never = Completer<String?>();
+  @override
+  Future<String?> read() => _never.future;
+  @override
+  Future<void> write(String value) async {}
+}
+
 // Harness copied from voice_controller_reconnect_test.dart / mic_loan_test's
 // FakeSocket/build shape (own copy, so this file has no compile-time
 // dependency on another test file's `main()`), extended with the
@@ -462,6 +477,33 @@ void main() {
     await settle();
 
     expect(b.fake.joinPayload('voice:henry'), containsPair('device_id', 'phone-1'));
+  });
+
+  test(
+      'a wedged device-id store does not block the voice topic from joining',
+      () async {
+    // A device whose keystore is wedged (empirically: an unmocked
+    // FlutterSecureStorage read that never completes at all, not merely
+    // slowly — see the Task 4 fix-round-1 report) must not leave
+    // `voice:henry` unregistered: the topic is now registered SYNCHRONOUSLY
+    // in the constructor with a legacy (no device_id) payload, and the
+    // device id is layered on afterward as a pure side task nothing else
+    // depends on — so a store that never resolves at all costs nothing but
+    // the enrichment itself. No waiting required: if this regresses to the
+    // old "await the device id before registering" shape, this join simply
+    // never happens, with or without a delay.
+    final b = build(deviceId: DeviceId(store: _NeverResolvingDeviceIdStore()));
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final payload = b.fake.joinPayload('voice:henry');
+    expect(payload, isNotNull,
+        reason: 'a wedged device-id store must not block the voice join forever');
+    expect(payload!.containsKey('device_id'), isFalse,
+        reason: 'a legacy join with no device_id is valid and binds normally — the server '
+            'treats a nil id as today\'s behaviour, not as broken');
   });
 
   test('the bound push closes the sink', () async {

@@ -36,14 +36,33 @@ class VoiceController extends ChangeNotifier {
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
     _connection.addListener(_onConnectionChanged);
-    // Registering the topic has to wait on the device id, which is async
-    // (`DeviceId.get()` may hit the platform keystore) — but a constructor
-    // cannot await, so this is a fire-and-forget task rather than something
-    // the constructor blocks on. `DeviceId.get()` itself never throws (it
-    // degrades to an in-memory id on a broken store rather than failing the
-    // join), so there is no slow-or-failing-store case that leaves this
-    // topic unregistered — only the ordinary time it takes to resolve.
-    unawaited(_registerTopic());
+    // Register the topic SYNCHRONOUSLY, in the constructor, exactly as
+    // before device ids existed — see _enrichJoinWithDeviceId's doc for why
+    // the device id itself is layered on separately, afterward, rather than
+    // gating this registration at all.
+    //
+    // Delivery is at channel CREATION, not at join, and that is
+    // load-bearing: the server pushes `state` and `history` immediately
+    // behind its join reply, so a listener attached on a "joined" signal
+    // misses both on every single connect. `essential: true` because a
+    // refused `voice:henry` means a dead token — there is nothing to stay
+    // connected for. Being registered HERE, synchronously, is equally
+    // load-bearing: `AppConnection.connect()` only waits for (and escalates
+    // on) essential topics that are already in its registry the moment its
+    // join sweep runs, which happens synchronously inside the SAME
+    // constructor call for every production caller (`main.dart`'s
+    // `_buildShell` calls `connect()` right after building this
+    // controller) — an async registration would miss that sweep every
+    // time, silently downgrading `voice:henry` from "gates the connection"
+    // to "joins whenever it gets around to it," with no escalation if it
+    // never does.
+    _connection.openChannel(
+      _topic,
+      joinPayload: const {'kiosk': false},
+      essential: true,
+      onChannel: _adoptChannel,
+    );
+    unawaited(_enrichJoinWithDeviceId());
   }
 
   static const String _topic = 'voice:henry';
@@ -53,18 +72,43 @@ class VoiceController extends ChangeNotifier {
   /// payload it sends and the `bound` state the server answers with.
   final DeviceId _deviceId;
 
-  /// Register the topic once the device id is known and take delivery of
-  /// every channel the connection makes for it — the one that already exists
-  /// if we were built after the connect, and a fresh one after every
-  /// reconnect. Both, because a consumer that only works when it is built
-  /// first is a trap for every future panel client.
+  /// Widen `voice:henry`'s registered join payload with the device id, once
+  /// (if ever) `DeviceId.get()` resolves — for every join FROM HERE ON.
+  /// `openChannel`'s payload update only takes effect on the NEXT join
+  /// (`AppConnection`'s own widen-never-narrow contract), so THIS session's
+  /// already-issued join is unaffected; every later reconnect carries it.
   ///
-  /// Delivery is at channel CREATION, not at join, and that is load-bearing:
-  /// the server pushes `state` and `history` immediately behind its join
-  /// reply, so a listener attached on a "joined" signal misses both on every
-  /// single connect. `essential: true` because a refused `voice:henry` means
-  /// a dead token — there is nothing to stay connected for.
-  Future<void> _registerTopic() async {
+  /// Deliberately off the join's critical path, and deliberately with NO
+  /// timeout: an EARLIER version of this fix bounded `DeviceId.get()`'s
+  /// await with a `Timer` and fell back to a legacy join on expiry — sound
+  /// in isolation, but empirically wrong here for two reasons found while
+  /// verifying it. First, the constructor was the ONLY call
+  /// site for `openChannel('voice:henry', …)`; deferring it behind ANY
+  /// await — bounded or not — means it can no longer be part of
+  /// `AppConnection.connect()`'s SYNCHRONOUS essential-join sweep (see the
+  /// constructor's doc), which broke three `voice_controller_reconnect_test
+  /// .dart` cases that pin `connect()` correctly reporting `connecting`/
+  /// `error` while `voice:henry`'s join hangs or is refused — a real
+  /// production regression, not just a test artifact: a dead-token refusal
+  /// would have gone unescalated. Second, the bounding `Timer` itself, since
+  /// it fires unconditionally on every construction rather than only when
+  /// something explicit (like `startMic`) exercises it, broke EVERY
+  /// `testWidgets` test building a bare `VoiceController` (`voice_screen
+  /// _test.dart`, 10 cases): `flutter_test` asserts no `Timer` is left
+  /// pending once a test's widget tree is disposed, and disposal there runs
+  /// through `addTearDown` — which, confirmed by reading
+  /// `flutter_test`'s `_runTestBody`, executes AFTER the invariant check,
+  /// not before, so cancelling the `Timer` in `dispose()` cannot save it.
+  /// Registering the join unconditionally, synchronously, and leaving this
+  /// enrichment to complete (or never complete) as a pure side task fixes
+  /// both: nothing ever depends on it, so there is nothing left to bound.
+  /// The only cost of it hanging forever (the empirically-observed failure
+  /// mode: an unmocked `FlutterSecureStorage` read that never completes at
+  /// all under some bindings) is that this device is never identified to
+  /// the server — degrading to exactly today's behaviour (868ba24: a nil
+  /// device id binds like any legacy client and leaves a previously
+  /// recorded id untouched), never to a blocked join.
+  Future<void> _enrichJoinWithDeviceId() async {
     final id = await _deviceId.get();
     if (_disposed) return;
     _connection.openChannel(
@@ -754,7 +798,7 @@ class VoiceController extends ChangeNotifier {
         // different facts. `bound` defaults true (see WakeGate), so this
         // only ever narrows a client that has actually been told otherwise.
         _applyBound((p['bound'] as bool?) ?? true);
-        _log('bound: ${p['bound']}');
+        _log('bound: $_bound');
       case 'state':
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']} bound=${p['bound']}');
         _clearThinking();
