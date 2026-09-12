@@ -1952,6 +1952,10 @@ defmodule App.Conversations.ConversationTest do
       pid = start_conv()
       Conversation.set_voice_activation(pid, true)
       assert_receive {:to_client, {:locked, true}}, 500
+
+      # The positive anchor: the bound device's wake still has its ordinary effect. Only THEN
+      # is the missing `bound` meaningful — this fails the moment the claim clause stops
+      # excluding the bound sender (drop its `from != client` guard and watch it go red).
       Conversation.wake_detected(pid)
       assert_receive {:to_client, {:locked, false}}, 500
       refute_receive {:to_client, {:bound, _}}, 200
@@ -2003,6 +2007,65 @@ defmodule App.Conversations.ConversationTest do
       :gen_statem.cast(pid, {:join, phone, "phone"})
       assert_receive {:phone, {:to_client, {:state, %{bound: false}}}}, 500
       refute_receive {:tablet, {:to_client, {:bound, false}}}, 200
+    end
+
+    test "a wake claim cancels the linger the displaced device armed" do
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+      tablet = spawn_client_proxy(self(), :tablet)
+      :gen_statem.cast(pid, {:join, tablet, "tablet"})
+      assert_receive {:tablet, {:to_client, {:state, %{bound: false}}}}, 500
+
+      # the phone's channel goes away: the death clock starts
+      Conversation.client_disconnected(pid, self())
+      ref = Process.monitor(pid)
+
+      # ...and downstairs the tablet says "Henry". The session must OUTLIVE the deadline,
+      # or the basement walk ends in a fresh session with no history.
+      :gen_statem.cast(pid, {:wake_detected, tablet})
+      assert_receive {:tablet, {:to_client, {:bound, true}}}, 500
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 400
+      assert Process.alive?(pid)
+    end
+
+    test "a ptt claim cancels the linger the displaced device armed" do
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+      tablet = spawn_client_proxy(self(), :tablet)
+      :gen_statem.cast(pid, {:join, tablet, "tablet"})
+      assert_receive {:tablet, {:to_client, {:state, %{bound: false}}}}, 500
+
+      Conversation.client_disconnected(pid, self())
+      ref = Process.monitor(pid)
+
+      :gen_statem.cast(pid, {:ptt_press, tablet})
+      assert_receive {:tablet, {:to_client, {:bound, true}}}, 500
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 400
+      assert Process.alive?(pid)
+    end
+
+    test "a binding join with no device_id leaves the stored device id alone" do
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+      assert_receive {:to_client, {:state, %{bound: true}}}, 500
+
+      # a client that cannot identify itself (the web LiveView) still binds...
+      web = spawn_client_proxy(self(), :web)
+      :gen_statem.cast(pid, {:join, web, nil})
+      assert_receive {:web, {:to_client, {:state, %{bound: true}}}}, 500
+      assert_receive {:to_client, {:bound, false}}, 500
+
+      # ...but must not have erased "phone", or the phone's reconnect lands in standby
+      phone = spawn_client_proxy(self(), :phone)
+      :gen_statem.cast(pid, {:join, phone, "phone"})
+      assert_receive {:phone, {:to_client, {:state, %{bound: true}}}}, 500
+      assert_receive {:web, {:to_client, {:bound, false}}}, 500
     end
 
     test "a join binds when the bound client is dead" do

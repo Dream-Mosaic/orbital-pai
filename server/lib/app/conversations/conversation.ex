@@ -22,6 +22,9 @@ defmodule App.Conversations.Conversation do
   # barge-in: how long an armed onset waits for confirming words before it's dropped (abandoned onset)
   @interrupt_window_ms 2_000
 
+  # "a live client is here" — cancels the death-clock armed by client_disconnected/2.
+  @cancel_linger {{:timeout, :client_linger}, :infinity, :cancel}
+
   # Spoken when the brain finishes a turn with no text at all (e.g. it ran tools but produced an
   # empty answer). Better a short, honest line than dead air — a re-ask usually succeeds.
   @brain_blank "Sorry, I lost that one — mind asking again?"
@@ -426,7 +429,9 @@ defmodule App.Conversations.Conversation do
   def handle_event(:cast, {:wake_detected, from}, s, %{client: client} = data)
       when from != client do
     Logger.info("[conn] claimed by a non-bound device (wake)")
+
     handle_event(:cast, {:wake_detected, from}, s, claim(data, from))
+    |> cancel_linger()
   end
 
   # Device-side wake: the local keyword spotter fired. Only meaningful while locked (else
@@ -459,7 +464,7 @@ defmodule App.Conversations.Conversation do
     if bind_on_join?(data, from, device_id) do
       data = rebind(data, from, device_id)
       send_state_snapshot(data, from, true)
-      {:keep_state, data, [{{:timeout, :client_linger}, :infinity, :cancel}]}
+      {:keep_state, data, [@cancel_linger]}
     else
       Logger.info("[conn] standby join — another device holds the conversation")
       send_state_snapshot(data, from, false)
@@ -489,7 +494,9 @@ defmodule App.Conversations.Conversation do
   # {:ptt_press, from} clause below returns an explicit {:keep_state, data, …}.
   def handle_event(:cast, {:ptt_press, from}, s, %{client: client} = data) when from != client do
     Logger.info("[conn] claimed by a non-bound device (ptt)")
+
     handle_event(:cast, {:ptt_press, from}, s, claim(data, from))
+    |> cancel_linger()
   end
 
   # Explicit intent always wins: a locked conversation unlocks first. In auto/voice-activation
@@ -1608,10 +1615,24 @@ defmodule App.Conversations.Conversation do
   end
 
   # Hand the conversation to `from`, telling a DIFFERENT live client that it lost the floor.
+  #
+  # `device_id` names the last device that IDENTIFIED itself, so a nil id leaves it alone: a
+  # client that can't say who it is (the web LiveView, an older build) still binds — that
+  # fallback is the spec's edge case — but it has no business erasing the phone's identity and
+  # stranding the phone in standby on its next reconnect.
   defp rebind(%{client: client} = data, from, device_id) do
     if live?(client) and client != from, do: send(client, {:to_client, {:bound, false}})
-    %{data | client: from, device_id: device_id}
+    %{data | client: from, device_id: device_id || data.device_id}
   end
+
+  # A claim is at least as strong a signal of a live client as a join is, so it cancels the
+  # linger the previous owner armed on its way out. Without this the basement walk "works" and
+  # then dies: the tablet claims, the turn runs, and up to linger_ms later the timer the phone
+  # armed fires, stops the session, and the tablet rejoins into a fresh one with no history.
+  defp cancel_linger({:keep_state, data}), do: {:keep_state, data, [@cancel_linger]}
+
+  defp cancel_linger({:keep_state, data, actions}),
+    do: {:keep_state, data, List.wrap(actions) ++ [@cancel_linger]}
 
   # A claim (wake / ptt) carries only the sender, so recover its device id from the join it
   # made earlier — a standby device is a joined device.

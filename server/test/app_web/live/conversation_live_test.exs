@@ -1138,8 +1138,9 @@ defmodule AppWeb.ConversationLiveTest do
     assert html =~ "Books"
 
     # The whole point: nothing here may mount the Voice hook, because the hook
-    # joins voice:<session_id> unconditionally and VoiceChannel's set_client is
-    # last-client-wins — it would steal the conversation from the native client.
+    # joins voice:<session_id> unconditionally with NO device_id, and a join with no
+    # device id is the legacy fallback that still binds on connect (Conversation.join/2)
+    # — it would steal the conversation from the native client.
     refute html =~ ~s(phx-hook="Voice")
     refute html =~ ~s(id="voice")
     refute html =~ ~s(id="orb-canvas")

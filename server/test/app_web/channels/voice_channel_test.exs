@@ -311,6 +311,15 @@ defmodule AppWeb.VoiceChannelTest do
   # These use `bob`, who — unlike `alice` — is NOT pre-joined by the setup block, so each
   # test's first join is a genuine cold start rather than a rebind onto the setup's channel.
   describe "device handoff on join" do
+    setup do
+      # bob is not pre-joined -- but the top-level setup's ALICE channel already pushed into
+      # THIS process's mailbox, and assert_push scans the whole mailbox. Drain it, or a
+      # handoff test's opening "bob cold-started and bound" precondition could be satisfied by
+      # alice's leftover snapshot.
+      drain_pushes()
+      :ok
+    end
+
     test "the device that cold-started the conversation rebinds on rejoining with the same device_id",
          %{bob: bob} do
       {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
@@ -351,6 +360,16 @@ defmodule AppWeb.VoiceChannelTest do
     result = subscribe_and_join(socket, "voice:#{user.id}", payload)
     on_exit(fn -> Sessions.stop(to_string(user.id)) end)
     result
+  end
+
+  # Discard every channel push queued so far, so a later assert_push can only match a push
+  # this test actually caused.
+  defp drain_pushes do
+    receive do
+      %Phoenix.Socket.Message{} -> drain_pushes()
+    after
+      100 -> :ok
+    end
   end
 
   defp wait_until(fun, retries \\ 50) do
