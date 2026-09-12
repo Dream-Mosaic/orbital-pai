@@ -221,7 +221,7 @@ defmodule App.Conversations.ConversationTest do
       {:ok, user} = App.Users.upsert_allowed("wake-init-off@x.com")
       {:ok, user} = App.Users.update_prefs(user, %{voice_activation: false})
 
-      {:ok, pid} =
+      {:ok, _pid} =
         Conversation.start_link(
           client: self(),
           config: @config,
@@ -233,7 +233,7 @@ defmodule App.Conversations.ConversationTest do
     end
 
     test "a session with no session_id (unit-test shape) still defaults to unlocked" do
-      pid = start_conv()
+      _pid = start_conv()
       assert_receive {:to_client, {:state, %{phase: "listening", locked: false}}}, 500
       refute_receive {:to_client, {:locked, _}}, 100
     end

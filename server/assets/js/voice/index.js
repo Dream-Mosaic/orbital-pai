@@ -168,7 +168,12 @@ export const Voice = {
         console.info("[conn] connected")
         this.setConnStatus("connected")
         this.channel.push("allow_interruptions", { enabled: this.abiEl?.checked || false })
-        this.channel.push("voice_activation", { enabled: this.kiosk && this.voiceActivation })
+        // No join-time voice_activation push: the server already seeds the FSM's wake gate from
+        // the user's stored pref (Conversation.voice_activation_pref/1), and SettingsChannel's
+        // set_pref relays live toggles to the running conversation. A client-asserted value here
+        // can only ever be redundant (kiosk, matches the seed) or wrong (a non-kiosk web monitor
+        // joining would push `false` into the ONE shared Conversation a phone is streaming into,
+        // silently reopening the wake gate and resuming paid STT streaming).
         this.channel.push("relock", { seconds: this.relockSeconds })
         if (this.kiosk) this.kioskAutoStart()
         if (this.defaultPtt && !this.kiosk) {
