@@ -82,14 +82,23 @@ void main() {
     Stream<Uri>? deepLinks,
   }) async {
     phone(tester);
-    // VoiceController now resolves a DeviceId (`SecureDeviceIdStore`, backed
-    // by `FlutterSecureStorage`) before it ever registers `voice:henry`'s
-    // topic. Left unmocked, a `testWidgets` binding never completes that
-    // platform-channel read at all (unlike a plain `test()`, where a missing
-    // handler throws promptly) — so without this, `voice:henry` would never
-    // join and every assertion below would see it silently missing. Same
-    // fake the 'sign-in gating' group already uses for `TokenStore`, whose
-    // storage this shares.
+    // `voice:henry` registers synchronously regardless of the device id
+    // (VoiceController's constructor), so it is never at risk of going
+    // unjoined here. What DOES depend on this mock: `_buildShell` now
+    // awaits `VoiceController.deviceIdReady` — bounded by a 2s `.timeout()`
+    // — before ever calling `conn.connect()`, so the FIRST join
+    // deterministically carries the device id instead of racing
+    // `connect()`'s own socket handshake. Left unmocked, `SecureDeviceIdStore`
+    // (backed by `FlutterSecureStorage`) never completes at all under a
+    // `testWidgets` binding (unlike a plain `test()`, where a missing
+    // platform-channel handler throws promptly) — `deviceIdReady` would then
+    // never resolve, and the ONLY thing that unblocks `connect()` is the
+    // `.timeout()` firing for real, which would leave that Timer pending
+    // across this test's disposal unless it actually gets to fire. Mocking
+    // storage instead makes the read resolve in a couple of microtasks, so
+    // the timeout Timer self-cancels almost immediately. Same fake the
+    // 'sign-in gating' group already uses for `TokenStore`, whose storage
+    // this shares.
     FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
     // Only the two panels whose CONTENT a test drives (the Settings layer
     // rows) need a state frame; every other station is asserted on its
@@ -318,11 +327,12 @@ void main() {
     // both topics are genuinely joined at boot — so "opening a panel disturbs
     // neither" is falsifiable.
     final (conn, fake) = await pumpHome(tester);
-    // Unordered: VoiceController's join now waits on an async DeviceId
-    // resolution before it registers its topic, so it lands a beat after
-    // BadgesClient's synchronous one — an implementation detail of ordering,
-    // not something either topic's presence depends on.
-    expect(fake.joinedTopics, unorderedEquals(['voice:henry', 'badges:henry']),
+    // Ordered: both topics register SYNCHRONOUSLY (VoiceController's
+    // constructor, then BadgesClient's, in that construction order in
+    // `_buildShell`) regardless of the device id, which only delays WHEN
+    // `connect()` itself runs, not the order `_wanted` was built in before
+    // it does — so this is deterministic, same as before device ids existed.
+    expect(fake.joinedTopics, ['voice:henry', 'badges:henry'],
         reason: 'sanity: the conversation and its badges are up before any tap');
 
     for (final tab in MeridianTab.values) {

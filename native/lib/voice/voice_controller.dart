@@ -62,7 +62,13 @@ class VoiceController extends ChangeNotifier {
       essential: true,
       onChannel: _adoptChannel,
     );
-    unawaited(_enrichJoinWithDeviceId());
+    // Stored, not fire-and-forgotten: see [deviceIdReady]'s doc. A caller
+    // about to call `AppConnection.connect()` (main.dart's `_buildShell`)
+    // can await this FIRST, bounded, to make the very first join
+    // deterministically carry the device id rather than relying on which of
+    // two independent async chains (this one, and connect()'s own socket
+    // handshake) happens to resolve first.
+    _deviceIdReady = _enrichJoinWithDeviceId();
   }
 
   static const String _topic = 'voice:henry';
@@ -72,42 +78,60 @@ class VoiceController extends ChangeNotifier {
   /// payload it sends and the `bound` state the server answers with.
   final DeviceId _deviceId;
 
+  /// Resolves once [_enrichJoinWithDeviceId] has applied (or given up
+  /// waiting for) the device id. NOT awaited by anything in this class —
+  /// the join itself never depends on it, by design (see
+  /// [_enrichJoinWithDeviceId]'s doc). Exposed so a caller that is ABOUT TO
+  /// call `AppConnection.connect()` can choose to wait for it first,
+  /// bounded, to make the very first join of a fresh connection
+  /// deterministically carry the device id whenever the store answers in
+  /// time — see `main.dart`'s `_connectOnceDeviceIdKnown`, the one
+  /// production caller. Without a caller racing it against `connect()`
+  /// like that, whether the FIRST join carries the device id is a coin
+  /// flip between two independent async chains (this one, and connect()'s
+  /// own socket handshake) — fine for the join itself (a legacy join is
+  /// always valid), but not for the specific promise this feature makes: a
+  /// second device that cold-launches while the first is mid-conversation
+  /// must not silently steal it by winning that race with a nil id.
+  Future<void> get deviceIdReady => _deviceIdReady;
+  late final Future<void> _deviceIdReady;
+
   /// Widen `voice:henry`'s registered join payload with the device id, once
   /// (if ever) `DeviceId.get()` resolves — for every join FROM HERE ON.
   /// `openChannel`'s payload update only takes effect on the NEXT join
-  /// (`AppConnection`'s own widen-never-narrow contract), so THIS session's
-  /// already-issued join is unaffected; every later reconnect carries it.
+  /// (`AppConnection`'s own widen-never-narrow contract), so a join already
+  /// in flight when this resolves is unaffected; every join after that —
+  /// the one a caller deliberately delayed via [deviceIdReady], or simply a
+  /// later reconnect — carries it.
   ///
   /// Deliberately off the join's critical path, and deliberately with NO
-  /// timeout: an EARLIER version of this fix bounded `DeviceId.get()`'s
-  /// await with a `Timer` and fell back to a legacy join on expiry — sound
-  /// in isolation, but empirically wrong here for two reasons found while
-  /// verifying it. First, the constructor was the ONLY call
-  /// site for `openChannel('voice:henry', …)`; deferring it behind ANY
-  /// await — bounded or not — means it can no longer be part of
-  /// `AppConnection.connect()`'s SYNCHRONOUS essential-join sweep (see the
-  /// constructor's doc), which broke three `voice_controller_reconnect_test
-  /// .dart` cases that pin `connect()` correctly reporting `connecting`/
-  /// `error` while `voice:henry`'s join hangs or is refused — a real
-  /// production regression, not just a test artifact: a dead-token refusal
-  /// would have gone unescalated. Second, the bounding `Timer` itself, since
-  /// it fires unconditionally on every construction rather than only when
-  /// something explicit (like `startMic`) exercises it, broke EVERY
-  /// `testWidgets` test building a bare `VoiceController` (`voice_screen
-  /// _test.dart`, 10 cases): `flutter_test` asserts no `Timer` is left
-  /// pending once a test's widget tree is disposed, and disposal there runs
-  /// through `addTearDown` — which, confirmed by reading
-  /// `flutter_test`'s `_runTestBody`, executes AFTER the invariant check,
-  /// not before, so cancelling the `Timer` in `dispose()` cannot save it.
-  /// Registering the join unconditionally, synchronously, and leaving this
-  /// enrichment to complete (or never complete) as a pure side task fixes
-  /// both: nothing ever depends on it, so there is nothing left to bound.
-  /// The only cost of it hanging forever (the empirically-observed failure
-  /// mode: an unmocked `FlutterSecureStorage` read that never completes at
-  /// all under some bindings) is that this device is never identified to
-  /// the server — degrading to exactly today's behaviour (868ba24: a nil
-  /// device id binds like any legacy client and leaves a previously
-  /// recorded id untouched), never to a blocked join.
+  /// timeout OF ITS OWN: an EARLIER version of this fix bounded
+  /// `DeviceId.get()`'s await right here with a `Timer` and fell back to a
+  /// legacy join on expiry — sound in isolation, but empirically wrong for
+  /// two reasons found while verifying it. First, the constructor was the
+  /// ONLY call site for `openChannel('voice:henry', …)`; deferring
+  /// registration itself behind ANY await — bounded or not — means it can
+  /// no longer be part of `AppConnection.connect()`'s SYNCHRONOUS
+  /// essential-join sweep (see the constructor's doc), which broke three
+  /// `voice_controller_reconnect_test.dart` cases that pin `connect()`
+  /// correctly reporting `connecting`/`error` while `voice:henry`'s join
+  /// hangs or is refused — a real production regression, not just a test
+  /// artifact: a dead-token refusal would have gone unescalated. Second,
+  /// that bounding `Timer` fired unconditionally on every construction
+  /// rather than only when something explicit (like `startMic`) exercises
+  /// it, which broke EVERY `testWidgets` test building a bare
+  /// `VoiceController` (`voice_screen_test.dart`, 10 cases):
+  /// `flutter_test` asserts no `Timer` is left pending once a test's widget
+  /// tree is disposed, and disposal there runs through `addTearDown` —
+  /// which, confirmed by reading `flutter_test`'s `_runTestBody`, executes
+  /// AFTER the invariant check, not before, so cancelling the `Timer` in
+  /// `dispose()` cannot save it. Registering the join unconditionally,
+  /// synchronously, and leaving THIS METHOD free to complete (or never
+  /// complete) as a pure side task fixes both: nothing HERE depends on it
+  /// finishing, so there is nothing to bound inside this method itself —
+  /// the bound belongs to whoever chooses to race it against `connect()`
+  /// (see [deviceIdReady]), where a `.timeout()`'s `Timer` is safe because
+  /// it is scoped to that ONE await, not to every construction.
   Future<void> _enrichJoinWithDeviceId() async {
     final id = await _deviceId.get();
     if (_disposed) return;

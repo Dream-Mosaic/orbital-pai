@@ -33,12 +33,33 @@ class _FixedDeviceIdStore implements DeviceIdStore {
 /// bindings (see the Task 4 fix-round-1 report), and the one a fake MUST be
 /// able to express: `DeviceId.get()`'s own try/catch is inert against a
 /// hang, so a fake that eventually resolves (even slowly) cannot exercise
-/// the bug `_registerTopic`'s timeout exists to fix. The `Completer` is
-/// simply never completed, by any caller, for the lifetime of the test.
+/// the bug the synchronous-registration fix exists to guard against. The
+/// `Completer` is simply never completed, by any caller, for the lifetime
+/// of the test.
 class _NeverResolvingDeviceIdStore implements DeviceIdStore {
   final Completer<String?> _never = Completer<String?>();
   @override
   Future<String?> read() => _never.future;
+  @override
+  Future<void> write(String value) async {}
+}
+
+/// A [DeviceIdStore] whose `read()` resolves only after a real delay.
+/// Deliberately NOT instant: an instantly-resolving fake can race an
+/// equally-instant fake connector and happen to land in time whether or not
+/// anything actually orders the two — exactly the false confidence a
+/// re-review caught in an earlier version of the "sends the resolved
+/// device id" test below, which passed by accidental microtask ordering
+/// rather than by any real guarantee. A real delay this much longer than a
+/// few microtasks means a test relying on EXPLICIT synchronization (an
+/// `await` on [VoiceController.deviceIdReady]) still passes, while a test
+/// — or a future code change — that drops back to just racing the two
+/// would fail for real.
+class _DelayedDeviceIdStore implements DeviceIdStore {
+  _DelayedDeviceIdStore(this.value);
+  final String value;
+  @override
+  Future<String?> read() => Future.delayed(const Duration(milliseconds: 50), () => value);
   @override
   Future<void> write(String value) async {}
 }
@@ -477,6 +498,72 @@ void main() {
     await settle();
 
     expect(b.fake.joinPayload('voice:henry'), containsPair('device_id', 'phone-1'));
+  });
+
+  test(
+      'awaiting deviceIdReady before connect() puts the device id in the '
+      'FIRST join, deterministically — not by racing a fast store against '
+      'a fast connector', () async {
+    // A DELAYED store, not the instant one above: this is what makes the
+    // test a real regression guard. main.dart's own `_connectOnceDeviceIdKnown`
+    // does exactly this — await `deviceIdReady`, THEN `connect()` — and
+    // that explicit ordering is what must be pinned, not "it happened to
+    // land in time."
+    final b = build(deviceId: DeviceId(store: _DelayedDeviceIdStore('phone-1')));
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.vc.deviceIdReady;
+    await b.conn.connect();
+    await settle();
+
+    expect(b.fake.joinPayload('voice:henry'), containsPair('device_id', 'phone-1'));
+  });
+
+  test('a device id that resolves after the first join still reaches a LATER join',
+      () async {
+    // Own multi-socket harness (a fresh FakeSocket per connect()), same
+    // shape voice_controller_reconnect_test.dart uses — build()'s harness
+    // reuses one socket for the controller's whole life, which can't show
+    // a SECOND join's payload.
+    final sockets = <FakeSocket>[];
+    final conn = AppConnection(
+      connector: () async {
+        final s = FakeSocket();
+        sockets.add(s);
+        return s.socket;
+      },
+      rejoinBackoff: const [Duration(milliseconds: 10)],
+    );
+    final vc = VoiceController(
+      connection: conn,
+      mic: FakeMic(),
+      player: FakePlayer(),
+      spotter: FakeSpotter(),
+      gate: WakeGate(),
+      deviceId: DeviceId(store: _DelayedDeviceIdStore('phone-3')),
+    );
+    addTearDown(vc.dispose);
+    addTearDown(conn.dispose);
+
+    // Connect WITHOUT waiting for deviceIdReady, unlike the test above — the
+    // delayed store has not resolved yet, so this first join is legacy,
+    // same as a caller that doesn't do what main.dart's
+    // `_connectOnceDeviceIdKnown` does.
+    await conn.connect();
+    await settle();
+    expect(sockets, hasLength(1));
+    expect(sockets.first.joinPayload('voice:henry')!.containsKey('device_id'), isFalse,
+        reason: 'sanity: the id had not resolved yet when this join went out');
+
+    // Let the device id resolve, then force a reconnect.
+    await vc.deviceIdReady;
+    await conn.rejoin();
+    await settle();
+
+    expect(sockets, hasLength(2), reason: 'sanity: rejoin() actually opened a new socket');
+    expect(sockets.last.joinPayload('voice:henry'), containsPair('device_id', 'phone-3'),
+        reason: 'the widened payload must reach every join from here on, not just the first');
   });
 
   test(

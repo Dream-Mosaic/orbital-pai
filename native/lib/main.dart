@@ -259,6 +259,59 @@ class _HenryHomeState extends State<HenryHome> {
     // Registers nothing until the Books drawer opens.
     _books = BooksClient(connection: conn);
     // The connection owns connect + rejoin; consumers just open channels.
+    // Deliberately NOT `conn.connect()` directly here — see
+    // `_connectOnceDeviceIdKnown`'s doc for why this dial waits, briefly,
+    // on the device id first.
+    unawaited(_connectOnceDeviceIdKnown(vc, conn));
+  }
+
+  /// Bound on the wait described below. `DeviceId.get()` hits the platform
+  /// keystore — normally sub-millisecond, but see its own doc for the
+  /// degrade-to-in-memory-id path on a broken store, and
+  /// `VoiceController.deviceIdReady`'s doc for a store that never answers
+  /// at all. A couple of seconds is generous headroom over an ordinary
+  /// read while still well short of anything a user would call "hung" —
+  /// same reasoning `VoiceController._wakeSpotterStartTimeout` uses for its
+  /// own bound.
+  static const Duration _deviceIdReadyTimeout = Duration(seconds: 2);
+
+  /// Dial the connection only after [VoiceController.deviceIdReady]
+  /// resolves (or this bound gives up on it) — never before, and never
+  /// unboundedly after.
+  ///
+  /// Why this can't just be `conn.connect()`: `voice:henry`'s topic is
+  /// registered SYNCHRONOUSLY inside [VoiceController]'s constructor above,
+  /// so it is always part of `connect()`'s essential-join sweep regardless
+  /// of timing — that part needs no help. But the device id that rides
+  /// ALONGSIDE that join is resolved asynchronously, and `_buildShell`
+  /// cannot await (`initState` and the `setState` callers above are both
+  /// synchronous) — so without this, whether `voice:henry`'s FIRST join
+  /// carries the device id would be a race between two independent async
+  /// chains: `DeviceId.get()`'s keystore read here, and `connect()`'s own
+  /// socket handshake. In production the keystore usually wins (warm
+  /// keystore versus a DNS+TLS+WSS round trip through Cloudflare) — but
+  /// "usually" is exactly the gap this feature exists to close: a LOST
+  /// race means the first join binds with a nil device id, and a second
+  /// device that cold-launches while the user is mid-conversation on the
+  /// first one steals the conversation on connect, silently, with no
+  /// later join ever un-stealing it (a reconnect that later DOES carry the
+  /// id only rebinds, it doesn't reclaim).
+  ///
+  /// Bounded, not unbounded, in the OTHER direction too: seeing this
+  /// through to production means a device with a wedged keystore must
+  /// still connect — id-less, degrading to exactly today's behaviour —
+  /// rather than leave the user staring at a blank shell forever.
+  /// `.timeout()` is safe here specifically because it is scoped to this
+  /// ONE await rather than firing on every `VoiceController` construction
+  /// the way an earlier attempt at this fix did — see
+  /// `VoiceController._enrichJoinWithDeviceId`'s doc for why that shape
+  /// left a real `Timer` pending across `testWidgets`' disposal checks.
+  Future<void> _connectOnceDeviceIdKnown(VoiceController vc, AppConnection conn) async {
+    await vc.deviceIdReady.timeout(_deviceIdReadyTimeout, onTimeout: () {});
+    // A teardown landing mid-wait (e.g. a rejected-token sign-out racing
+    // this) already disposes `conn`, and `AppConnection.connect()` no-ops
+    // on that by itself — this is just for clarity, not correctness.
+    if (!mounted) return;
     conn.connect();
   }
 
