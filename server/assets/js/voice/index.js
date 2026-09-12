@@ -274,9 +274,14 @@ export const Voice = {
       this.applyOrbState()
     })
     // One-shot backfill after join. Only into an empty log — a rebind (wire pack) re-pushes
-    // history and must not duplicate lines already on screen.
-    this.channel.on("history", ({ turns }) => {
-      if (!turns.length || this.logEl.querySelector(".voice-line")) return
+    // history and must not duplicate lines already on screen. A claim (`replace: true`) is the
+    // exception: the conversation may have roamed to another device while this one sat idle, so
+    // its log can be stale — clear it and rebuild from the server's copy instead of appending.
+    this.channel.on("history", ({ turns, replace }) => {
+      if (replace) {
+        for (const line of this.logEl.querySelectorAll(".voice-line, .voice-divider")) line.remove()
+      }
+      if (!turns.length || (!replace && this.logEl.querySelector(".voice-line"))) return
       for (const t of turns) {
         if (t.you) this.addLine("you", t.you)
         if (t.assistant) this.addLine("brain", t.assistant)

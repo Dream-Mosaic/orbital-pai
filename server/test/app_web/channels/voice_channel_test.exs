@@ -350,6 +350,85 @@ defmodule AppWeb.VoiceChannelTest do
     end
   end
 
+  # The conversation itself roams correctly on a claim (its FSM state is shared), but each
+  # channel only ever backfills `history` once, at :after_join — so a device that has been
+  # sitting in standby shows a thread frozen at join time even after the conversation moved on.
+  # A claim (wake/PTT from a non-bound device) is what re-syncs the claiming device's on-screen
+  # thread: alongside the existing `bound` push, it now gets a fresh `history` flagged
+  # `replace: true` so the client knows to rebuild instead of append.
+  describe "handoff resyncs the claiming device's history" do
+    setup do
+      # Same reasoning as "device handoff on join" above: drain the top-level setup's alice
+      # pushes so a handoff test's assertions can only be satisfied by bob's own events.
+      drain_pushes()
+      :ok
+    end
+
+    test "a claim from a non-bound device pushes history with replace: true to the claiming channel",
+         %{bob: bob} do
+      {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, s2} = join_voice(bob, %{"device_id" => "dev-b"})
+      assert_push "state", %{bound: false}, 500
+
+      # bob (standby, dev-b) claims by speaking — s2 is not the bound client, so this is a
+      # claim, not a rebind-on-join.
+      push(s2, "wake_detected", %{})
+
+      assert_push "bound", %{bound: true}, 500
+      assert_push "history", %{turns: _turns, replace: true}, 500
+    end
+
+    test "the device that lost the floor on a claim gets `bound: false` but no replace-history push",
+         %{bob: bob} do
+      {:ok, _reply, s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, s2} = join_voice(bob, %{"device_id" => "dev-b"})
+      assert_push "state", %{bound: false}, 500
+
+      push(s2, "wake_detected", %{})
+
+      # Both channels share this test process's mailbox (they were opened on the same
+      # transport pid), and the claiming channel (s2) legitimately gets its own "history"
+      # push — so this must be scoped to s1's join_ref, or s2's real push would make the
+      # `refute` below vacuous, unable to catch a bug that pushes history to BOTH sides.
+      s1_ref = s1.join_ref
+
+      assert_receive %Phoenix.Socket.Message{
+                       event: "bound",
+                       payload: %{bound: false},
+                       join_ref: ^s1_ref
+                     },
+                     500
+
+      refute_receive %Phoenix.Socket.Message{
+                       event: "history",
+                       payload: %{replace: true},
+                       join_ref: ^s1_ref
+                     },
+                     200
+    end
+
+    test "a plain standby join does not get a replace-history push", %{bob: bob} do
+      {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, _s2} = join_voice(bob, %{"device_id" => "dev-b"})
+      assert_push "state", %{bound: false}, 500
+      refute_push "bound", %{bound: false}, 200
+
+      refute_push "history", %{replace: true}, 200
+    end
+
+    test "the ordinary :after_join history push carries no replace flag", %{bob: bob} do
+      {:ok, _reply, _socket} = join_voice(bob)
+      assert_push "history", %{turns: []} = payload
+      refute Map.has_key?(payload, :replace)
+    end
+  end
+
   # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
   # for tests that need a fresh channel bound after some pre-join state (e.g. seeded turns).
   # `payload` defaults to the setup block's bare `%{}` join; pass %{"kiosk" => true} to join

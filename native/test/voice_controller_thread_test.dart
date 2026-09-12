@@ -61,6 +61,73 @@ void main() {
     expect(vc.thread, hasLength(3));
   });
 
+  test('a claim (replace: true) rebuilds the thread instead of appending to it', () {
+    // The device already has its own turn events on screen (not a backfill) —
+    // a claim's replace-history must still win, clearing this first.
+    vc.debugHandleMessage(msg('transcript', const {'text': 'leftover from before the claim'}));
+    expect(vc.thread, hasLength(1));
+
+    vc.debugHandleMessage(msg('history', const {
+      'turns': [
+        {'you': 'hi', 'assistant': 'hello'},
+      ],
+      'replace': true,
+    }));
+
+    expect(vc.thread, hasLength(3), reason: 'you + assistant + the — earlier — divider');
+    expect((vc.thread[0] as ThreadLine).text, 'hi');
+    expect((vc.thread[1] as ThreadLine).text, 'hello');
+    expect(vc.thread.last, isA<ThreadDivider>());
+  });
+
+  test('a replace history leaves the one-shot guard set, so a later plain rebind cannot duplicate',
+      () {
+    vc.debugHandleMessage(msg('history', const {
+      'turns': [
+        {'you': 'hi', 'assistant': 'hello'},
+      ],
+      'replace': true,
+    }));
+    expect(vc.thread, hasLength(3));
+
+    // Empty the thread the way the local trash button does, so the plain push below is only
+    // blocked by the `_historyBackfilled` flag itself — not incidentally by `_thread.isEmpty`
+    // still being false from the replace above.
+    vc.clearThread();
+    expect(vc.thread, isEmpty);
+
+    // A later plain (unflagged) history push — e.g. a stray rebind — must not repopulate.
+    vc.debugHandleMessage(msg('history', const {
+      'turns': [
+        {'you': 'hi', 'assistant': 'hello'},
+      ],
+    }));
+    expect(vc.thread, isEmpty);
+  });
+
+  test('a replace arriving with an already-populated thread ends with exactly the payload, no leftovers',
+      () {
+    vc.debugHandleMessage(msg('history', const {
+      'turns': [
+        {'you': 'old q1', 'assistant': 'old a1'},
+        {'you': 'old q2', 'assistant': 'old a2'},
+      ],
+    }));
+    expect(vc.thread, hasLength(5));
+
+    vc.debugHandleMessage(msg('history', const {
+      'turns': [
+        {'you': 'new q', 'assistant': 'new a'},
+      ],
+      'replace': true,
+    }));
+
+    expect(vc.thread, hasLength(3));
+    expect((vc.thread[0] as ThreadLine).text, 'new q');
+    expect((vc.thread[1] as ThreadLine).text, 'new a');
+    expect(vc.thread.last, isA<ThreadDivider>());
+  });
+
   test('brain deltas stream into ONE plaintext line, then snap to markdown', () {
     vc.debugHandleMessage(msg('thinking', const {}));
     expect(vc.thread.single, isA<ThreadLine>());

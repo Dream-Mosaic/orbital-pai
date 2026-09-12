@@ -234,8 +234,22 @@ defmodule AppWeb.VoiceChannel do
 
   # Handoff: this channel gained (or lost) ownership of the conversation. Kept separate from
   # `locked` on purpose — "I am not the owner" and "the wake gate is shut" are different facts.
-  def handle_info({:to_client, {:bound, bound}}, socket) do
-    push(socket, "bound", %{bound: bound})
+  #
+  # Gaining ownership also re-syncs the on-screen thread: history only ever backfills once, at
+  # :after_join, so a device that has been sitting in standby while the conversation roamed
+  # elsewhere has a thread frozen at join time even though the FSM's context is current (shared
+  # memory, divergent displays). Push a fresh `history` alongside `bound`, flagged `replace: true`
+  # so the client knows to rebuild the thread instead of appending to it. (Known and accepted: turns
+  # persist in a background task while this reads the DB, so a claim landing within a moment of the
+  # previous turn's end can miss that last turn.)
+  def handle_info({:to_client, {:bound, true}}, socket) do
+    push(socket, "bound", %{bound: true})
+    push(socket, "history", %{turns: history(socket.assigns.session_id), replace: true})
+    {:noreply, socket}
+  end
+
+  def handle_info({:to_client, {:bound, false}}, socket) do
+    push(socket, "bound", %{bound: false})
     {:noreply, socket}
   end
 

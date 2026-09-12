@@ -729,9 +729,31 @@ class VoiceController extends ChangeNotifier {
     switch (m.event) {
       case 'history':
         final turns = (p['turns'] as List?) ?? const [];
-        _log('history: ${turns.length} turns');
-        // One-shot: a rebind re-pushes history and must not duplicate lines.
-        if (turns.isNotEmpty && !_historyBackfilled && _thread.isEmpty) {
+        final replace = (p['replace'] as bool?) ?? false;
+        _log('history: ${turns.length} turns${replace ? ' (replace)' : ''}');
+        if (replace) {
+          // A claim re-syncs the thread: the conversation may have roamed to another
+          // device while this one sat in standby, so its on-screen thread can be stale
+          // (or, if it already caught up via its own turn events, redundant). Either
+          // way, rebuild from the server's copy instead of appending to what's here.
+          _thread.clear();
+          _brainIndex = null;
+          _metricsIndex = null;
+          _thinkingIndex = null;
+          _toolChipIndexes.clear();
+          for (final t in turns) {
+            final turn = (t as Map).cast<String, dynamic>();
+            final you = turn['you'] as String?;
+            final assistant = turn['assistant'] as String?;
+            if (you != null) _addLine('you', you);
+            if (assistant != null) _addLine('brain', assistant);
+          }
+          if (turns.isNotEmpty) _thread.add(const ThreadDivider());
+          // Leave the one-shot guard set so a later plain (unflagged) history push
+          // — e.g. a stray rebind — can't re-append on top of this rebuild.
+          _historyBackfilled = true;
+        } else if (turns.isNotEmpty && !_historyBackfilled && _thread.isEmpty) {
+          // One-shot: a plain rebind re-pushes history and must not duplicate lines.
           _historyBackfilled = true;
           for (final t in turns) {
             final turn = (t as Map).cast<String, dynamic>();
