@@ -46,13 +46,25 @@ class DeviceId {
 
   String? _cached;
 
+  // The in-flight resolution, cached (not just the resolved value) so that
+  // concurrent callers before the first result lands all await the SAME
+  // future rather than each racing their own read-generate-write sequence.
+  // Without this, `Future.wait([d.get(), d.get()])` on a fresh instance can
+  // have both calls see nothing persisted, both generate a different id, and
+  // both write — the loser then caches and returns an id that isn't the one
+  // actually persisted, so the device's id would drift across a restart.
+  Future<String>? _inflight;
+
   /// The device id: read from storage if already persisted, else generated
   /// and persisted on first call. Stable across calls on this instance, and
   /// (storage permitting) across fresh instances and app restarts too.
-  Future<String> get() async {
+  Future<String> get() {
     final cached = _cached;
-    if (cached != null) return cached;
+    if (cached != null) return Future.value(cached);
+    return _inflight ??= _resolve();
+  }
 
+  Future<String> _resolve() async {
     String? generated;
     try {
       final existing = await _store.read();
@@ -69,6 +81,8 @@ class DeviceId {
       final fallback = generated ?? _generate();
       _cached = fallback;
       return fallback;
+    } finally {
+      _inflight = null;
     }
   }
 
