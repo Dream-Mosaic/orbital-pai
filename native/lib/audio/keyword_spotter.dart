@@ -157,6 +157,12 @@ class SherpaWakeSpotter implements WakeSpotter {
     if (_available) return;
     try {
       final paths = _paths ??= await _loader();
+      // A dispose() racing this await must not resurrect the engine on a
+      // disposed instance — re-check ownership before doing anything with a
+      // side effect, the same discipline `VoiceController` uses after its
+      // own awaits (`identical(_micState.session, session)`). Nothing has
+      // been allocated yet at this point, so bailing here is a plain no-op.
+      if (_disposed) return;
       sherpa_onnx.initBindings();
 
       final config = sherpa_onnx.KeywordSpotterConfig(
@@ -177,7 +183,20 @@ class SherpaWakeSpotter implements WakeSpotter {
       );
 
       final spotter = sherpa_onnx.KeywordSpotter(config);
-      _stream = spotter.createStream();
+      final stream = spotter.createStream();
+      // Built entirely synchronously since the await above, so nothing COULD
+      // have disposed us in between — this check is the one that actually
+      // matters if a future edit ever adds another await above it. Local
+      // variables until this point on purpose: assigning to `_spotter`/
+      // `_stream` before checking would mean relying on a LATER `dispose()`
+      // to free them, and there isn't going to be one — `VoiceController`
+      // calls `dispose()` exactly once, and it already ran.
+      if (_disposed) {
+        stream.free();
+        spotter.free();
+        return;
+      }
+      _stream = stream;
       _spotter = spotter;
       _available = true;
     } catch (e, st) {

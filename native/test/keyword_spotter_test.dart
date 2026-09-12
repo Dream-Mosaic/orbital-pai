@@ -1,5 +1,6 @@
-import 'dart:typed_data';
+import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/audio/keyword_spotter.dart';
 
@@ -53,6 +54,52 @@ void main() {
       final s = SherpaWakeSpotter(loader: () async => throw StateError('no asset'));
       await s.stop();
       expect(s.available, isFalse);
+    });
+
+    test('a dispose() racing an in-flight start() does not resurrect the '
+        'engine once the loader finally resolves', () async {
+      // VoiceController.dispose() fires `_spotter.dispose()` unawaited while
+      // startMic()'s `await _spotter.start()` may still be mid-load (a
+      // sign-out during model load). start() must not build an engine, or
+      // flip `available`, on an instance that is already disposed by the
+      // time its own await returns.
+      //
+      // Captures debugPrint rather than trusting `available` alone: on THIS
+      // host, `sherpa_onnx.initBindings()` itself throws (no matching native
+      // lib for a plain `flutter test` process), which ALSO leaves
+      // `available` false even with the fix reverted — so `available` alone
+      // cannot tell "bailed out before touching native code" from "tried and
+      // failed for an unrelated reason". Proving no debug output happened at
+      // all is proof the post-await guard fired BEFORE
+      // `sherpa_onnx.initBindings()`, which is the actual property this test
+      // exists to pin — on a real device, where initBindings() would have
+      // SUCCEEDED, that is exactly the difference between leaking the engine
+      // and not.
+      final messages = <String>[];
+      final originalDebugPrint = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) {
+        if (message != null) messages.add(message);
+      };
+      addTearDown(() => debugPrint = originalDebugPrint);
+
+      final loaderGate = Completer<KwsAssetPaths>();
+      final s = SherpaWakeSpotter(loader: () => loaderGate.future);
+
+      final starting = s.start();
+      await s.dispose();
+      loaderGate.complete(const KwsAssetPaths(
+        encoder: '', decoder: '', joiner: '', tokens: '', keywords: ''));
+      await starting;
+
+      expect(s.available, isFalse,
+          reason: 'a dispose() that lands mid-load must not be resurrected '
+              'once the loader resolves');
+      expect(s.offer(Uint8List(320)), isFalse,
+          reason: 'a disposed spotter must stay inert even after the race');
+      expect(messages, isEmpty,
+          reason: 'a disposed instance must bail out before ever touching '
+              'sherpa_onnx native bindings — any debug output here means it '
+              'tried anyway');
     });
   });
 }

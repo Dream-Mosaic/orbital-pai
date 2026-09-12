@@ -385,4 +385,39 @@ void main() {
         reason: 'the superseded session A must not call stop() again on its '
             'way out — that would reset the spotter out from under B');
   });
+
+  test('a dispose() during mid-load does not resurrect the spotter once the '
+      'load finally resolves', () async {
+    // The exact scenario a round-2 fix introduced: VoiceController.dispose()
+    // fires `_spotter.dispose()` unawaited while startMic()'s
+    // `await _spotter.start()` is still pending — a sign-out during model
+    // load. Modelled directly with FakeSpotter's own post-await `disposed`
+    // re-check (mirroring SherpaWakeSpotter's real one) rather than via
+    // internal null-ness.
+    final gate = Completer<void>();
+    final spotter = FakeSpotter(available: false, loadAfter: gate.future);
+    final b = build(spotter: spotter);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    final starting = b.vc.startMic();
+    await settle();
+    expect(spotter.available, isFalse, reason: 'sanity: still loading');
+
+    // Sign-out lands WHILE the model is still loading.
+    b.vc.dispose();
+    await settle();
+    expect(spotter.disposed, isTrue, reason: 'sanity: the sign-out ran');
+
+    // The load finally finishes, well after dispose() already latched.
+    gate.complete();
+    await starting;
+    await settle();
+
+    expect(spotter.available, isFalse,
+        reason: 'a dispose() that lands mid-load must not be resurrected '
+            'once the loader resolves — the engine would then leak forever, '
+            'since dispose() has already run and will not run again');
+  });
 }

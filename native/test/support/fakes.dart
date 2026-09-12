@@ -416,6 +416,11 @@ class FakeSpotter implements WakeSpotter {
     final loadAfter = _loadAfter;
     if (loadAfter == null) return;
     await loadAfter;
+    // A dispose() that lands while this await was in flight must not be
+    // resurrected once the load finally resolves — the same post-await
+    // ownership re-check `SherpaWakeSpotter.start()` does for real. Without
+    // this, the fake could not express the exact bug it was built to catch.
+    if (disposed) return;
     _available = true;
   }
 
