@@ -2,10 +2,12 @@ defmodule AppWeb.VoiceChannel do
   @moduledoc """
   Bridges a browser to its per-session `Conversation`.
 
-  - **Join** rebinds to a *live* session (the linger keeps it alive across a reload/
-    reconnect — conversation state is preserved) via `Conversation.set_client/2`, or
-    starts a fresh one if none exists. A start/lookup race resolves to rebinding the
-    winner.
+  - **Join** resolves the user's *live* session (the linger keeps it alive across a reload/
+    reconnect — conversation state is preserved), or starts a fresh one if none exists; a
+    start/lookup race resolves to the winner. It then always casts `Conversation.join/2`
+    with this channel's `device_id`, and the FSM decides whether this channel becomes the
+    bound one or joins **standby** (connected and fed state, but not the audio owner, until
+    it claims by speaking). Either way the channel gets a `state` snapshot carrying `bound`.
   - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`;
     `"barge_in"` → `Conversation.barge_in`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
@@ -28,8 +30,9 @@ defmodule AppWeb.VoiceChannel do
   def join("voice:" <> _ignored, payload, socket) do
     session_id = to_string(socket.assigns.user_id)
 
-    case bind_session(session_id) do
+    case resolve_session(session_id) do
       {:ok, pid} ->
+        Conversation.join(pid, payload["device_id"])
         Process.monitor(pid)
         send(self(), :after_join)
         send(self(), {:track_presence, payload["kiosk"] == true})
@@ -40,18 +43,19 @@ defmodule AppWeb.VoiceChannel do
     end
   end
 
-  # Rebind to a live session (survives reconnects — the linger keeps it alive), else start
-  # fresh. A start/lookup race resolves to rebinding the winner.
-  defp bind_session(session_id) do
+  # Find the user's live session (it survives reconnects — the linger keeps it alive), else
+  # start one. A start/lookup race resolves to the winner. Binding is NOT decided here: join/3
+  # casts `Conversation.join/2` on every path and the FSM decides, so there is no
+  # lookup -> decide -> cast race.
+  defp resolve_session(session_id) do
     case Sessions.lookup(session_id) do
       {:ok, pid} ->
-        Conversation.set_client(pid, self())
         {:ok, pid}
 
       :error ->
         case Sessions.start(session_id, self()) do
           {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> Conversation.set_client(pid, self()) && {:ok, pid}
+          {:error, {:already_started, pid}} -> {:ok, pid}
           {:error, reason} -> {:error, reason}
         end
     end
@@ -228,6 +232,13 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # Handoff: this channel gained (or lost) ownership of the conversation. Kept separate from
+  # `locked` on purpose — "I am not the owner" and "the wake gate is shut" are different facts.
+  def handle_info({:to_client, {:bound, bound}}, socket) do
+    push(socket, "bound", %{bound: bound})
+    {:noreply, socket}
+  end
+
   # W3: server state snapshot on every (re)bind (and initial start) — the hook resets
   # thinking/caption/orb from it so a reconnect can't leave a stale UI.
   def handle_info({:to_client, {:state, snapshot}}, socket) do
@@ -260,7 +271,7 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
-  # If the bound Conversation dies — a crash, or a linger-expiry we raced during join (set_client is a
+  # If the bound Conversation dies — a crash, or a linger-expiry we raced during join (the join is a
   # cast, so a lookup→dead-pid gap is possible) — drop this channel so the browser's auto-rejoin starts a
   # fresh session instead of talking silently to a dead pid.
   def handle_info({:DOWN, _ref, :process, pid, reason}, socket) do

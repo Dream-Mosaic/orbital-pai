@@ -61,8 +61,20 @@ defmodule App.Conversations.Conversation do
   def push_audio(pid, pcm16), do: :gen_statem.cast(pid, {:push_audio, pcm16, self()})
   def set_ptt(pid, enabled), do: :gen_statem.cast(pid, {:set_ptt, enabled, self()})
 
-  @doc "Rebind the outbound client (a rejoining channel). Cancels any linger and sends a state snapshot."
-  def set_client(pid, client), do: :gen_statem.cast(pid, {:set_client, client})
+  @doc """
+  A channel joined, carrying its client-generated `device_id` (nil from a client too old to
+  send one, e.g. the web UI).
+
+  Binding is decided INSIDE the FSM — it serialises, so there is no lookup-then-decide race —
+  and the joining channel takes the conversation only when that is safe: nothing live is
+  bound, it is the same device coming back, it is already the bound channel, or it sent no
+  device id at all (legacy fallback to bind-on-join). Anything else joins **standby**:
+  fully connected and fed state, but not the audio owner, until it claims by speaking.
+
+  Either way the joining pid gets a state snapshot carrying `bound:`. A bind also cancels any
+  pending linger.
+  """
+  def join(pid, device_id), do: :gen_statem.cast(pid, {:join, self(), device_id})
 
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
@@ -132,6 +144,14 @@ defmodule App.Conversations.Conversation do
       policy: Policy.initial_state(),
       config: config,
       client: Keyword.fetch!(opts, :client),
+      # the bound device's client-generated id (nil until its first join, and from any client
+      # too old to send one). Handoff compares against it; see the {:join, …} handler.
+      device_id: nil,
+      # every joined channel pid -> the device id it joined with. A CLAIM carries only the
+      # sender, so this is how a claim rebinds `device_id` too; without it the displaced
+      # device's id would stay bound and that device would steal the conversation back on its
+      # next reconnect. Pruned of dead channels on every join, the only thing that grows it.
+      device_ids: %{},
       session_id: session_id,
       stt_mod: stt_mod,
       stt_pid: stt_pid,
@@ -395,6 +415,20 @@ defmodule App.Conversations.Conversation do
     {:keep_state, data, actions}
   end
 
+  # A CLAIM. A wake word heard by a device that is NOT the bound one hands it the
+  # conversation — handoff triggers on intent (speaking), never on connecting — and then runs
+  # exactly as if it had been bound all along. Unconditional: last speaker wins.
+  #
+  # Matched ahead of the honoured clauses below, and safe as direct recursion only because
+  # every remaining {:wake_detected, from} clause returns an explicit {:keep_state, data, …}:
+  # a :keep_state_and_data in there would revert to the OUTER data and silently discard the
+  # rebind.
+  def handle_event(:cast, {:wake_detected, from}, s, %{client: client} = data)
+      when from != client do
+    Logger.info("[conn] claimed by a non-bound device (wake)")
+    handle_event(:cast, {:wake_detected, from}, s, claim(data, from))
+  end
+
   # Device-side wake: the local keyword spotter fired. Only meaningful while locked (else
   # a no-op) — mirrors WakeWord's transcript-driven unlock but skips waiting for a transcript
   # the server may never fully see (see wake_detected/1 doc).
@@ -412,24 +446,29 @@ defmodule App.Conversations.Conversation do
   def handle_event(:cast, {:wake_detected, from}, _s, %{client: from} = data),
     do: {:keep_state, data}
 
-  def handle_event(:cast, {:wake_detected, _from}, _s, data) do
-    Logger.debug("[conn] dropped wake_detected cast from a non-bound client")
-    {:keep_state, data}
-  end
-
   def handle_event(:cast, {:set_relock_ms, ms}, _s, data) when is_integer(ms) and ms > 0,
     do: {:keep_state, %{data | relock_ms: ms}}
 
   def handle_event(:cast, {:set_relock_ms, _ms}, _s, data), do: {:keep_state, data}
 
-  def handle_event(:cast, {:set_client, client}, _s, data) do
-    data = %{data | client: client}
-    send_state_snapshot(data)
-    {:keep_state, data, [{{:timeout, :client_linger}, :infinity, :cancel}]}
+  # A channel joined. See join/2 for the binding rule; the decision lives here, inside the
+  # FSM, so a lookup -> decide -> cast race is impossible.
+  def handle_event(:cast, {:join, from, device_id}, _s, data) do
+    data = remember_device(data, from, device_id)
+
+    if bind_on_join?(data, from, device_id) do
+      data = rebind(data, from, device_id)
+      send_state_snapshot(data, from, true)
+      {:keep_state, data, [{{:timeout, :client_linger}, :infinity, :cancel}]}
+    else
+      Logger.info("[conn] standby join — another device holds the conversation")
+      send_state_snapshot(data, from, false)
+      {:keep_state, data}
+    end
   end
 
   # Only the CURRENTLY bound channel arms the linger — a stale channel (another device took
-  # over via set_client) terminating must not schedule the death of a session in active use.
+  # over via a join or a claim) terminating must not schedule the death of a session in use.
   def handle_event(:cast, {:client_disconnected, from}, _s, %{client: from} = data) do
     Logger.info("[conn] client gone — lingering #{linger_ms()}ms for a rebind")
     {:keep_state, data, [{{:timeout, :client_linger}, linger_ms(), :expire}]}
@@ -444,6 +483,14 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :clear_memory, _s, data),
     do: {:keep_state, reset_turn_fields(data)}
+
+  # A CLAIM, exactly as for wake_detected above: a PTT press from a non-bound device takes the
+  # conversation and then runs the ordinary press handling. Same recursion contract — every
+  # {:ptt_press, from} clause below returns an explicit {:keep_state, data, …}.
+  def handle_event(:cast, {:ptt_press, from}, s, %{client: client} = data) when from != client do
+    Logger.info("[conn] claimed by a non-bound device (ptt)")
+    handle_event(:cast, {:ptt_press, from}, s, claim(data, from))
+  end
 
   # Explicit intent always wins: a locked conversation unlocks first. In auto/voice-activation
   # mode (ptt_mode: false) there's no held-mic phase about to start and no in-flight turn
@@ -490,11 +537,6 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, {:ptt_press, from}, _s, %{client: from} = data),
     do: {:keep_state, data}
-
-  def handle_event(:cast, {:ptt_press, _from}, _s, data) do
-    Logger.debug("[conn] dropped ptt_press cast from a non-bound client")
-    {:keep_state, data}
-  end
 
   # The client delivered (image) or failed (nil) the frame we asked for. Match the ref so a stale
   # frame from an earlier request can't attach here; then start the brain (with the image, or
@@ -1548,14 +1590,60 @@ defmodule App.Conversations.Conversation do
 
   defp notify_locked(_data), do: :ok
 
-  # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
-  # non-listening phase — the client only needs the orb-level distinction.
-  defp send_state_snapshot(%{client: client} = data) when is_pid(client) do
-    phase = if data.policy.phase == :listening, do: "listening", else: "busy"
-    send(client, {:to_client, {:state, %{phase: phase, locked: data.locked}}})
+  # `bound` and `locked` are deliberately separate facts ("someone else owns the conversation"
+  # vs "the wake gate is shut"); folding them together would make the client's gate a function
+  # of whichever message landed last.
+  defp notify_bound(%{client: client}, bound) when is_pid(client),
+    do: send(client, {:to_client, {:bound, bound}})
+
+  defp notify_bound(_data, _bound), do: :ok
+
+  # ---- device binding (handoff) ----
+
+  # Bind the joining channel when nothing live is bound, when it is the same device coming
+  # back, when it is already the bound channel, or when it sent no device id at all (an older
+  # client: fall back to today's bind-on-join rather than stranding it in standby forever).
+  defp bind_on_join?(%{client: client, device_id: bound_id}, from, device_id) do
+    from == client or not live?(client) or is_nil(device_id) or device_id == bound_id
   end
 
-  defp send_state_snapshot(_data), do: :ok
+  # Hand the conversation to `from`, telling a DIFFERENT live client that it lost the floor.
+  defp rebind(%{client: client} = data, from, device_id) do
+    if live?(client) and client != from, do: send(client, {:to_client, {:bound, false}})
+    %{data | client: from, device_id: device_id}
+  end
+
+  # A claim (wake / ptt) carries only the sender, so recover its device id from the join it
+  # made earlier — a standby device is a joined device.
+  defp claim(data, from) do
+    data = rebind(data, from, Map.get(data.device_ids, from))
+    notify_bound(data, true)
+    data
+  end
+
+  defp remember_device(data, from, device_id) do
+    ids =
+      data.device_ids
+      |> Enum.filter(fn {pid, _} -> Process.alive?(pid) end)
+      |> Map.new()
+      |> Map.put(from, device_id)
+
+    %{data | device_ids: ids}
+  end
+
+  defp live?(pid), do: is_pid(pid) and Process.alive?(pid)
+
+  # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
+  # non-listening phase — the client only needs the orb-level distinction. `bound` tells a
+  # standby join that it is connected but is not the audio owner.
+  defp send_state_snapshot(data), do: send_state_snapshot(data, data.client, true)
+
+  defp send_state_snapshot(data, target, bound) when is_pid(target) do
+    phase = if data.policy.phase == :listening, do: "listening", else: "busy"
+    send(target, {:to_client, {:state, %{phase: phase, locked: data.locked, bound: bound}}})
+  end
+
+  defp send_state_snapshot(_data, _target, _bound), do: :ok
 
   defp run_effects(effects, data), do: Enum.reduce(effects, {data, []}, &run_effect/2)
 

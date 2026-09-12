@@ -1685,30 +1685,36 @@ defmodule App.Conversations.ConversationTest do
 
   # A process that forwards every message it receives to `test_pid`, wrapped as
   # `{:proxied, msg}` — stands in for a rebinding client (a rejoining channel) in tests.
-  defp spawn_client_proxy(test_pid) do
-    spawn(fn -> client_proxy_loop(test_pid) end)
+  # A stand-in for a second device: a process that forwards everything the Conversation sends
+  # it to the test, tagged so two of them can be told apart in one test.
+  defp spawn_client_proxy(test_pid, tag \\ :proxied) do
+    spawn(fn -> client_proxy_loop(test_pid, tag) end)
   end
 
-  defp client_proxy_loop(test_pid) do
+  defp client_proxy_loop(test_pid, tag) do
     receive do
       msg ->
-        send(test_pid, {:proxied, msg})
-        client_proxy_loop(test_pid)
+        send(test_pid, {tag, msg})
+        client_proxy_loop(test_pid, tag)
     end
   end
 
   describe "client rebind + linger" do
-    test "set_client swaps the outbound target and pushes a state snapshot" do
+    test "a rejoining channel swaps the outbound target and pushes a state snapshot" do
       pid = start_conv()
       new_client = spawn_client_proxy(self())
-      Conversation.set_client(pid, new_client)
-      assert_receive {:proxied, {:to_client, {:state, %{phase: "listening", locked: false}}}}
+      # no device_id = the legacy fallback: bind on join, as before handoff existed
+      :gen_statem.cast(pid, {:join, new_client, nil})
+
+      assert_receive {:proxied,
+                      {:to_client, {:state, %{phase: "listening", locked: false, bound: true}}}}
+
       # subsequent outbound goes to the new client, not the old (this test process)
       send(pid, {:brain_text, "x"})
       refute_receive {:to_client, {:brain_delta, _}}, 100
     end
 
-    test "set_client mid-turn snapshots the phase as busy" do
+    test "a rejoining channel mid-turn snapshots the phase as busy" do
       # Hold the brain stream open so the turn can't drain back to :listening before we rebind.
       Application.put_env(:app, :fake_brain_done_ms, 5_000)
       on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
@@ -1720,8 +1726,8 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:audio, :reflex, _}}, 1000
 
       new_client = spawn_client_proxy(self())
-      Conversation.set_client(pid, new_client)
-      assert_receive {:proxied, {:to_client, {:state, %{phase: "busy", locked: _}}}}
+      :gen_statem.cast(pid, {:join, new_client, nil})
+      assert_receive {:proxied, {:to_client, {:state, %{phase: "busy", locked: _, bound: true}}}}
     end
 
     test "client_disconnected from the CURRENT client stops the session after the linger" do
@@ -1743,12 +1749,12 @@ defmodule App.Conversations.ConversationTest do
       assert Process.alive?(pid)
     end
 
-    test "set_client cancels a pending linger" do
+    test "a rejoin cancels a pending linger" do
       Application.put_env(:app, :client_linger_ms, 80)
       on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
       pid = start_conv()
       Conversation.client_disconnected(pid, self())
-      Conversation.set_client(pid, self())
+      Conversation.join(pid, "dev-a")
       Process.sleep(200)
       assert Process.alive?(pid)
     end
@@ -1879,21 +1885,20 @@ defmodule App.Conversations.ConversationTest do
       %{pid: pid, stale: stale}
     end
 
-    test "wake_detected from a stale device does not unlock the bound client", %{
+    # wake_detected and ptt_press are deliberately NOT in this describe block: they are
+    # CLAIMS, not drops (see "conversation handoff" below). What still holds for them is that
+    # the unlock follows the conversation to the claiming device instead of firing the bound
+    # device's gate — the live cost bug this guard was added for.
+    test "wake_detected from another device does not unlock the device it took over from", %{
       pid: pid,
       stale: stale
     } do
       Conversation.set_voice_activation(pid, true)
       assert_receive {:to_client, {:locked, true}}, 500
 
-      # The stale device "hears" the wake word. This must not reach the bound client.
       :gen_statem.cast(pid, {:wake_detected, stale})
+      assert_receive {:to_client, {:bound, false}}, 500
       refute_receive {:to_client, {:locked, false}}, 200
-    end
-
-    test "ptt_press from a stale device does not start a turn", %{pid: pid, stale: stale} do
-      :gen_statem.cast(pid, {:ptt_press, stale})
-      refute_receive {:to_client, _}, 200
     end
 
     test "set_ptt from a stale device does not re-mode the bound client", %{
@@ -1918,6 +1923,104 @@ defmodule App.Conversations.ConversationTest do
       # from the test process = the bound client
       Conversation.wake_detected(pid)
       assert_receive {:to_client, {:locked, false}}, 500
+    end
+  end
+
+  describe "conversation handoff (claims and standby joins)" do
+    test "a wake from a non-bound device claims the conversation" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      other = spawn_client_proxy(self())
+      :gen_statem.cast(pid, {:wake_detected, other})
+
+      # both sides are told, and the wake itself is handled for the NEW owner
+      assert_receive {:to_client, {:bound, false}}, 500
+      assert_receive {:proxied, {:to_client, {:bound, true}}}, 500
+      assert_receive {:proxied, {:to_client, {:locked, false}}}, 500
+      refute_receive {:to_client, {:locked, false}}, 200
+
+      # the rebind PERSISTED (the recursion didn't discard it): this process is now the
+      # non-bound one, so its own wake re-claims rather than being honoured silently.
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:bound, true}}, 500
+      assert_receive {:proxied, {:to_client, {:bound, false}}}, 500
+    end
+
+    test "a claim from the already-bound device does not re-push bound" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+      refute_receive {:to_client, {:bound, _}}, 200
+    end
+
+    test "ptt_press from a non-bound device also claims, and still runs PTT handling" do
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      other = spawn_client_proxy(self())
+      :gen_statem.cast(pid, {:ptt_press, other})
+
+      assert_receive {:to_client, {:bound, false}}, 500
+      assert_receive {:proxied, {:to_client, {:bound, true}}}, 500
+      # the press's own effect (explicit intent unlocks) ran, for the claiming device
+      assert_receive {:proxied, {:to_client, {:locked, false}}}, 500
+    end
+
+    test "a join from a different device goes standby and steals nothing" do
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+      assert_receive {:to_client, {:state, %{bound: true}}}, 500
+
+      other = spawn_client_proxy(self())
+      :gen_statem.cast(pid, {:join, other, "tablet"})
+
+      assert_receive {:proxied, {:to_client, {:state, %{bound: false}}}}, 500
+      refute_receive {:to_client, {:bound, _}}, 200
+
+      # still bound here: our own wake is honoured, not treated as a claim
+      Conversation.wake_detected(pid)
+      refute_receive {:to_client, {:bound, _}}, 200
+    end
+
+    test "a claim takes the device id too, so the displaced device can't steal it back" do
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+
+      tablet = spawn_client_proxy(self(), :tablet)
+      :gen_statem.cast(pid, {:join, tablet, "tablet"})
+      assert_receive {:tablet, {:to_client, {:state, %{bound: false}}}}, 500
+
+      :gen_statem.cast(pid, {:wake_detected, tablet})
+      assert_receive {:to_client, {:bound, false}}, 500
+
+      # the phone's socket blips and it rejoins with its own id — it must land in standby
+      phone = spawn_client_proxy(self(), :phone)
+      :gen_statem.cast(pid, {:join, phone, "phone"})
+      assert_receive {:phone, {:to_client, {:state, %{bound: false}}}}, 500
+      refute_receive {:tablet, {:to_client, {:bound, false}}}, 200
+    end
+
+    test "a join binds when the bound client is dead" do
+      pid = start_conv()
+      Conversation.join(pid, "phone")
+
+      # bind a channel that then dies (a device gone without a clean disconnect)
+      dead = spawn_client_proxy(self())
+      ref = Process.monitor(dead)
+      :gen_statem.cast(pid, {:join, dead, "phone"})
+      assert_receive {:proxied, {:to_client, {:state, %{bound: true}}}}, 500
+      Process.exit(dead, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^dead, :killed}, 500
+
+      # a fresh device with a DIFFERENT id must still take over — nothing live is bound
+      other = spawn_client_proxy(self())
+      :gen_statem.cast(pid, {:join, other, "tablet"})
+      assert_receive {:proxied, {:to_client, {:state, %{bound: true}}}}, 500
     end
   end
 end

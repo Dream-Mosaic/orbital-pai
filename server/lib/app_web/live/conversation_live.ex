@@ -28,10 +28,10 @@ defmodule AppWeb.ConversationLive do
     # Panel-only mode (`/?panel=books`): render just the named drawer, WITHOUT the
     # voice shell. The native client opens the unbuilt panels in a webview, and the
     # web Voice hook joins `voice:<session_id>` unconditionally in mounted()
-    # (assets/js/voice/index.js) — while VoiceChannel.join/3 -> bind_session/1 ->
-    # Conversation.set_client/2 is LAST-CLIENT-WINS. So a webview that mounted the
-    # hook would re-point the conversation's outbound stream at itself and cut the
-    # native client out mid-turn. No shell -> no hook -> no join.
+    # (assets/js/voice/index.js) with NO device_id — and a join with no device id is
+    # the legacy fallback that still binds on connect (see Conversation.join/2). So a
+    # webview that mounted the hook would re-point the conversation's outbound stream
+    # at itself and cut the native client out mid-turn. No shell -> no hook -> no join.
     # nil (absent or unrecognised) keeps every assign at today's value.
     panel = panel_modal(params["panel"])
 

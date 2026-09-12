@@ -308,6 +308,39 @@ defmodule AppWeb.VoiceChannelTest do
     end
   end
 
+  # These use `bob`, who — unlike `alice` — is NOT pre-joined by the setup block, so each
+  # test's first join is a genuine cold start rather than a rebind onto the setup's channel.
+  describe "device handoff on join" do
+    test "the device that cold-started the conversation rebinds on rejoining with the same device_id",
+         %{bob: bob} do
+      {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, _s2} = join_voice(bob, %{"device_id" => "dev-a"})
+      # the displaced channel is told it lost the floor — which only happens on a rebind.
+      # (A cold start never went through set_client, so its device_id had to be recorded by
+      # the join cast, or the very first device would be a stranger to its own reconnect.)
+      assert_push "bound", %{bound: false}, 500
+    end
+
+    test "a different device_id joins standby and displaces nobody", %{bob: bob} do
+      {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, _s2} = join_voice(bob, %{"device_id" => "dev-b"})
+      assert_push "state", %{bound: false}, 500
+      refute_push "bound", %{bound: false}, 200
+    end
+
+    test "a join with no device_id binds, as today", %{bob: bob} do
+      {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
+      assert_push "state", %{bound: true}, 500
+
+      {:ok, _reply, _s2} = join_voice(bob, %{})
+      assert_push "bound", %{bound: false}, 500
+    end
+  end
+
   # Connects + joins as `user` on their own session topic (mirrors the setup block's join),
   # for tests that need a fresh channel bound after some pre-join state (e.g. seeded turns).
   # `payload` defaults to the setup block's bare `%{}` join; pass %{"kiosk" => true} to join
