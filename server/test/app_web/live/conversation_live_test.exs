@@ -1010,7 +1010,8 @@ defmodule AppWeb.ConversationLiveTest do
 
   test "voice_activation pref renders on #voice (data attrs present)", %{conn: conn} do
     {:ok, _lv, html} = live(conn, "/")
-    assert html =~ ~s(data-voice-activation="false")
+    # New users default to voice_activation: true (task 6: on-device wake gating ships enabled).
+    assert html =~ ~s(data-voice-activation="true")
     assert html =~ ~s(data-assistant-name=)
   end
 

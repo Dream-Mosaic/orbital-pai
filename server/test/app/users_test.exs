@@ -159,6 +159,11 @@ defmodule App.UsersTest do
       assert user.email == "alice@x.com"
     end
 
+    test "a new user has voice activation on by default" do
+      {:ok, user} = Users.upsert_from_oidc(%{sub: "s-new", email: "alice@x.com", name: "Alice"})
+      assert user.voice_activation
+    end
+
     # THE migration step. A pre-existing row (every user today) must be ADOPTED, not duplicated.
     test "a listed email with an existing row binds the subject to THAT row" do
       {:ok, existing} = Users.upsert_allowed("alice@x.com")

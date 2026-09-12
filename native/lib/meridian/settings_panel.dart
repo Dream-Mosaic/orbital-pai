@@ -113,7 +113,7 @@ class SettingsPanelView extends StatelessWidget {
           const SizedBox(height: 8),
           _toggle(
             key: const ValueKey('toggle-voice_activation'),
-            label: 'Voice activation (say the wake word; wall only)',
+            label: 'Wake word (say "Henry" to start; saves streaming cost)',
             value: state.voiceActivation,
             onChanged: (v) => client.setPref('voice_activation', v),
           ),
@@ -332,6 +332,8 @@ class _LockdownSliderState extends State<_LockdownSlider> {
                     fontSize: 14, color: M.ink.withValues(alpha: 0.7))),
           ],
         ),
+        Text('How long Henry keeps listening after a conversation',
+            style: TextStyle(fontSize: 12, color: M.ink.withValues(alpha: 0.6))),
         Slider(
           value: display.clamp(10, 30),
           min: 10,

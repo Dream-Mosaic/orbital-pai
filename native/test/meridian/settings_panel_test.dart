@@ -63,7 +63,8 @@ void main() {
     expect(find.text('Voice'), findsOneWidget);
     expect(find.text('Default ABI (allow barge-in)'), findsOneWidget);
     expect(find.text('Default PTT (push-to-talk)'), findsOneWidget);
-    expect(find.text('Voice activation (say the wake word; wall only)'),
+    expect(
+        find.text('Wake word (say "Henry" to start; saves streaming cost)'),
         findsOneWidget);
     expect(find.text('Morning briefing (spoken your first turn that morning)'),
         findsOneWidget);
@@ -115,6 +116,20 @@ void main() {
 
     expect(find.text('Lockdown timeout (wall)'), findsOneWidget);
     expect(find.text('15s'), findsOneWidget);
+    expect(
+        find.text('How long Henry keeps listening after a conversation'),
+        findsOneWidget);
+
+    await conn.disconnect();
+  });
+
+  testWidgets('the voice activation toggle does not claim to be wall-only',
+      (tester) async {
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+
+    expect(find.textContaining('wall only'), findsNothing);
+    expect(find.textContaining('Wake word'), findsOneWidget);
 
     await conn.disconnect();
   });

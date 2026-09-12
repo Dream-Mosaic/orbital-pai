@@ -12,7 +12,7 @@ defmodule App.Users.User do
     field :oidc_subject, :string
     field :default_abi, :boolean, default: false
     field :default_ptt, :boolean, default: false
-    field :voice_activation, :boolean, default: false
+    field :voice_activation, :boolean, default: true
     field :relock_seconds, :integer, default: 15
     # morning briefing: local "HH:MM" (nil = off) + the local date last DELIVERED (once/day)
     field :briefing_time, :string
