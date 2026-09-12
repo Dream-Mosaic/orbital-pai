@@ -300,4 +300,89 @@ void main() {
     await settle();
     expect(b.fake.binaryFrames, isNotEmpty);
   });
+
+  test('disposing a VoiceController disposes ITS spotter for good, not '
+      'merely resets it (New 1)', () async {
+    // Models the sign-out/sign-in sequence main.dart actually drives:
+    // `_teardownShell` calls `_vc?.dispose()` on the outgoing controller,
+    // then a fresh sign-in builds a brand new `VoiceController` (and a
+    // brand new `SherpaWakeSpotter`) via `_ensureConnection`. If `dispose()`
+    // only ever reset the old spotter (what every ordinary mic teardown
+    // already does via `_release`/`stop()`), the old ONNX engine would never
+    // be freed and would leak for the rest of the process.
+    final spotterA = FakeSpotter();
+    final a = build(spotter: spotterA);
+    addTearDown(a.conn.dispose);
+    await a.conn.connect();
+    await settle();
+    await a.vc.startMic();
+    await settle();
+    expect(spotterA.disposed, isFalse, reason: 'sanity: alive while in use');
+
+    a.vc.dispose();
+    await settle();
+
+    expect(spotterA.disposed, isTrue,
+        reason: 'VoiceController.dispose() must free its own spotter, not '
+            'merely reset it');
+    expect(spotterA.stopCalls, greaterThanOrEqualTo(1),
+        reason: 'the ordinary mic-teardown reset (_release) still runs too, '
+            'same as any other mic teardown');
+
+    // The NEXT sign-in's controller gets its OWN fresh spotter, entirely
+    // unaffected by the first controller's disposal.
+    final spotterB = FakeSpotter();
+    final b = build(spotter: spotterB);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    expect(spotterB.disposed, isFalse);
+    expect(b.vc.micOn, isTrue);
+  });
+
+  test('a superseded start does not reset the spotter out from under the '
+      'session that replaced it (New 2)', () async {
+    // `_spotter` is ONE instance shared by every mic session on this
+    // controller, not one per attempt. Session A supersedes itself (via a
+    // stop+restart while its own `_spotter.start()` await is still in
+    // flight) and must NOT call `_spotter.stop()` on the way out once it
+    // resumes — the live session that replaced it (B) may already be
+    // decoding, and a stray reset would drop a wake word spoken at exactly
+    // that moment.
+    final gate = Completer<void>();
+    final spotter = FakeSpotter(available: false, loadAfter: gate.future);
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    // Session A: proceeds up to (and blocks on) `await _spotter.start()`.
+    final startingA = b.vc.startMic();
+    await settle();
+
+    // Supersede it: a deliberate stop (this is what legitimately resets the
+    // spotter once, via `_release`) followed by a fresh start — session B —
+    // which reaches the SAME blocking await on the SAME shared spotter.
+    await b.vc.stopMic();
+    final startingB = b.vc.startMic();
+    await settle();
+    expect(spotter.stopCalls, 1, reason: 'sanity: only the deliberate stop so far');
+
+    // Release both attempts at once. A resumes first (it awaited first) and
+    // must see itself superseded; B resumes and must proceed normally.
+    gate.complete();
+    await startingA;
+    await startingB;
+    await settle();
+
+    expect(b.vc.micOn, isTrue, reason: 'session B must have come up normally');
+    expect(spotter.stopCalls, 1,
+        reason: 'the superseded session A must not call stop() again on its '
+            'way out — that would reset the spotter out from under B');
+  });
 }

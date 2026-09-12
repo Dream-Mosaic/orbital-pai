@@ -961,15 +961,20 @@ class VoiceController extends ChangeNotifier {
       });
       // A dispose or a newer session superseding this one during that await
       // is the same race the identical() check above guards — checked again
-      // rather than assumed, for the same reason. `_spotter.stop()` here is
-      // belt-and-braces: `SherpaWakeSpotter.start()` also defends itself
-      // against being entered twice without an intervening stop(), but
-      // freeing promptly rather than on the next start() is better hygiene
-      // when nothing guarantees there IS a next one (a superseded/failed
-      // attempt may be the last for a while).
+      // rather than assumed, for the same reason.
+      //
+      // Deliberately NOT calling `_spotter.stop()` here: `_spotter` is ONE
+      // instance shared across every mic session, not one per attempt, and
+      // this branch's own condition already proves we are NOT the current
+      // session — `identical(_micState.session, session)` is false the
+      // instant we reach it. If a newer session raced ahead and is already
+      // streaming, it may already be mid-decode; resetting the shared
+      // decoder out from under it here would drop a wake word spoken at
+      // exactly that moment. Whatever legitimately owns the CURRENT session
+      // resets the spotter through `_release` when IT tears down; a
+      // superseded loser has no business touching shared state at all.
       if (_disposed || !identical(_micState.session, session)) {
         unawaited(session.stop());
-        unawaited(_spotter.stop());
         return;
       }
       // Subscribe BEFORE recording that we are listening. `stream.listen` can
@@ -1040,17 +1045,21 @@ class VoiceController extends ChangeNotifier {
       _safeNotify();
     } catch (e) {
       // A `stream.listen` that throws leaves a session running with nobody on
-      // it; close it. Also a no-op against a newer owner. The spotter may
-      // have started (or be mid-start) for this same attempt with nothing
-      // else left to stop it — belt-and-braces alongside
-      // `SherpaWakeSpotter.start()`'s own defence against being entered
-      // twice with no intervening stop().
+      // it; close it. Also a no-op against a newer owner.
       unawaited(session.stop());
-      unawaited(_spotter.stop());
       // Only OUR failure may clear the controller's intent — if a newer
-      // session has taken over, the intent is its business now.
+      // session has taken over, the intent is its business now. The SAME
+      // check gates the spotter reset: unlike `session.stop()` (this
+      // attempt's own recorder, always safe to close), `_spotter` is ONE
+      // instance shared across every mic session. This catch can be reached
+      // by a session that was ALREADY superseded before it threw (the
+      // `await session.stream`/`await _spotter.start()` guards above rethrow
+      // rather than swallow that race) — resetting the shared decoder in
+      // that case could drop a wake word the newer, live session is mid-way
+      // through hearing.
       if (identical(_micState.session, session)) {
         _micState = _micState.captureOff();
+        unawaited(_spotter.stop());
       }
       _log('mic start failed: $e');
       _safeNotify();
@@ -1195,6 +1204,14 @@ class VoiceController extends ChangeNotifier {
     _micState = MicState.idle;
     unawaited(held.loan?.stop());
     unawaited(_release(held));
+    // THE one place `_spotter.dispose()` is called. `_release` above (and
+    // every other mic-teardown path) only ever calls `_spotter.stop()` —
+    // cheap, reset-only, meant to leave the engine warm for a mic that comes
+    // back. This controller itself is going away for good, so its spotter
+    // goes with it: otherwise a fresh sign-in building a fresh
+    // `VoiceController` (and a fresh `SherpaWakeSpotter`) leaks the previous
+    // one's ONNX engine for the rest of the process.
+    unawaited(_spotter.dispose());
     if (_playerReady) {
       _player.dispose();
       _playerReady = false;

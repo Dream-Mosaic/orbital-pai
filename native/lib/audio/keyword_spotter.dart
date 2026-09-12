@@ -40,9 +40,24 @@ abstract interface class WakeSpotter {
   /// fires.
   bool offer(Uint8List pcm16);
 
+  /// Reset in-flight decode state, cheaply, for reuse on the NEXT [start] —
+  /// called on every mic-session teardown (see `VoiceController._release`),
+  /// auto-restart backoff included. Deliberately does NOT release the engine
+  /// — see [dispose] for that.
   Future<void> stop();
 
-  /// False when the model failed to load — callers must fail open.
+  /// Release the engine for good. Unlike [stop] (cheap, reset-only, called
+  /// on every ordinary mic teardown so the engine stays warm across
+  /// restarts), this frees the underlying native resources and must be
+  /// called exactly once, when THIS SPOTTER ITSELF is going away — i.e. from
+  /// `VoiceController.dispose()`, never from a mic-session teardown. A
+  /// controller rebuilt after this (e.g. a fresh sign-in) constructs a new
+  /// [WakeSpotter], so nothing needs `dispose()` to leave this instance
+  /// reusable. Idempotent, and safe even if [start] never succeeded.
+  Future<void> dispose();
+
+  /// False when the model failed to load, or after [dispose] — callers must
+  /// fail open.
   bool get available;
 }
 
@@ -115,11 +130,23 @@ class SherpaWakeSpotter implements WakeSpotter {
   sherpa_onnx.OnlineStream? _stream;
   bool _available = false;
 
+  /// Set once, by [dispose]. A disposed spotter must never be resurrected —
+  /// [start] would otherwise rebuild an engine (fine) but callers that raced
+  /// [dispose] against an in-flight [start]/[offer] could still touch a
+  /// pointer freed out from under them; latching this is what makes that
+  /// impossible rather than merely unlikely.
+  bool _disposed = false;
+
   @override
   bool get available => _available;
 
   @override
   Future<void> start() async {
+    // A disposed spotter is done for good — see [dispose]. Restarting it
+    // would mean allocating a new engine on an instance nothing holds a
+    // reason to keep alive, and — the actual hazard — racing whatever freed
+    // `_spotter`/`_stream` out from under a start already in flight.
+    if (_disposed) return;
     // Already loaded: reuse the live engine rather than tearing it down and
     // rebuilding it. This is what makes a restart cheap, and it is also what
     // makes `start()` safe to call twice in a row with no intervening
@@ -163,7 +190,7 @@ class SherpaWakeSpotter implements WakeSpotter {
 
   @override
   bool offer(Uint8List pcm16) {
-    if (!_available) return false;
+    if (_disposed || !_available) return false;
     final spotter = _spotter;
     final stream = _stream;
     if (spotter == null || stream == null) return false;
@@ -193,7 +220,9 @@ class SherpaWakeSpotter implements WakeSpotter {
     // decoder state only, so the next `start()` (a no-op once loaded) begins
     // clean rather than mid-keyword. Guarded because `available` may already
     // be false here (a `stop()` reached before any successful `start()`, or
-    // after a load failure) with nothing live to reset.
+    // after a load failure) with nothing live to reset, and because a
+    // disposed spotter has nothing left to reset either.
+    if (_disposed) return;
     final spotter = _spotter;
     final stream = _stream;
     if (spotter == null || stream == null) return;
@@ -205,5 +234,19 @@ class SherpaWakeSpotter implements WakeSpotter {
       // non-throwing end to end.
       debugPrint('SherpaWakeSpotter: reset on stop() failed: $e');
     }
+  }
+
+  @override
+  Future<void> dispose() async {
+    // Idempotent: VoiceController.dispose() is the only intended caller and
+    // calls this once, but a double-call (a defensive future caller, a test)
+    // must not double-free.
+    if (_disposed) return;
+    _disposed = true;
+    _available = false;
+    _stream?.free();
+    _stream = null;
+    _spotter?.free();
+    _spotter = null;
   }
 }

@@ -402,10 +402,17 @@ class FakeSpotter implements WakeSpotter {
   int startCalls = 0;
   int stopCalls = 0;
   int offerCalls = 0;
+  int disposeCalls = 0;
+
+  /// Set by [dispose] — a test's proof that a torn-down `VoiceController`
+  /// actually let go of ITS spotter, as opposed to merely resetting it
+  /// (which `stop()` already does on every ordinary mic teardown).
+  bool disposed = false;
 
   @override
   Future<void> start() async {
     startCalls++;
+    if (disposed) return;
     final loadAfter = _loadAfter;
     if (loadAfter == null) return;
     await loadAfter;
@@ -415,13 +422,20 @@ class FakeSpotter implements WakeSpotter {
   @override
   bool offer(Uint8List pcm16) {
     offerCalls++;
-    if (!fireNext) return false;
+    if (disposed || !fireNext) return false;
     fireNext = false;
     return true;
   }
 
   @override
   Future<void> stop() async => stopCalls++;
+
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+    disposed = true;
+    _available = false;
+  }
 }
 
 /// Drain a handful of event-loop turns. `Future.delayed(Duration.zero)` (not
