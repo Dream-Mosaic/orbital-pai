@@ -148,6 +148,13 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   settles it: a peak day of ~220K credits is 20.4h of audio at 3 credits/s versus a physically
   impossible 61h at 1 credit/s. This is how July's 1,105,547 STT credits resolve to ~102h rather
   than an impossible 307h — i.e. there is no leaked-socket bug to hunt.
+- **The morning briefing waiting for a wake is DELIBERATE, not a regression.** With
+  `voice_activation` defaulting on, an `:after_next_turn` briefing no longer fires the moment the
+  socket connects — it waits until you actually say "Henry". That is the point: a connected device
+  is not a present human, and a briefing spoken to an empty room is worse than one that waits. If
+  a future change makes the briefing bypass the gate, it has broken a property the user chose on
+  purpose (2026-09-11). Fired **reminders** are different and correctly DO bypass it — they run
+  `:when_idle` → `start_agenda_turn` → `feed/2`, because a reminder is explicit prior intent.
 - **Cartesia TTS contexts expire 1s after their last AUDIO output** (their docs) — there is NO
   keepalive, and the timer is audio-based, so you CANNOT hold a context open with whitespace/empty
   continuations (they make no audio). When a tool round is slow, the **bridge** plays its ~2.5s of
