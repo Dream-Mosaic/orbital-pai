@@ -366,6 +366,11 @@ defmodule AppWeb.VoiceChannelTest do
 
     test "a claim from a non-bound device pushes history with replace: true to the claiming channel",
          %{bob: bob} do
+      # Seed a real turn so the assertion below can pin the actual payload — a bare
+      # `%{turns: _turns}` pattern would also match a push of empty history, which is exactly
+      # the shape a regression here would take.
+      App.Memory.persist_turn(%{user_id: bob.id, user_text: "q1", brain_text: "a1"})
+
       {:ok, _reply, _s1} = join_voice(bob, %{"device_id" => "dev-a"})
       assert_push "state", %{bound: true}, 500
 
@@ -377,7 +382,7 @@ defmodule AppWeb.VoiceChannelTest do
       push(s2, "wake_detected", %{})
 
       assert_push "bound", %{bound: true}, 500
-      assert_push "history", %{turns: _turns, replace: true}, 500
+      assert_push "history", %{turns: [%{you: "q1", assistant: "a1"}], replace: true}, 500
     end
 
     test "the device that lost the floor on a claim gets `bound: false` but no replace-history push",

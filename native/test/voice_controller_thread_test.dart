@@ -128,6 +128,19 @@ void main() {
     expect(vc.thread.last, isA<ThreadDivider>());
   });
 
+  test('a replace with an empty turns list is a no-op — it leaves the on-screen thread alone', () {
+    // history/1 can legitimately come back [] on a claim (a fresh session, or the accepted
+    // persist-race where the last turn hasn't landed in the DB yet). Wiping the claiming
+    // device's own conversation over that would be worse than leaving it slightly stale.
+    vc.debugHandleMessage(msg('transcript', const {'text': 'still here'}));
+    expect(vc.thread, hasLength(1));
+
+    vc.debugHandleMessage(msg('history', const {'turns': [], 'replace': true}));
+
+    expect(vc.thread, hasLength(1));
+    expect((vc.thread.single as ThreadLine).text, 'still here');
+  });
+
   test('brain deltas stream into ONE plaintext line, then snap to markdown', () {
     vc.debugHandleMessage(msg('thinking', const {}));
     expect(vc.thread.single, isA<ThreadLine>());

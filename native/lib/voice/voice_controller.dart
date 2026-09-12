@@ -731,7 +731,13 @@ class VoiceController extends ChangeNotifier {
         final turns = (p['turns'] as List?) ?? const [];
         final replace = (p['replace'] as bool?) ?? false;
         _log('history: ${turns.length} turns${replace ? ' (replace)' : ''}');
-        if (replace) {
+        if (replace && turns.isEmpty) {
+          // A claim's history/1 can legitimately come back [] — a fresh session, or the
+          // accepted persist-race where the last turn hasn't landed in the DB yet. Wiping
+          // the claiming device's on-screen conversation over that would be a far worse
+          // outcome than leaving it slightly stale, so an empty replace is a no-op: skip it
+          // entirely and leave whatever is already on screen alone.
+        } else if (replace) {
           // A claim re-syncs the thread: the conversation may have roamed to another
           // device while this one sat in standby, so its on-screen thread can be stale
           // (or, if it already caught up via its own turn events, redundant). Either
@@ -748,7 +754,7 @@ class VoiceController extends ChangeNotifier {
             if (you != null) _addLine('you', you);
             if (assistant != null) _addLine('brain', assistant);
           }
-          if (turns.isNotEmpty) _thread.add(const ThreadDivider());
+          _thread.add(const ThreadDivider());
           // Leave the one-shot guard set so a later plain (unflagged) history push
           // — e.g. a stray rebind — can't re-append on top of this rebuild.
           _historyBackfilled = true;

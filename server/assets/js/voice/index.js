@@ -277,11 +277,29 @@ export const Voice = {
     // history and must not duplicate lines already on screen. A claim (`replace: true`) is the
     // exception: the conversation may have roamed to another device while this one sat idle, so
     // its log can be stale — clear it and rebuild from the server's copy instead of appending.
+    //
+    // An empty `turns` on a replace is a no-op, never a wipe: a claim's history/1 can legitimately
+    // come back [] (a fresh session, or the accepted persist-race where the last turn hasn't
+    // landed in the DB yet), and erasing the claiming device's on-screen conversation over that
+    // would be far worse than leaving it slightly stale.
     this.channel.on("history", ({ turns, replace }) => {
+      if (!turns.length) return
       if (replace) {
-        for (const line of this.logEl.querySelectorAll(".voice-line, .voice-divider")) line.remove()
+        // Same handle set clear_log resets (:131), plus the state clear_log never had to touch:
+        // this device may have been mid-answer when it lost the floor (brainEl / thinkingEl still
+        // point at nodes we're about to detach — renderBrain/showThinking would otherwise keep
+        // writing into them all turn), and the previous turn's resolved tool chips + metrics line
+        // would otherwise survive ABOVE the resynced history since the rebuild below only appends.
+        this.clearThinking()
+        this.logEl.innerHTML = ""
+        this.brainEl = null
+        this.metricsEl = null
+        this.toolChips = []
+        this.lastYouLine = null
+        this.lastAckableLine = null
+      } else if (this.logEl.querySelector(".voice-line")) {
+        return
       }
-      if (!turns.length || (!replace && this.logEl.querySelector(".voice-line"))) return
       for (const t of turns) {
         if (t.you) this.addLine("you", t.you)
         if (t.assistant) this.addLine("brain", t.assistant)
