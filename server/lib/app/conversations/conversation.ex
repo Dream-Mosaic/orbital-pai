@@ -365,7 +365,8 @@ defmodule App.Conversations.Conversation do
   # the server may never fully see (see wake_detected/1 doc).
   def handle_event(:cast, :wake_detected, _s, %{voice_activation: true, locked: true} = data) do
     Logger.info("[wake] unlocked by device keyword spotter")
-    {:keep_state, unlock(data)}
+    data = unlock(data)
+    {:keep_state, data, [relock_action(data)]}
   end
 
   def handle_event(:cast, :wake_detected, _s, _data), do: :keep_state_and_data
@@ -397,6 +398,17 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, :clear_memory, _s, data),
     do: {:keep_state, reset_turn_fields(data)}
+
+  # Explicit intent always wins: a locked conversation unlocks first. In auto/voice-activation
+  # mode (ptt_mode: false) there's no held-mic phase about to start and no in-flight turn
+  # whose end would reactively re-arm the idle timer (feed/2's own cond does that for the
+  # barge-in branch below) — so arm the relock ourselves here, same as the transcript-driven
+  # unlock in handle_partial/2. Matched ahead of the generic recursion clause below.
+  def handle_event(:cast, :ptt_press, _s, %{locked: true, ptt_mode: false} = data) do
+    Logger.info("[wake] unlocked by ptt_press (explicit intent)")
+    data = unlock(data)
+    {:keep_state, data, [relock_action(data)]}
+  end
 
   # Explicit intent always wins: a locked conversation unlocks first, then falls through
   # (direct function recursion, not a re-cast) to the ordinary press handling below so a

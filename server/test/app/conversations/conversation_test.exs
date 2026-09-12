@@ -129,6 +129,21 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:locked, false}}, 500
     end
 
+    test "wake_detected arms the idle relock (an unanswered false-trigger still relocks)" do
+      Application.put_env(:app, :relock_ms, 60)
+      on_exit(fn -> Application.delete_env(:app, :relock_ms) end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      # drain the initial lock so the next {:locked, true} is unambiguously the re-lock
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.wake_detected(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+      # no speech follows (a spotter false-trigger) -- without an armed relock this would
+      # never fire and the conversation would stay unlocked indefinitely
+      assert_receive {:to_client, {:locked, true}}, 1000
+    end
+
     test "wake_detected while already unlocked is a no-op" do
       pid = start_conv()
       Conversation.set_voice_activation(pid, true)
@@ -153,6 +168,21 @@ defmodule App.Conversations.ConversationTest do
 
       Conversation.ptt_press(pid)
       assert_receive {:to_client, {:locked, false}}, 500
+    end
+
+    test "ptt_press in auto mode arms the idle relock (no held-mic phase to protect it)" do
+      Application.put_env(:app, :relock_ms, 60)
+      on_exit(fn -> Application.delete_env(:app, :relock_ms) end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      # drain the initial lock so the next {:locked, true} is unambiguously the re-lock
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      # ptt_mode is off by default (auto mode) -- ptt_press still unlocks (explicit intent),
+      # but nothing else happens here, so the relock must be armed or it never fires
+      Conversation.ptt_press(pid)
+      assert_receive {:to_client, {:locked, false}}, 500
+      assert_receive {:to_client, {:locked, true}}, 1000
     end
   end
 
