@@ -1,0 +1,101 @@
+/* Orbital P.A.I — Authentik brand CSS. Source of the colours: native/lib/meridian/tokens.dart.
+   Applied with apply.sh (PATCH core/brands/<uuid> branding_custom_css). Hooks were read off
+   the served /static/dist/styles/flow-2026.8.0.css; custom properties inherit into the
+   web components' shadow DOM, so the :root block does most of the work. */
+:root, :host, [data-theme=dark] {
+  --pf-global--BackgroundColor--dark-100: #07080F;
+  --pf-global--BackgroundColor--dark-200: #020309;
+  --pf-global--BackgroundColor--dark-300: #0D0F19;
+  --pf-global--BackgroundColor--100: #07080F;
+  --pf-global--BackgroundColor--150: #0D0F19;
+  --pf-global--BackgroundColor--200: #0D0F19;
+  --pf-global--BackgroundColor--light-100: #07080F;
+  --pf-global--BackgroundColor--light-200: #0D0F19;
+  --pf-global--BackgroundColor--light-300: #0D0F19;
+  --pf-global--Color--100: #E8EBF4;
+  --pf-global--Color--200: #9AA1B6;
+  --pf-global--Color--300: #5D647A;
+  --pf-global--Color--dark-100: #E8EBF4;
+  --pf-global--Color--dark-200: #9AA1B6;
+  --pf-global--Color--light-100: #E8EBF4;
+  --pf-global--Color--light-200: #9AA1B6;
+  --pf-global--BorderColor--100: rgba(255, 255, 255, 0.07);
+  --pf-global--BorderColor--200: rgba(255, 255, 255, 0.10);
+  --pf-global--BorderColor--300: rgba(255, 255, 255, 0.07);
+  --pf-global--BorderColor--dark-100: rgba(255, 255, 255, 0.10);
+  --pf-global--BorderColor--light-100: rgba(255, 255, 255, 0.07);
+  --pf-global--primary-color--100: #3ECF9A;
+  --pf-global--primary-color--200: #10B981;
+  --pf-global--primary-color--300: #10B981;
+  --pf-global--primary-color--dark-100: #3ECF9A;
+  --pf-global--primary-color--light-100: #6EE7B7;
+  --pf-global--active-color--100: #3ECF9A;
+  --pf-global--active-color--300: #6EE7B7;
+  --pf-global--link--Color: #3ECF9A;
+  --pf-global--link--Color--hover: #6EE7B7;
+  --pf-global--link--Color--light: #3ECF9A;
+  --pf-global--link--Color--light--hover: #6EE7B7;
+  --pf-global--link--Color--dark: #3ECF9A;
+  --pf-global--link--Color--dark--hover: #6EE7B7;
+  --pf-global--FontFamily--sans-serif: Inter, "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ak-font-family-sans-serif: Inter, "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ak-dark-background: #020309;
+  --ak-dark-background-darker: #020309;
+  --ak-dark-background-light: #07080F;
+  --ak-dark-background-lighter: #0D0F19;
+  --ak-dark-foreground: #E8EBF4;
+  --ak-dark-foreground-darker: #9AA1B6;
+  --ak-dark-foreground-link: #3ECF9A;
+  --ak-accent: #3ECF9A;
+  --ak-c-login__main--BackgroundColor: #07080F;
+  --ak-c-login__main--Color: #E8EBF4;
+  --pf-c-button--m-primary--Color: #020309;
+  --pf-c-button--m-primary--hover--Color: #020309;
+  --pf-c-button--m-primary--focus--Color: #020309;
+  --pf-c-button--m-primary--active--Color: #020309;
+  --pf-c-button--m-primary--BackgroundColor: #3ECF9A;
+  --pf-c-button--m-primary--hover--BackgroundColor: #6EE7B7;
+  --pf-c-button--m-primary--focus--BackgroundColor: #6EE7B7;
+  --pf-c-button--m-primary--active--BackgroundColor: #10B981;
+  --pf-c-form-control--BackgroundColor: #020309;
+  --pf-c-form-control--Color: #E8EBF4;
+  --pf-c-form-control--BorderBottomColor: rgba(255, 255, 255, 0.18);
+  --pf-c-form-control--focus--BorderBottomColor: #3ECF9A;
+  --pf-c-form-control--hover--BorderBottomColor: #6EE7B7;
+  color-scheme: dark;
+}
+
+/* Page ground: the flow background is set on the brand (branding_default_flow_background);
+   drop PatternFly's darkening filter so the orb's bloom shows as rendered. */
+.pf-c-background-image {
+  --pf-c-background-image--BackgroundColor: #020309;
+  --pf-c-background-image--Filter: none;
+}
+
+/* The login card: the Meridian shell — hairline border, soft radius, a touch of Henry-green bloom. */
+.pf-c-login__main {
+  background-color: #07080F;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  box-shadow: 0 0 90px rgba(16, 185, 129, 0.10), 0 24px 60px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+}
+
+.pf-c-login__main-header,
+.pf-c-login__main-body,
+.pf-c-login__main-footer {
+  background-color: transparent;
+}
+
+/* The brand logo lives in a shadow root; both spellings are covered. */
+.pf-c-brand,
+.pf-c-login__main-header img,
+ak-brand img {
+  max-height: 3.5rem;
+  width: auto;
+}
+
+.pf-c-login__footer,
+.pf-c-login__footer a {
+  color: #5D647A;
+}
