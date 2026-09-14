@@ -1079,11 +1079,24 @@ defmodule App.Conversations.Conversation do
 
   defp handle_partial(t, %{voice_activation: true, wake_hit: true} = data) do
     case WakeWord.match(t, data.config) do
+      # The PTT check is NOT redundant with handle_plain_partial's. Partials are
+      # cumulative, so once a wake has landed every later partial in the same
+      # breath still begins with "Henry" and keeps matching here — this branch,
+      # not the :none one below, is where a whole PTT-mode sentence ends up.
+      # Without the guard it fed the policy, drove the phase to :listening, and
+      # pushed `listening` to the client: the orb went amber and waveformed the
+      # user's voice while they were holding nothing. handle_endpoint's own PTT
+      # guard then (correctly) refused to endpoint any of it, which is why the
+      # words never resolved — amber forever, transcribing nothing.
       {:wake, rest} ->
-        if rest != "" and data.policy.phase == :listening,
-          do: send(data.client, {:to_client, {:partial, rest}})
+        if ptt_idle?(data) do
+          :keep_state_and_data
+        else
+          if rest != "" and data.policy.phase == :listening,
+            do: send(data.client, {:to_client, {:partial, rest}})
 
-        feed({:partial, t}, data)
+          feed({:partial, t}, data)
+        end
 
       :none ->
         handle_plain_partial(t, data)
@@ -1120,8 +1133,16 @@ defmodule App.Conversations.Conversation do
 
   defp unduck(data), do: data
 
+  # In PTT mode, audio arriving while the button is NOT held is not a turn — it
+  # is room noise a correct client would never have sent. Dropping it here is
+  # defence in depth: the client's WakeGate is the thing that should stop the
+  # bytes leaving the device (and pay the Ink-2 bill), but the server must not
+  # let a client bug drive the conversation into a listening phase either.
+  defp ptt_idle?(%{ptt_mode: true, holding: false}), do: true
+  defp ptt_idle?(_data), do: false
+
   defp handle_plain_partial(t, data) do
-    if data.ptt_mode and not data.holding do
+    if ptt_idle?(data) do
       :keep_state_and_data
     else
       if data.policy.phase == :listening, do: send(data.client, {:to_client, {:partial, t}})

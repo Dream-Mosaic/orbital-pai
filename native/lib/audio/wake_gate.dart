@@ -38,6 +38,7 @@ class WakeGate {
   final int _maxPreRollBytes;
 
   bool _locked = false;
+  bool _pttMode = false;
   bool _ptt = false;
   bool _wakeOpen = false;
   bool _flushPending = false;
@@ -51,15 +52,28 @@ class WakeGate {
   final Queue<Uint8List> _ring = Queue<Uint8List>();
   int _ringBytes = 0;
 
-  /// Whether audio currently passes through: bound to this device, AND
-  /// (unlocked, push-to-talk held, or a wake word opened the gate).
+  /// Whether audio currently passes through.
   ///
   /// `_bound` gates ahead of everything else, deliberately including PTT: a
   /// standby device's PTT press is a *claim* on the conversation, not proof
   /// it already holds it. The gate only opens once the server answers that
   /// claim with `bound: true` — overriding it here would let a second
   /// device's audio race the first device's live turn onto the wire.
-  bool get open => _bound && (!_locked || _ptt || _wakeOpen);
+  ///
+  /// **In push-to-talk MODE, only the held button opens the gate.** Neither
+  /// an unlocked conversation nor a wake detection does, because the whole
+  /// contract of PTT is that nothing leaves the device unless the user is
+  /// holding the button. Before this distinction existed the gate knew only
+  /// whether PTT was *held*, so `!_locked` alone held it open — and a PTT
+  /// session streamed continuously to Ink-2 (3 credits/second) from the
+  /// moment a wake unlocked the conversation until it relocked, while the
+  /// server correctly refused to endpoint any of it. Audio nobody asked for,
+  /// billed, and discarded.
+  bool get open {
+    if (!_bound) return false;
+    if (_pttMode) return _ptt;
+    return !_locked || _ptt || _wakeOpen;
+  }
 
   /// Mirrors the server's lock state. A relock (`locked == true`) must close
   /// a gate a prior wake detection opened, and drops any buffered pre-roll —
@@ -80,6 +94,17 @@ class WakeGate {
   /// lock state.
   void onPttHeld(bool held) {
     _ptt = held;
+  }
+
+  /// Mirrors whether push-to-talk MODE is switched on — distinct from
+  /// [onPttHeld], which is whether the button is down right now.
+  ///
+  /// Leaving PTT mode drops any stale held flag: the button cannot still be
+  /// down in a mode that no longer has one, and a stuck `_ptt` would hold the
+  /// gate open for the whole of the next hands-free session.
+  void onPttMode(bool enabled) {
+    _pttMode = enabled;
+    if (!enabled) _ptt = false;
   }
 
   /// Mirrors the server's `bound` fact: whether THIS device currently owns

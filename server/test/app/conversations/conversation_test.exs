@@ -2084,4 +2084,68 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:proxied, {:to_client, {:state, %{bound: true}}}}, 500
     end
   end
+
+  describe "PTT mode: a cumulative post-wake partial must not drive the phase" do
+    # Reported from a device: in PTT mode the orb sat amber and waveformed the
+    # user's voice while they held nothing, and never transcribed a word.
+    #
+    # Partials are CUMULATIVE, so once a wake has landed every later partial in
+    # the same breath still begins with the wake word and keeps matching the
+    # wake_hit clause of handle_partial/2 — not the plain clause underneath it,
+    # which was the only one carrying a PTT guard. So the whole sentence fed the
+    # policy, drove the phase to :listening and pushed `listening` to the client
+    # (amber + waveform), while handle_endpoint's own PTT guard correctly
+    # refused to endpoint any of it (never transcribed).
+
+    defp wake_then_speak(pid) do
+      # locked -> a partial carrying the name unlocks and sets wake_hit
+      Conversation.partial(pid, "henry")
+      assert_receive {:to_client, {:locked, false}}, 500
+      # ...and every following partial in the breath still carries it
+      Conversation.partial(pid, "henry what is the weather like today")
+    end
+
+    test "not holding: the partial is dropped, the phase never goes listening" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      Conversation.set_ptt(pid, true)
+
+      wake_then_speak(pid)
+
+      # The observable is the captioned partial. `{:to_client, :listening}` is
+      # only sent on a TRANSITION into the listening phase, and the phase is
+      # already :listening at rest — so its absence would prove nothing here.
+      refute_receive {:to_client, {:partial, _}}, 300
+    end
+
+    test "holding: the same partial is honoured, so PTT still works" do
+      # The guard must not cost PTT its actual job. Without this the fix above
+      # could be "drop everything in PTT mode" and still look green.
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      Conversation.set_ptt(pid, true)
+      Conversation.ptt_press(pid)
+
+      # NOT the stripped remainder: ptt_press unlocks without setting wake_hit,
+      # so this takes the plain-partial path, which captions the whole utterance.
+      Conversation.partial(pid, "henry what is the weather like today")
+      assert_receive {:to_client, {:partial, "henry what is the weather like today"}}, 500
+    end
+
+    test "hands-free is untouched: the same partial still drives the phase" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+      # no set_ptt -- auto mode
+
+      wake_then_speak(pid)
+
+      assert_receive {:to_client, {:partial, "what is the weather like today"}}, 500
+    end
+  end
 end

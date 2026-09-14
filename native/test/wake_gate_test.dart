@@ -143,4 +143,88 @@ void main() {
         reason: 'a redundant bound:true must not re-arm a flush of an '
             'already-drained (and stale) ring');
   });
+
+  group('push-to-talk MODE', () {
+    test('an unlocked conversation does NOT hold the gate open in PTT mode', () {
+      // The live cost bug. The gate knew only whether PTT was HELD, so once a
+      // wake unlocked the conversation `!_locked` held it wide open and a PTT
+      // session streamed continuously to Ink-2 at 3 credits/second — while the
+      // server's own PTT guard correctly refused to endpoint any of it. Audio
+      // nobody asked for, billed, and thrown away.
+      final g = WakeGate()..onPttMode(true);
+      expect(g.offer(chunk(320)).send, isFalse,
+          reason: 'unlocked is not consent in PTT mode; the button is');
+    });
+
+    test('holding the button opens it', () {
+      final g = WakeGate()
+        ..onPttMode(true)
+        ..onPttHeld(true);
+      expect(g.offer(chunk(320)).send, isTrue);
+    });
+
+    test('releasing the button closes it again', () {
+      final g = WakeGate()
+        ..onPttMode(true)
+        ..onPttHeld(true);
+      expect(g.offer(chunk(320)).send, isTrue);
+      g.onPttHeld(false);
+      expect(g.offer(chunk(320)).send, isFalse);
+    });
+
+    test('a wake detection does NOT open it in PTT mode', () {
+      // The local spotter still runs (it is free, and it is what lets a standby
+      // device claim), but in PTT mode the contract is that nothing leaves the
+      // device unless the user is holding the button. A wake word is not a
+      // button press.
+      final g = WakeGate()
+        ..onPttMode(true)
+        ..onWakeDetected();
+      expect(g.offer(chunk(320)).send, isFalse);
+    });
+
+    test('an unbound device stays shut even while holding', () {
+      final g = WakeGate()
+        ..onPttMode(true)
+        ..onBound(false)
+        ..onPttHeld(true);
+      expect(g.offer(chunk(320)).send, isFalse,
+          reason: 'a PTT press is a CLAIM on the conversation, not proof of '
+              'holding it — unchanged by this fix');
+    });
+
+    test('leaving PTT mode restores hands-free behaviour', () {
+      final g = WakeGate()..onPttMode(true);
+      expect(g.offer(chunk(320)).send, isFalse);
+      g.onPttMode(false);
+      expect(g.offer(chunk(320)).send, isTrue,
+          reason: 'unlocked and hands-free streams, exactly as before');
+    });
+
+    test('leaving PTT mode mid-hold does not leave the gate stuck open', () {
+      // Switching modes with the button down would otherwise strand `_ptt`
+      // true, and in hands-free that flag is an override — it would hold the
+      // gate open through the whole of the next locked session.
+      final g = WakeGate()
+        ..onPttMode(true)
+        ..onPttHeld(true);
+      g.onPttMode(false);
+      g.onLocked(true);
+      expect(g.offer(chunk(320)).send, isFalse,
+          reason: 'a stale held flag must not survive the mode it belonged to');
+    });
+
+    test('PTT mode still buffers pre-roll while closed', () {
+      // The press-then-speak race is the same one wake detection has: the user
+      // starts talking a beat before the button registers.
+      final g = WakeGate()..onPttMode(true);
+      for (var i = 0; i < 10; i++) {
+        g.offer(chunk(320));
+      }
+      g.onPttHeld(true);
+      // A held press is not a wake, so there is no armed flush — but the ring
+      // must still be there for the bound-transition flush to drain on a claim.
+      expect(g.offer(chunk(320)).send, isTrue);
+    });
+  });
 }

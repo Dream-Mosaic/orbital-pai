@@ -364,7 +364,18 @@ class VoiceController extends ChangeNotifier {
       case 'speaking':
         _turnState = TurnState.speaking;
       case 'listening':
-        _turnState = TurnState.listening;
+        // The server pushes `listening` on every transition back INTO its
+        // listening phase — i.e. after each turn completes. Hands-free, that is
+        // exactly right: the mic really is hot again.
+        //
+        // In PTT mode it is not. The phase means "ready for input"; the mic is
+        // only live while the button is held. Taking it at face value turned
+        // the orb amber after the first turn of a PTT session and left it
+        // there, telling the user they were being heard when nothing was
+        // leaving the device.
+        _turnState = _pttEnabled && !_pttHeld
+            ? TurnState.idle
+            : TurnState.listening;
       case 'thinking':
         _turnState = TurnState.thinking;
       default:
@@ -519,6 +530,13 @@ class VoiceController extends ChangeNotifier {
 
   void setPtt(bool enabled) {
     _pttEnabled = enabled;
+    // The gate has to know about the MODE, not only about the button: in PTT
+    // mode an unlocked conversation must not hold it open on its own.
+    _gate.onPttMode(enabled);
+    // Switching modes mid-hold leaves `_pttHeld` set with no button under it,
+    // and the server is told `holding: false` by its own set_ptt handler — so
+    // clear ours to match rather than let the two disagree.
+    if (!enabled) _pttHeld = false;
     _live?.push('ptt', {'enabled': enabled});
     _safeNotify();
     // index.js:396 — enabling PTT mode while powered off starts the mic.
