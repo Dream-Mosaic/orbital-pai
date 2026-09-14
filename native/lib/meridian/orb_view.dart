@@ -43,6 +43,15 @@ class _OrbViewState extends State<OrbView> with SingleTickerProviderStateMixin {
     _ticker = createTicker(_onTick);
     widget.frame.addListener(_syncTicker);
     _syncTicker();
+    // The painter is chosen per build, but nothing else in the tree is
+    // guaranteed to rebuild when the asset decode finishes — `advance` drives
+    // the repaint listenable without rebuilding. Without this the upgrade from
+    // fallback to shader rides on an incidental ancestor rebuild.
+    if (OrbShaderProgram.shader == null && !OrbShaderProgram.failed) {
+      OrbShaderProgram.load().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   @override

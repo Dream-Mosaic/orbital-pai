@@ -22,8 +22,12 @@ uniform float uPunchGlow;    // 25    from orb_tuning.dart
 out vec4 fragColor;
 
 // ---------------------------------------------------------------------------
-// Glass tuning. These are the GLASS-ONLY knobs; anything shared with the
-// fallback Canvas painter arrives as a uniform above so the two cannot drift.
+// Glass tuning. These are the GLASS-ONLY knobs. The PUNCH constants
+// (uPunchSpread, uPunchGlow) ride as uniforms above, so those two cannot
+// drift from orb_painter.dart. The GEOMETRY constants below (kBreathe,
+// kHalos, kGlowGain) are duplicated by hand from orb_painter.dart — they are
+// NOT guaranteed to stay in step, and a change to one side must be mirrored
+// on the other manually.
 // Edit here, rebuild, look at it.
 // ---------------------------------------------------------------------------
 const float kIor         = 1.45;  // index of refraction; higher bends more
@@ -55,7 +59,7 @@ float hash12(vec2 p) {
 float haloField(float rn) {
   float acc = 0.0;
   for (int i = 0; i < kHalos; i++) {
-    float fi = float(i) * 0.5; // i/(kHalos-1)
+    float fi = float(i) / float(kHalos - 1);
     float spread = 1.06 + float(i) * 0.17 + uLevel * 0.05 + uPunch * uPunchSpread;
     float rr = spread + sin(uT * 1.3 + float(i) * 1.4) * 0.025 * kBreathe * (1.0 + uLevel);
     float a = (0.42 - fi * 0.3) * (0.6 + uLevel * 0.6) * kGlowGain
@@ -93,6 +97,23 @@ void main() {
   float R = kSphereR * (1.0 + breathe);
   float rn = r / R;            // 1.0 exactly on the sphere's edge
 
+  // Everything past the outermost ring is transparent by construction; ~30% of
+  // the drawn rect is corner pixels that would otherwise do full glass work to
+  // produce alpha 0.
+  //
+  // 1.6 does NOT clear it: the outermost ring (i == kHalos-1) has
+  // spread = 1.06 + 2*0.17 + uLevel*0.05 + uPunch*uPunchSpread, which alone
+  // reaches 1.55 at uLevel == uPunch == 1.0 (uPunchSpread = 0.10), and its
+  // `rr` adds a further +/-0.025*kBreathe*(1+uLevel) wobble (~+-0.0525 at
+  // uLevel == 1), so the ring's PEAK can sit at rn ~= 1.6025 -- already past
+  // 1.6 before counting any of the Gaussian's own sigma. 1.9 clears the peak
+  // by ~5.4*kHaloSigma (kHaloSigma = 0.055), i.e. exp(-0.5*5.4^2) ~= 4e-7 of
+  // the ring's already-small peak amplitude: nothing visible is cut.
+  if (rn > 1.9) {
+    fragColor = vec4(0.0);
+    return;
+  }
+
   vec3 col = vec3(0.0);
   float alpha = 0.0;
 
@@ -129,7 +150,17 @@ void main() {
     // The halos are INSIDE this shader, so the refracted ray can find them —
     // that is what makes the rings visibly bend through the glass, and the
     // reason they are not left as Canvas ops behind the sphere.
-    float bent = haloField(length((p + gd.xy * 0.35) / R));
+    //
+    // MINUS, not plus: with I = -V and N the outward hemisphere normal,
+    // `refract`'s coefficient (eta*z - sqrt(k)) is negative for every point on
+    // the hemisphere (about -0.31 at the centre, -0.72 at the rim), so gd.xy
+    // already points INWARD. Adding it samples toward the centre — nowhere
+    // near the rings, which sit out around rn ~= 1.06+ — so subtracting is
+    // what moves the sample outward into ring territory. Get the sign wrong
+    // here again and `bent` silently goes back to sampling empty space near
+    // the centre for every fragment, with no visible symptom short of the
+    // rings failing to bend through the glass.
+    float bent = haloField(length((p - gd.xy * 0.35) / R));
     vec3 body = env * kEnvAmp + uGlow.rgb * bent * 0.25;
 
     // Caustic: light entering the top focuses low inside the sphere. The old
@@ -169,8 +200,13 @@ void main() {
   col += (hash12(frag) - 0.5) / 255.0;
   col = clamp(col, 0.0, 1.0);
 
-  // PREMULTIPLIED. Flutter composites a fragment shader's output as
-  // premultiplied alpha; returning straight alpha gives a bright halo fringe
-  // over the dark background that looks like a blend-mode bug.
-  fragColor = vec4(col * alpha, alpha);
+  // `col` is accumulated ALREADY PREMULTIPLIED — every term added to it
+  // above is colour scaled by its own coverage (the halo/glow terms by `h`/
+  // `g`, the glass body by `mix(col, body, edge)`, whose `body` operand has
+  // implicit alpha 1). Scaling by `alpha` again here would double-apply that
+  // coverage: harmless where alpha == 1 (inside the sphere), but outside it
+  // the rings would come out roughly alpha^2 dim and the dither would lose
+  // the same way. Flutter still wants premultiplied output — that
+  // requirement is just already satisfied, so pass `col` through unscaled.
+  fragColor = vec4(col, alpha);
 }

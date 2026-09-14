@@ -37,6 +37,8 @@ void drawOrbEnvelope(
     var m = wave[i] * gain;
     if (m > 1.0) m = 1.0;
     if (m < 0.0) m = 0.0;
+    // Below 1.0 this LIFTS the mid-range, so a soft syllable still reads
+    // instead of hugging the centreline.
     final dy = math.pow(m, kWaveCurve).toDouble() * amp * edge;
     top.add(Offset(x, cy - dy));
     bottom.add(Offset(x, cy + dy));
@@ -48,6 +50,8 @@ void drawOrbEnvelope(
   }
   path.close();
 
+  // Fill: brightest at the two edges of the band, thinner through the middle,
+  // so the envelope reads as a hollow-ish ribbon rather than a solid slab.
   final rect = Rect.fromLTRB(cx - halfW, cy - amp, cx + halfW, cy + amp);
   canvas.drawPath(
     path,

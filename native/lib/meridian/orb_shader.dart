@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'orb_envelope.dart';
-import 'orb_painter.dart' show OrbFrame;
+import 'orb_painter.dart' show OrbFrame, kBreathe;
 import 'orb_state.dart';
 import 'orb_tuning.dart';
 import 'orb_uniforms.dart';
@@ -64,6 +64,16 @@ abstract final class OrbShaderProgram {
     _failed = false;
     _inflight = null;
   }
+
+  /// Test seam: force the "the shader is permanently unavailable" state
+  /// without racing a real asset load. `load()` becomes a no-op once this is
+  /// set (it early-returns on `_failed`), so a test that needs a
+  /// deterministic, permanently-null shader (e.g. proving the fallback
+  /// painter is used) can call this instead of relying on timing.
+  @visibleForTesting
+  static void debugFail() {
+    _failed = true;
+  }
 }
 
 /// Paints the orb with `shaders/orb.frag`: one drawRect for the halos, the
@@ -101,9 +111,21 @@ class OrbShaderPainter extends CustomPainter {
         frame.state == OrbState.speaking;
     if (!reactive) return;
 
-    final r = side * 0.3;
+    // Must match orb.frag's `breathe` and orb_painter.dart's `r` EXACTLY: the
+    // wave sits on the sphere's surface, so a wave computed against the
+    // un-breathing r0 drifts off it by up to ~5.5% of the radius at full level.
+    // This is also what makes orb_envelope.dart's "both painters draw the same
+    // wave by construction" claim true rather than aspirational.
+    final breathe = frame.state == OrbState.off
+        ? 0.0
+        : kBreathe * (0.015 * math.sin(frame.t * 1.6) + frame.level * 0.04);
+    final r = side * 0.3 * (1 + breathe);
     final cx = rect.center.dx;
     final cy = rect.center.dy;
+    // The fallback painter clips this to the sphere; deliberately omitted
+    // here — the envelope's own reach (~0.4r plus blur) stays well inside
+    // the silhouette at the current amplitude, so there is nothing to clip.
+    // Don't "fix" this as a forgotten clipPath without re-checking that.
     drawOrbEnvelope(
       canvas,
       wave: frame.waveform,

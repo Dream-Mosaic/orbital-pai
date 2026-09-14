@@ -87,6 +87,14 @@ void main() {
         (tester) async {
       // THE path that matters: it runs when something has already gone wrong,
       // so it must not also be the untested one.
+      //
+      // debugFail() (not merely leaving load() uncalled) is what makes this
+      // deterministic: OrbView.initState now kicks off its own load() when the
+      // shader is null, and a real asset decode racing this test's single pump
+      // could complete before the assertion below and upgrade the painter out
+      // from under it. Forcing `failed` makes that load() an immediate no-op,
+      // so the shader is guaranteed to stay null for the assertion.
+      OrbShaderProgram.debugFail();
       final f = OrbFrame()..state = OrbState.idle;
       await tester.pumpWidget(Directionality(
         textDirection: TextDirection.ltr,
