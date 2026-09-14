@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'audio_levels.dart';
+import 'orb_envelope.dart';
 import 'orb_state.dart';
 import 'orb_tuning.dart';
 import 'palette.dart';
@@ -362,7 +363,16 @@ class OrbPainter extends CustomPainter {
     final reactive =
         frame.state == OrbState.listening || frame.state == OrbState.speaking;
     if (reactive) {
-      _drawEnvelope(canvas, pal.wave, cx, cy + r * 0.06, r * 0.72, r * kWaveAmp);
+      drawOrbEnvelope(
+        canvas,
+        wave: frame.waveform,
+        gain: frame.waveGain,
+        color: pal.wave,
+        cx: cx,
+        cy: cy + r * 0.06,
+        halfW: r * 0.72,
+        amp: r * kWaveAmp,
+      );
     }
     canvas.restore();
 
@@ -401,71 +411,6 @@ class OrbPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5
         ..color = pal.rim.withValues(alpha: off ? 0.4 : 0.9),
-    );
-  }
-
-  /// Live waveform across the core as a MIRRORED, FILLED envelope, tapered at
-  /// both ends, with a soft glowing outline.
-  ///
-  /// Replaced a single-stroke oscilloscope trace. The values arriving here are
-  /// now unsigned bucket peaks (see [PcmRing.readInto]), so there is no signed
-  /// shape left to plot as one line — and a symmetric band reads far bolder
-  /// inside a sphere than a hairline does, which is the point.
-  void _drawEnvelope(Canvas canvas, Color color, double cx, double cy,
-      double halfW, double amp) {
-    final wave = frame.waveform;
-    final n = wave.length;
-    if (n < 2 || amp <= 0) return;
-    final gain = frame.waveGain;
-
-    final top = <Offset>[];
-    final bottom = <Offset>[];
-    for (var i = 0; i < n; i++) {
-      final f = i / (n - 1);
-      final x = cx - halfW + f * (2 * halfW);
-      final edge = math.sin(f * math.pi); // taper both ends
-      var m = wave[i] * gain;
-      if (m > 1.0) m = 1.0;
-      if (m < 0.0) m = 0.0;
-      // Below 1.0 this LIFTS the mid-range, so a soft syllable still reads
-      // instead of hugging the centreline.
-      final dy = math.pow(m, kWaveCurve).toDouble() * amp * edge;
-      top.add(Offset(x, cy - dy));
-      bottom.add(Offset(x, cy + dy));
-    }
-
-    final path = Path()..addPolygon(top, false);
-    for (var i = n - 1; i >= 0; i--) {
-      path.lineTo(bottom[i].dx, bottom[i].dy);
-    }
-    path.close();
-
-    // Fill: brightest at the two edges of the band, thinner through the middle,
-    // so the envelope reads as a hollow-ish ribbon rather than a solid slab.
-    final rect = Rect.fromLTRB(cx - halfW, cy - amp, cx + halfW, cy + amp);
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.fill
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            color.withValues(alpha: kWaveFillAlpha),
-            color.withValues(alpha: kWaveFillAlpha * 0.4),
-            color.withValues(alpha: kWaveFillAlpha),
-          ],
-          stops: const [0.0, 0.5, 1.0],
-        ).createShader(rect),
-    );
-
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = color.withValues(alpha: kWaveEdgeAlpha)
-        ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(8)),
     );
   }
 
