@@ -151,9 +151,14 @@ void main() {
 
     if (off) body = mix(uLo.rgb * 0.9, body, 0.35);
 
-    // Hairline antialias on the silhouette; fwidth keeps it one pixel at any
-    // size, which a fixed epsilon would not.
-    float edge = 1.0 - smoothstep(1.0 - fwidth(rn) * 1.5, 1.0, rn);
+    // One pixel's worth of rn, derived rather than taken from fwidth().
+    // fwidth() is a derivative instruction that SkSL's runtime-effect subset
+    // does not implement, so using it makes the whole shader fail to load on
+    // the Skia backend — the app would silently fall back to the old Canvas
+    // orb with no indication why. rn = length(p)/R and p spans -1..1 across
+    // uSize.x pixels, so one pixel is exactly 2/(uSize.x*R) here.
+    float px = 2.0 / (max(uSize.x, 1.0) * R);
+    float edge = 1.0 - smoothstep(1.0 - px * 1.5, 1.0, rn);
     col = mix(col, body, edge);
     alpha = mix(alpha, 1.0, edge);
   }
