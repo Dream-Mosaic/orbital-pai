@@ -563,4 +563,42 @@ void main() {
 
     await conn.disconnect();
   });
+
+  testWidgets('swiping a SUB-layer closes the whole drawer, not one layer',
+      (tester) async {
+    // A deliberate asymmetry, and the reason it is worth a test of its own:
+    // system back and the ✕ chevron POP A LAYER at Memory, but a swipe closes
+    // the drawer outright. Swipe is "put this away", and there is no way to
+    // drag-follow a layer change — the panel would track the finger and then
+    // snap back to full while its contents swapped underneath. Android reads
+    // the same way: an edge-swipe is system back (pop a layer, via the
+    // PopScope above), a swipe on the sheet itself dismisses the sheet.
+    final (settings, memory, voiceLock, conn, _) = await openedClients(tester);
+    final navKey = GlobalKey<NavigatorState>();
+    await pumpHost(tester, navKey, settings, memory, voiceLock);
+    await openMemoryLayer(tester);
+    await tester.pumpAndSettle();
+    expect(find.text('Memory'), findsWidgets, reason: 'sanity: on the sub-layer');
+
+    final panel = find.byKey(MeridianDrawer.panelKey);
+    final g = await tester.startGesture(tester.getCenter(panel));
+    var ts = Duration.zero;
+    for (var i = 0; i < 20; i++) {
+      ts += const Duration(milliseconds: 50);
+      await g.moveBy(const Offset(15, 0), timeStamp: ts);
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await g.up(timeStamp: ts);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(MeridianDrawer.panelKey), findsNothing,
+        reason: 'the route is gone, not merely back at the Settings layer');
+    // And the route's whenComplete must still have run, or the panels stay
+    // subscribed to topics nothing is rendering.
+    expect(settings.isOpen, isFalse);
+    expect(memory.isOpen, isFalse);
+    expect(voiceLock.isOpen, isFalse);
+
+    await conn.disconnect();
+  });
 }

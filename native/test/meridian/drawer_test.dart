@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/drawer.dart';
@@ -155,5 +157,152 @@ void main() {
     await tester.pump();
     expect(backs, 1);
     expect(closes, 0, reason: 'back pops the layer; only ✕ and the scrim close');
+  });
+
+  group('swipe to close', () {
+    /// Pushes the drawer through the REAL route, which is what supplies the
+    /// AnimationController a drag writes to. A bare `MeridianDrawer` (as every
+    /// test above pumps it) has no such route and stays a pass-through.
+    Future<GlobalKey<NavigatorState>> pumpRouted(
+      WidgetTester tester, {
+      Widget child = const Text('panel body'),
+    }) async {
+      await tester.binding.setSurfaceSize(const Size(400, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final navKey = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: navKey,
+        home: const Scaffold(body: SizedBox()),
+      ));
+      unawaited(navKey.currentState!
+          .push(meridianDrawerRoute(title: 'Reminders', child: child)));
+      await tester.pumpAndSettle();
+      return navKey;
+    }
+
+    final panel = find.byKey(MeridianDrawer.panelKey);
+
+    /// A drag slow enough that VELOCITY cannot decide the outcome, so the test
+    /// is actually exercising the position threshold.
+    ///
+    /// Every move carries an explicit timestamp. `TestGesture.moveBy` stamps
+    /// events at `Duration.zero` by default, which makes the framework's
+    /// VelocityTracker see no elapsed time and report zero — so a test written
+    /// without these would silently only ever exercise the position branch,
+    /// including the two tests below whose whole subject is velocity.
+    Future<void> slowDrag(WidgetTester tester, double dx) async {
+      final g = await tester.startGesture(tester.getCenter(panel));
+      var ts = Duration.zero;
+      for (var i = 0; i < 20; i++) {
+        ts += const Duration(milliseconds: 50);
+        await g.moveBy(Offset(dx / 20, 0), timeStamp: ts);
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await g.up(timeStamp: ts);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a slow drag past halfway closes it', (tester) async {
+      await pumpRouted(tester);
+      expect(find.text('panel body'), findsOneWidget);
+
+      await slowDrag(tester, 250); // panel is 384 wide
+      expect(find.text('panel body'), findsNothing);
+    });
+
+    testWidgets('a slow drag that stops short snaps back open', (tester) async {
+      await pumpRouted(tester);
+
+      await slowDrag(tester, 100);
+      expect(find.text('panel body'), findsOneWidget);
+      expect(tester.getTopRight(panel).dx, closeTo(400, 0.5),
+          reason: 'and it must return all the way, not sit where it was let go');
+    });
+
+    testWidgets('a short fast flick closes it even though it never reached '
+        'halfway', (tester) async {
+      await pumpRouted(tester);
+
+      final g = await tester.startGesture(tester.getCenter(panel));
+      var ts = Duration.zero;
+      for (var i = 0; i < 3; i++) {
+        ts += const Duration(milliseconds: 10);
+        await g.moveBy(const Offset(20, 0), timeStamp: ts);
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await g.up(timeStamp: ts);
+      await tester.pumpAndSettle();
+
+      expect(find.text('panel body'), findsNothing,
+          reason: 'velocity decides before position — a flick is a flick');
+    });
+
+    testWidgets('a fast flick BACK re-opens it even though it had passed '
+        'halfway', (tester) async {
+      await pumpRouted(tester);
+
+      final g = await tester.startGesture(tester.getCenter(panel));
+      var ts = Duration.zero;
+      for (var i = 0; i < 20; i++) {
+        ts += const Duration(milliseconds: 50);
+        await g.moveBy(const Offset(15, 0), timeStamp: ts); // 300px, slowly
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      // Snatched back fast. Several samples, because the VelocityTracker fits
+      // over a ~100ms horizon and one lone move gives it nothing to fit.
+      for (var i = 0; i < 4; i++) {
+        ts += const Duration(milliseconds: 10);
+        await g.moveBy(const Offset(-15, 0), timeStamp: ts);
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      await g.up(timeStamp: ts);
+      await tester.pumpAndSettle();
+
+      // 300 right (less the ~18px touch slop) then 60 back leaves the panel at
+      // ~0.42 open — PAST the halfway point, so position alone would have
+      // closed it. Only the velocity can save it, which is the whole subject.
+
+      expect(find.text('panel body'), findsOneWidget);
+    });
+
+    testWidgets('dragging left cannot pull it past open', (tester) async {
+      await pumpRouted(tester);
+      final openDx = tester.getTopLeft(panel).dx;
+
+      final g = await tester.startGesture(tester.getCenter(panel));
+      await g.moveBy(const Offset(-200, 0),
+          timeStamp: const Duration(milliseconds: 50));
+      await tester.pump();
+      expect(tester.getTopLeft(panel).dx, closeTo(openDx, 0.5),
+          reason: 'the controller clamps at 1.0; a rubber-band would be a '
+              'different decision, not an accident');
+      await g.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a vertical drag scrolls the panel instead of closing it',
+        (tester) async {
+      await pumpRouted(
+        tester,
+        child: Column(
+          children: List.generate(60, (i) => SizedBox(height: 40, child: Text('row $i'))),
+        ),
+      );
+
+      final scrollable = find.descendant(
+          of: find.byKey(MeridianDrawer.panelKey),
+          matching: find.byType(Scrollable));
+      double offset() =>
+          tester.state<ScrollableState>(scrollable).position.pixels;
+      expect(offset(), 0.0);
+
+      await tester.drag(scrollable, const Offset(0, -300));
+      await tester.pumpAndSettle();
+
+      expect(find.text('row 0'), findsOneWidget, reason: 'still open');
+      expect(offset(), greaterThan(0.0),
+          reason: 'the horizontal recognizer must lose the arena to the '
+              'panel\'s own vertical scroll, or the drawer cannot be read');
+    });
   });
 }

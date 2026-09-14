@@ -36,6 +36,16 @@ class MeridianDrawer extends StatelessWidget {
   /// `duration-300`.
   static const Duration slide = Duration(milliseconds: 300);
 
+  /// How far the panel must be dragged away before RELEASING it closes rather
+  /// than snaps back, as a fraction of the panel's own width.
+  static const double closeFraction = 0.5;
+
+  /// A flick this fast closes (or restores) the drawer regardless of how little
+  /// ground it covered, in panel-widths per second. Position only decides when
+  /// the gesture ends slower than this — which is what makes a short sharp
+  /// flick work the way people expect it to.
+  static const double flingWidthsPerSecond = 1.0;
+
   /// So a test can measure the panel rather than the scrim.
   static const Key panelKey = ValueKey('meridian-drawer-panel');
 
@@ -83,10 +93,12 @@ class MeridianDrawer extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: maxWidth),
               // width: infinity inside a max-width box == the CSS `w-full
               // max-w-[24rem]` pair.
-              child: SizedBox(
-                key: panelKey,
-                width: double.infinity,
-                child: _panel(),
+              child: _SwipeToClose(
+                child: SizedBox(
+                  key: panelKey,
+                  width: double.infinity,
+                  child: _panel(),
+                ),
               ),
             ),
           ),
@@ -220,17 +232,149 @@ class MeridianDrawer extends StatelessWidget {
       );
 }
 
+/// Drag-to-close, wrapped around the panel.
+///
+/// Looks the route up rather than taking a callback, because dragging has to
+/// drive the ROUTE'S OWN AnimationController — the same one the scrim fade and
+/// the panel slide already read. Writing that one value is what makes the whole
+/// drawer track the finger for free, and what lets a release continue from
+/// wherever the finger left it instead of snapping back to fully-open first.
+///
+/// Outside a [_MeridianDrawerRoute] (a bare `MeridianDrawer` in a test, say)
+/// this is a pass-through, so the widget stays usable on its own.
+class _SwipeToClose extends StatefulWidget {
+  const _SwipeToClose({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_SwipeToClose> createState() => _SwipeToCloseState();
+}
+
+class _SwipeToCloseState extends State<_SwipeToClose> {
+  _DrawerDragController? _drag;
+
+  double get _width {
+    final size = context.size;
+    return size == null || size.width <= 0 ? 0 : size.width;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final route = ModalRoute.of(context);
+    if (route is! _MeridianDrawerRoute) return widget.child;
+    return GestureDetector(
+      // deferToChild, so buttons and scrollables inside the panel keep winning
+      // the hits they should. A HORIZONTAL recognizer also loses the arena to
+      // the panel's vertical SingleChildScrollView on a vertical drag, which is
+      // what keeps scrolling the panel from closing it.
+      behavior: HitTestBehavior.deferToChild,
+      excludeFromSemantics: true,
+      onHorizontalDragStart: (_) => _drag = route.startDrag(),
+      onHorizontalDragUpdate: (d) =>
+          _drag?.update(d.primaryDelta ?? 0, _width),
+      onHorizontalDragEnd: (d) {
+        _drag?.end(d.primaryVelocity ?? 0, _width);
+        _drag = null;
+      },
+      onHorizontalDragCancel: () {
+        _drag?.end(0, _width);
+        _drag = null;
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// Owns one drag of the drawer, from touch-down to release.
+///
+/// Modelled on Flutter's own `_CupertinoBackGestureController`, including the
+/// `didStartUserGesture`/`didStopUserGesture` pairing: the navigator must know a
+/// gesture is driving the transition, or it finalises the pop before the release
+/// animation has run and the drawer vanishes instead of sliding out.
+class _DrawerDragController {
+  _DrawerDragController({required this.controller, required this.navigator}) {
+    navigator.didStartUserGesture();
+  }
+
+  final AnimationController controller;
+  final NavigatorState navigator;
+  bool _ended = false;
+
+  void update(double deltaPx, double width) {
+    if (_ended || width <= 0) return;
+    // The drawer is on the RIGHT, so dragging right pushes it away: value 1 is
+    // fully open, 0 is gone.
+    controller.value = (controller.value - deltaPx / width).clamp(0.0, 1.0);
+  }
+
+  void end(double velocityPx, double width) {
+    if (_ended) return;
+    _ended = true;
+
+    final widthsPerSecond = width <= 0 ? 0.0 : velocityPx / width;
+    final bool close;
+    if (widthsPerSecond.abs() >= MeridianDrawer.flingWidthsPerSecond) {
+      // Velocity decides first: a fast flick closes however little ground it
+      // covered, and a fast flick back OPENS however far it had already gone.
+      close = widthsPerSecond > 0;
+    } else {
+      close = controller.value < MeridianDrawer.closeFraction;
+    }
+
+    if (close) {
+      // pop() BEFORE animating, exactly as Cupertino does: while a user gesture
+      // is in progress the navigator defers finalising, so the route stays alive
+      // to play the rest of the slide from wherever the finger let go.
+      navigator.pop();
+      if (controller.isAnimating) {
+        controller.animateBack(0.0,
+            duration: MeridianDrawer.slide, curve: Curves.easeOut);
+      }
+    } else {
+      controller.animateTo(1.0,
+          duration: MeridianDrawer.slide, curve: Curves.easeOut);
+    }
+
+    if (controller.isAnimating) {
+      late AnimationStatusListener listener;
+      listener = (_) {
+        navigator.didStopUserGesture();
+        controller.removeStatusListener(listener);
+      };
+      controller.addStatusListener(listener);
+    } else {
+      navigator.didStopUserGesture();
+    }
+  }
+}
+
+/// The drawer's route, subclassed for ONE reason: `TransitionRoute.controller`
+/// is `@protected`, and a drag has to write to it. A subclass may reach it;
+/// anything else would be an analyzer violation and a lie about the contract.
+class _MeridianDrawerRoute extends PageRouteBuilder<void> {
+  _MeridianDrawerRoute(Widget Function(BuildContext, Animation<double>) page)
+      : super(
+          opaque: false,
+          // The scrim inside the drawer is the tap target; the route's own
+          // barrier would sit above it and swallow the tap.
+          barrierDismissible: false,
+          transitionDuration: MeridianDrawer.slide,
+          reverseTransitionDuration: MeridianDrawer.slide,
+          pageBuilder: (context, animation, _) => page(context, animation),
+        );
+
+  _DrawerDragController? startDrag() {
+    final c = controller;
+    final nav = navigator;
+    if (c == null || nav == null || !isCurrent) return null;
+    return _DrawerDragController(controller: c, navigator: nav);
+  }
+}
+
 Route<void> _drawerRoute(
         Widget Function(BuildContext, Animation<double>) page) =>
-    PageRouteBuilder<void>(
-      opaque: false,
-      // The scrim inside the drawer is the tap target; the route's own barrier
-      // would sit above it and swallow the tap.
-      barrierDismissible: false,
-      transitionDuration: MeridianDrawer.slide,
-      reverseTransitionDuration: MeridianDrawer.slide,
-      pageBuilder: (context, animation, _) => page(context, animation),
-    );
+    _MeridianDrawerRoute(page);
 
 /// Pushes [MeridianDrawer] as a transparent route so the conversation keeps
 /// rendering (and running) behind the scrim.
