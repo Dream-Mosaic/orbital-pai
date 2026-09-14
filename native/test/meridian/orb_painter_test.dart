@@ -1,8 +1,10 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/meridian/audio_levels.dart';
 import 'package:orbital_pai/meridian/orb_painter.dart';
 import 'package:orbital_pai/meridian/orb_state.dart';
+import 'package:orbital_pai/meridian/orb_tuning.dart';
 
 void main() {
   test('advance is frozen when off and steady-cadence when thinking', () {
@@ -15,15 +17,38 @@ void main() {
     expect(f.t, closeTo(0.14, 1e-9), reason: 'thinking holds a steady 1.4x cadence');
   });
 
-  test('level smooths toward the audio target once per FRAME, not per chunk', () {
-    // orb.js smooths once per requestAnimationFrame: level += (target - level) * 0.2.
-    final f = OrbFrame()
+  test('level smooths once per FRAME, not once per audio chunk', () {
+    final f = OrbFrame()..state = OrbState.listening;
+    // Fifty chunks land between two frames. None of them may move the level:
+    // smoothing per chunk would make the response a function of the device's
+    // buffer size rather than of the audio.
+    for (var i = 0; i < 50; i++) {
+      f.audioTarget = 1.0;
+    }
+    expect(f.level, 0.0, reason: 'chunks do not smooth — frames do');
+
+    f.advance(1 / 60);
+    expect(f.level, closeTo(kLevelAttack60, 1e-9),
+        reason: 'one 60Hz frame is exactly one attack step');
+  });
+
+  test('the level reaches the same place in a second at 60Hz and at 120Hz', () {
+    // Ported from orb.js, the coefficient was applied per FRAME, so a 120Hz
+    // phone ran the orb at twice the speed of a 60Hz one. Same wall-clock must
+    // now mean same result on both.
+    final at60 = OrbFrame()
       ..state = OrbState.listening
       ..audioTarget = 1.0;
-    f.advance(0.016);
-    expect(f.level, closeTo(0.2, 1e-9));
-    f.advance(0.016);
-    expect(f.level, closeTo(0.36, 1e-9));
+    for (var i = 0; i < 60; i++) {
+      at60.advance(1 / 60);
+    }
+    final at120 = OrbFrame()
+      ..state = OrbState.listening
+      ..audioTarget = 1.0;
+    for (var i = 0; i < 120; i++) {
+      at120.advance(1 / 120);
+    }
+    expect(at120.level, closeTo(at60.level, 1e-6));
   });
 
   test('level decays when leaving a reactive state (never sticks)', () {
@@ -54,9 +79,11 @@ void main() {
       ..audioTarget = 1.0;
     loud.advance(0.1);
 
-    // level smooths 0 -> 0.2 first, so speed = 1 + 0.2 * 1.4
-    expect(loud.level, closeTo(0.2, 1e-9));
-    expect(loud.t, closeTo(0.1 * (1 + 0.2 * 1.4), 1e-9));
+    // The level rises by one attack step first, and the clock speed is derived
+    // from where it landed — so speed = 1 + level * 1.4.
+    final step = alphaForDt(kLevelAttack60, 0.1);
+    expect(loud.level, closeTo(step, 1e-9));
+    expect(loud.t, closeTo(0.1 * (1 + step * 1.4), 1e-9));
     expect(loud.t, greaterThan(quiet.t), reason: 'louder = faster');
   });
 
@@ -283,6 +310,94 @@ void main() {
       f.advance(0.016);
       expect(f.waveform, equals(live),
           reason: 'the painter gates on state; resampling here is wasted work');
+    });
+  });
+
+  group('punch', () {
+    test('an onset punches in a reactive state', () {
+      final f = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 1.0;
+      for (var i = 0; i < 6; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.punch, greaterThan(0.2));
+    });
+
+    test('a non-reactive state never punches', () {
+      // thinking targets 0 regardless of what the audio target says, so the
+      // followers have nothing to diverge over.
+      final f = OrbFrame()
+        ..state = OrbState.thinking
+        ..audioTarget = 1.0;
+      for (var i = 0; i < 6; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.punch, 0.0);
+    });
+
+    test('powering off clears the punch immediately', () {
+      // Same argument as the level: the ticker stops the instant we go off, so
+      // the state setter has to do the reset — there is no next tick to do it.
+      final f = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 1.0;
+      for (var i = 0; i < 6; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.punch, greaterThan(0.2), reason: 'sanity: punch is actually up');
+
+      f.state = OrbState.off;
+      expect(f.punch, 0.0);
+    });
+  });
+
+  group('waveGain', () {
+    /// Feed [amplitude] (0..1 of full scale) as a square wave, which makes every
+    /// bucket peak equal to it exactly.
+    void feedAt(OrbFrame f, double amplitude) {
+      const each = 2048;
+      final v = (amplitude * 32767).round();
+      for (var c = 0; c < 8; c++) {
+        final b = ByteData(each * 2);
+        for (var i = 0; i < each; i++) {
+          b.setInt16(i * 2, i.isEven ? v : -v, Endian.little);
+        }
+        f.feedPcm(b.buffer.asUint8List(), sampleRate: 16000);
+      }
+    }
+
+    test('quiet speech is normalised up toward full scale', () {
+      // The thing that made the old orb a 2px squiggle: real speech peaks
+      // around a quarter of full scale and was drawn at that size.
+      final f = OrbFrame()..state = OrbState.listening;
+      feedAt(f, 0.25);
+      f.advance(1 / 60);
+      expect(f.waveGain, greaterThan(3.0));
+      final drawn = f.waveform.reduce((a, b) => a > b ? a : b) * f.waveGain;
+      expect(drawn, closeTo(1.0, 0.05));
+    });
+
+    test('already-loud audio is never attenuated', () {
+      final f = OrbFrame()..state = OrbState.listening;
+      feedAt(f, 1.0);
+      f.advance(1 / 60);
+      // int16's positive maximum is 32767, so "full scale" lands a hair under
+      // 1.0 and the gain a hair over it. The guard is that it does not boost.
+      expect(f.waveGain, closeTo(1.0, 1e-4));
+    });
+
+    test('starts at unity and returns there on power-off', () {
+      final f = OrbFrame();
+      expect(f.waveGain, 1.0);
+
+      f.state = OrbState.listening;
+      feedAt(f, 0.2);
+      f.advance(1 / 60);
+      expect(f.waveGain, greaterThan(1.0), reason: 'sanity: gain moved');
+
+      f.state = OrbState.off;
+      expect(f.waveGain, 1.0);
     });
   });
 }

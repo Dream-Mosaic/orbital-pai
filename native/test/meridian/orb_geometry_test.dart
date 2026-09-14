@@ -109,10 +109,14 @@ void main() {
   });
 
   test('the waveform is drawn for reactive states only', () {
-    final wave =
-        Float32List.fromList(List<double>.generate(64, (i) => math.sin(i * 0.3)));
-    expect(paintAt(OrbState.listening, wave: wave).of('drawPath'), hasLength(1));
-    expect(paintAt(OrbState.speaking, wave: wave).of('drawPath'), hasLength(1));
+    // Unsigned bucket peaks — the envelope is mirrored, so a signed input would
+    // just render its negative half as a positive one.
+    final wave = Float32List.fromList(
+        List<double>.generate(64, (i) => math.sin(i * 0.3).abs()));
+    // Two paths per reactive frame: the gradient-filled envelope body and the
+    // blurred outline traced around it.
+    expect(paintAt(OrbState.listening, wave: wave).of('drawPath'), hasLength(2));
+    expect(paintAt(OrbState.speaking, wave: wave).of('drawPath'), hasLength(2));
     for (final s in [OrbState.idle, OrbState.ambient, OrbState.thinking]) {
       expect(paintAt(s, wave: wave).of('drawPath'), isEmpty,
           reason: '$s must not inherit a frozen trace from the last reactive state');

@@ -3,9 +3,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'audio_levels.dart';
 import 'orb_state.dart';
+import 'orb_tuning.dart';
 import 'palette.dart';
 
-// Constants ported verbatim from server/assets/js/voice/orb.js — do not re-tune.
+// Geometry constants, originally ported from server/assets/js/voice/orb.js.
+// The GEOMETRY still matches the web orb and there is no reason to move it.
+// The MOTION no longer does — see orb_tuning.dart, which owns every value that
+// decides how the orb feels and is deliberately not orb.js's. The web is a
+// monitor now; it is not the reference implementation and not a parity target.
 const int kHalos = 3;
 const double kGlow = 1.2;
 const double kBreathe = 1.05;
@@ -44,8 +49,11 @@ class OrbFrame extends ChangeNotifier {
   int get _waveMaxLag => _waveTargetLag * 2;
 
   OrbState _state = OrbState.off;
-  final LevelSmoother _smoother = LevelSmoother(); // the 0.2 alpha lives here (Task 2)
+  final LevelSmoother _smoother = LevelSmoother(); // attack/release live here
+  final AutoGain _gain = AutoGain();
+  final TransientDetector _transient = TransientDetector();
   double _audioTarget = 0.0;
+  double _waveGain = 1.0;
   Float32List _waveform = Float32List(0);
   double _t = 0.0;
 
@@ -67,6 +75,9 @@ class OrbFrame extends ChangeNotifier {
       // the very next paint, driven by this same notifyListeners(), never
       // inherits a stale level.
       _smoother.reset();
+      _transient.reset();
+      _gain.reset();
+      _waveGain = 1.0;
       _audioTarget = 0.0;
       // Same reasoning for the trace: a wake must not flash the audio from
       // whatever was being said when we powered down.
@@ -98,6 +109,18 @@ class OrbFrame extends ChangeNotifier {
   /// Smoothed loudness, derived. No public setter by design.
   double get level => _smoother.value;
 
+  /// Syllable-onset strength, 0..1. Flares the halos and the contact glow.
+  /// Derived. No public setter by design.
+  double get punch => _transient.value;
+
+  /// Scalar the painter multiplies each bucket magnitude by before drawing.
+  ///
+  /// Kept OUT of [PcmRing.readInto] on purpose: normalising inside the resampler
+  /// would make two overlapping reads disagree about the samples they share, and
+  /// the trace would shimmer rather than slide. One scalar per frame is also
+  /// cheaper than 128 divisions.
+  double get waveGain => _waveGain;
+
   Float32List get waveform => _waveform;
   set waveform(Float32List v) {
     _waveform = v;
@@ -114,6 +137,13 @@ class OrbFrame extends ChangeNotifier {
 
   @visibleForTesting
   void debugSetLevel(double v) => _smoother.debugSet(v);
+
+  /// Same reasoning as [debugSetLevel]: the auto-gain is a function of the audio
+  /// history, so pinning it is what keeps `paint` a pure function of
+  /// (state, t, level, punch, waveform, waveGain, size) — and therefore what
+  /// keeps a golden possible.
+  @visibleForTesting
+  void debugSetWaveGain(double v) => _waveGain = v;
 
   /// Samples between the read cursor and the newest one. Test seam: keeping a
   /// lead IS the mechanism here, and a cursor sitting on the write head reads a
@@ -135,12 +165,19 @@ class OrbFrame extends ChangeNotifier {
       // most, so not notifying here is the biggest power lever we have. Reset the
       // audio state so powering on never inherits a stale level.
       _smoother.reset();
+      _transient.reset();
+      _gain.reset();
+      _waveGain = 1.0;
       _audioTarget = 0.0;
       return;
     }
     final reactive =
         _state == OrbState.listening || _state == OrbState.speaking;
-    _smoother.update(reactive ? _audioTarget : 0.0);
+    final target = reactive ? _audioTarget : 0.0;
+    _smoother.update(target, dt);
+    // Fed the RAW target, not the smoothed level: the whole job here is to see
+    // the attack of a syllable, and the smoother exists to take attacks off.
+    _transient.update(target, dt);
     if (reactive) _advanceWave(dt);
     final speed = _state == OrbState.thinking
         ? 1.4
@@ -171,6 +208,16 @@ class OrbFrame extends ChangeNotifier {
     }
     _ring.readInto(_waveScratch,
         end: _playhead.floor(), window: kWaveWindow);
+    // The loudest bucket in the window IS the instantaneous peak, so the gain
+    // tracks exactly what is about to be drawn rather than a separate estimate
+    // that could disagree with it.
+    var peak = 0.0;
+    for (var i = 0; i < kWavePoints; i++) {
+      final v = _waveScratch[i];
+      if (v > peak) peak = v;
+    }
+    _gain.observe(peak, dt);
+    _waveGain = _gain.gain;
     // Reused in place: advance() is the only writer and it runs on the frame
     // callback, and the painter reads it synchronously in the paint that this
     // same notifyListeners() schedules.
@@ -212,6 +259,7 @@ class OrbPainter extends CustomPainter {
     final pal = paletteFor(frame.state);
     final off = frame.state == OrbState.off;
     final level = frame.level;
+    final punch = off ? 0.0 : frame.punch;
     final t = frame.t;
 
     final cx = w / 2;
@@ -226,12 +274,18 @@ class OrbPainter extends CustomPainter {
     if (!off) {
       for (var i = 0; i < kHalos; i++) {
         final f = kHalos > 1 ? i / (kHalos - 1) : 0.0;
-        final spread = r0 * (1.06 + i * 0.17 + level * 0.05);
+        // The punch terms are the whole point of the transient detector: a
+        // syllable onset shoves the rings outward and brightens them, and they
+        // settle back between syllables. Level alone (which is smoothed, and
+        // deliberately slow to release) cannot produce that per-hit flare.
+        final spread =
+            r0 * (1.06 + i * 0.17 + level * 0.05 + punch * kPunchSpread);
         final rr = spread +
             math.sin(t * 1.3 + i * 1.4) * r0 * 0.025 * kBreathe * (1 + level);
         final alpha = (0.42 - f * 0.3) *
             (0.6 + level * 0.6) *
-            (0.5 + kGlow * 0.5);
+            (0.5 + kGlow * 0.5) *
+            (1 + punch * kPunchGlow);
         final paint = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2 - f
@@ -250,8 +304,8 @@ class OrbPainter extends CustomPainter {
       final paint = Paint()
         ..style = PaintingStyle.fill
         ..color = pal.glow.withValues(alpha: 0.06)
-        ..maskFilter =
-            MaskFilter.blur(BlurStyle.solid, _sigma(30 * kGlow * (0.6 + level)));
+        ..maskFilter = MaskFilter.blur(BlurStyle.solid,
+            _sigma(30 * kGlow * (0.6 + level + punch * 0.5)));
       canvas.drawCircle(center, r, paint);
     }
 
@@ -308,7 +362,7 @@ class OrbPainter extends CustomPainter {
     final reactive =
         frame.state == OrbState.listening || frame.state == OrbState.speaking;
     if (reactive) {
-      _drawWave(canvas, pal.wave, cx, cy + r * 0.06, r * 0.72, r * 0.24);
+      _drawEnvelope(canvas, pal.wave, cx, cy + r * 0.06, r * 0.72, r * kWaveAmp);
     }
     canvas.restore();
 
@@ -350,31 +404,69 @@ class OrbPainter extends CustomPainter {
     );
   }
 
-  /// Live waveform across the core, tapered at both ends, with a soft glow.
-  void _drawWave(Canvas canvas, Color color, double cx, double cy,
+  /// Live waveform across the core as a MIRRORED, FILLED envelope, tapered at
+  /// both ends, with a soft glowing outline.
+  ///
+  /// Replaced a single-stroke oscilloscope trace. The values arriving here are
+  /// now unsigned bucket peaks (see [PcmRing.readInto]), so there is no signed
+  /// shape left to plot as one line — and a symmetric band reads far bolder
+  /// inside a sphere than a hairline does, which is the point.
+  void _drawEnvelope(Canvas canvas, Color color, double cx, double cy,
       double halfW, double amp) {
     final wave = frame.waveform;
     final n = wave.length;
-    if (n < 2) return;
+    if (n < 2 || amp <= 0) return;
+    final gain = frame.waveGain;
 
-    final path = Path();
+    final top = <Offset>[];
+    final bottom = <Offset>[];
     for (var i = 0; i < n; i++) {
-      final x = cx - halfW + (i / (n - 1)) * (2 * halfW);
-      final edge = math.sin((i / (n - 1)) * math.pi); // taper both ends
-      final y = cy + wave[i] * amp * edge;
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
+      final f = i / (n - 1);
+      final x = cx - halfW + f * (2 * halfW);
+      final edge = math.sin(f * math.pi); // taper both ends
+      var m = wave[i] * gain;
+      if (m > 1.0) m = 1.0;
+      if (m < 0.0) m = 0.0;
+      // Below 1.0 this LIFTS the mid-range, so a soft syllable still reads
+      // instead of hugging the centreline.
+      final dy = math.pow(m, kWaveCurve).toDouble() * amp * edge;
+      top.add(Offset(x, cy - dy));
+      bottom.add(Offset(x, cy + dy));
     }
 
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = color.withValues(alpha: 0.62)
-      ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(8));
-    canvas.drawPath(path, paint);
+    final path = Path()..addPolygon(top, false);
+    for (var i = n - 1; i >= 0; i--) {
+      path.lineTo(bottom[i].dx, bottom[i].dy);
+    }
+    path.close();
+
+    // Fill: brightest at the two edges of the band, thinner through the middle,
+    // so the envelope reads as a hollow-ish ribbon rather than a solid slab.
+    final rect = Rect.fromLTRB(cx - halfW, cy - amp, cx + halfW, cy + amp);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            color.withValues(alpha: kWaveFillAlpha),
+            color.withValues(alpha: kWaveFillAlpha * 0.4),
+            color.withValues(alpha: kWaveFillAlpha),
+          ],
+          stops: const [0.0, 0.5, 1.0],
+        ).createShader(rect),
+    );
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = color.withValues(alpha: kWaveEdgeAlpha)
+        ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(8)),
+    );
   }
 
   @override

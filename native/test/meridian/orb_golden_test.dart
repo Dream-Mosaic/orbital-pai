@@ -36,8 +36,15 @@ void main() {
     frame.state = OrbState.listening;
     frame.debugT = 1.0;
     frame.debugSetLevel(0.5);
-    frame.waveform =
-        Float32List.fromList(List<double>.generate(128, (i) => math.sin(i * 0.19)));
+    // Unsigned bucket peaks now, not a signed trace — a rectified carrier under
+    // a slow amplitude modulation, which is roughly the shape speech makes.
+    frame.waveform = Float32List.fromList(List<double>.generate(
+        128,
+        (i) =>
+            math.sin(i * 0.19).abs() * (0.4 + 0.6 * math.sin(i * 0.031).abs())));
+    // Pinned for the same reason as t and level: the auto-gain is a function of
+    // audio history, and a golden must be a pure function of its inputs.
+    frame.debugSetWaveGain(1.0);
 
     const key = ValueKey<String>('orb-golden');
     await tester.pumpWidget(host(frame, key));
