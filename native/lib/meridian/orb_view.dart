@@ -1,6 +1,7 @@
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'orb_painter.dart';
+import 'orb_shader.dart';
 import 'orb_state.dart';
 
 /// Hosts the orb's animation clock. Runs a Ticker, advances the frame, and paints
@@ -102,8 +103,15 @@ class _OrbViewState extends State<OrbView> with SingleTickerProviderStateMixin {
           final h = constraints.hasBoundedHeight
               ? constraints.maxHeight
               : widget.fallbackSize.height;
+          final shader = OrbShaderProgram.shader;
           return CustomPaint(
-            painter: OrbPainter(widget.frame),
+            // The fallback is not a lesser code path to be tolerated — it is
+            // what runs when a driver has already failed us, on a screen that
+            // is the entire app. It is selected here, per build, so a program
+            // that finishes loading after the first frame simply upgrades.
+            painter: shader == null
+                ? OrbPainter(widget.frame)
+                : OrbShaderPainter(widget.frame, shader),
             size: Size(w, h),
           );
         },

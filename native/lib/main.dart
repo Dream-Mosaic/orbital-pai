@@ -14,6 +14,7 @@ import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
 import 'meridian/login_screen.dart';
 import 'meridian/nav.dart';
+import 'meridian/orb_shader.dart';
 import 'meridian/reminders_panel.dart';
 import 'meridian/search_panel.dart';
 import 'meridian/settings_drawer_host.dart';
@@ -37,6 +38,12 @@ void main() {
       await rootBundle.loadString('assets/fonts/ATTRIBUTION.txt'),
     );
   });
+  // Shader compilation on the first painted frame is a jank source, so start
+  // it now. Deliberately not awaited: the orb renders through the fallback
+  // painter until this resolves, which is a frame or two, and blocking startup
+  // on an asset decode to avoid that trade would be the worse bargain.
+  WidgetsFlutterBinding.ensureInitialized();
+  unawaited(OrbShaderProgram.load());
   runApp(const HenryApp());
 }
 

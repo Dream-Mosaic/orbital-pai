@@ -245,7 +245,18 @@ class OrbFrame extends ChangeNotifier {
 /// from first principles and asserts this value.
 const Alignment kSpecularGradientCenter = Alignment(-0.0144, -0.2394);
 
-/// Six-layer glass orb, a 1:1 port of orb.js's draw().
+/// Six-layer glass orb drawn with stacked Canvas ops.
+///
+/// **FROZEN — this is the fallback, not the orb.** `OrbShaderPainter` is what
+/// normally renders; this runs only when `shaders/orb.frag` failed to load, so
+/// its job is to look like the app on a device where something has already
+/// gone wrong. Do not tune it, and do not extend it: changes belong in
+/// `shaders/orb.frag`. It keeps the orb's only golden
+/// (`test/meridian/goldens/orb_listening.png`), because a golden over
+/// shader-painted content hangs the test harness — see the spec's spike table.
+///
+/// The waveform is NOT frozen: it comes from the shared `drawOrbEnvelope`, so
+/// both painters draw the same wave by construction.
 class OrbPainter extends CustomPainter {
   OrbPainter(this.frame) : super(repaint: frame);
 
