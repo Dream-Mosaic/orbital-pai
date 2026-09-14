@@ -230,7 +230,9 @@ integration if not generated separately.
 ## 7. Authentik branding (applied 2026-09-14)
 
 `authentik/custom.css` + `authentik/apply.sh` (needs `AUTHENTIK_API_KEY`; `--css-only` skips
-the image URLs). `brand-before.json` is the pre-change snapshot for rollback. The images are
-served by the PAI server from `server/priv/static/images/brand/` (logo, favicon, login
-background, app icon), so the full apply only makes sense after that has deployed.
-`login-css-only.jpg` is the login page with just the CSS applied.
+the image URLs). `brand-before.json` is the pre-change snapshot for rollback. The images live
+in `server/priv/static/images/brand/` and are uploaded into Authentik's own media store by
+the script (`POST /admin/file/`); the brand fields hold the bare filename. The login
+background is recomposed by ImageMagick onto a 2560×1440 canvas with the orb at the far
+left, so `background-size: cover` keeps it clear of the card.
+`login-branded.jpg` is the finished login page.
