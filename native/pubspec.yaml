@@ -44,6 +44,9 @@ dependency_overrides:
 flutter:
   uses-material-design: true
 
+  shaders:
+    - shaders/orb.frag
+
   assets:
     - assets/icons/
     - assets/fonts/

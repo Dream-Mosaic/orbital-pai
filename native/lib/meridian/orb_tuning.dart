@@ -86,3 +86,16 @@ const double kPunchSpread = 0.10;
 
 /// How much a full punch brightens the halos and the contact glow.
 const double kPunchGlow = 0.9;
+
+// ---------------------------------------------------------------------------
+// Glass (shader only).
+// ---------------------------------------------------------------------------
+//
+// The glass knobs — index of refraction, dispersion, specular exponents,
+// caustic and Fresnel strength, halo softness — live in a marked block at the
+// top of `shaders/orb.frag`, because GLSL cannot read Dart constants.
+//
+// Anything SHARED with the fallback Canvas painter stays here and is passed
+// to the shader as a uniform (see orb_uniforms.dart), so the two renderers
+// cannot drift apart on a value they both use. kPunchSpread and kPunchGlow
+// above are the two that qualify today.
