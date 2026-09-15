@@ -33,11 +33,22 @@ out vec4 fragColor;
 const float kIor         = 1.45;  // index of refraction; higher bends more
 const float kDispersion  = 0.012; // R/G/B IOR spread — the rainbow at the rim
 const float kHaloSigma   = 0.055; // ring softness (was MaskFilter.blur)
-const float kSpecHardExp = 90.0;  // primary highlight: small, hard, bright
+const float kSpecHardExp = 110.0; // primary highlight: small, hard, bright
 const float kSpecSoftExp = 12.0;  // secondary: wide, dim
-const float kSpecHardAmp = 0.40;
-const float kSpecSoftAmp = 0.26;
+const float kSpecHardAmp = 0.26;
+const float kSpecSoftAmp = 0.13;
 const float kFresnelAmp  = 0.9;   // grazing-angle rim brightness
+/// How much of the palette the highlights carry. Pure white highlights on a
+/// strongly tinted sphere read as a blown-out lamp rather than as light in
+/// glass — the sphere is green, so its reflections should be too.
+const float kSpecTint    = 0.45;
+/// Floor under the internal environment's dark end.
+///
+/// The environment ran all the way down to uLo, so the sphere's limb fell to
+/// very nearly black and met the background with a hard edge — the "intense
+/// black to sphere transition" at the top. Real glass never gets there: it is
+/// picking up light from every direction, not just the key.
+const float kEnvFloor    = 0.16;
 const float kCausticAmp  = 0.55;  // the focused spot low INSIDE the sphere
 const float kEnvAmp      = 0.85;  // how much refracted environment shows
 const vec3  kLightDir    = vec3(-0.45, -0.60, 0.66); // fixed upper-left
@@ -77,7 +88,9 @@ float haloField(float rn) {
 // procedural studio field gives the refraction something to find.
 vec3 environment(vec3 dir) {
   float v = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-  vec3 base = mix(uLo.rgb, uHi.rgb, smoothstep(0.10, 0.95, v));
+  // Floored, not run down to uLo: see kEnvFloor.
+  vec3 base = mix(mix(uLo.rgb, uHi.rgb, kEnvFloor), uHi.rgb,
+                  smoothstep(0.10, 0.95, v));
   float bx = (dir.y - 0.35) / 0.20; // signed — hence bx*bx, not pow(bx, 2.0)
   float band = exp(-bx * bx); // a window reflection
   return base + uHi.rgb * band * 0.35;
@@ -126,10 +139,13 @@ void main() {
     // x*x, never pow(x, 2.0): GLSL pow is UNDEFINED for a negative base, and
     // (rn - 1.0) is negative everywhere inside the sphere. The symptom would
     // be NaN pixels on some drivers and not others.
-    float gx = (rn - 1.0) / (0.55 + uLevel * 0.35 + uPunch * 0.25);
+    float gx = (rn - 1.0) / (0.70 + uLevel * 0.35 + uPunch * 0.25);
     float g = exp(-gx * gx);
-    col += uGlow.rgb * g * 0.12;
-    alpha += g * 0.12;
+    // Wider and brighter than before. The silhouette used to meet the
+    // background almost dead, so the gap between the glass edge and the first
+    // ring read as a hard dark moat rather than as air around a lit object.
+    col += uGlow.rgb * g * 0.20;
+    alpha += g * 0.20;
   }
 
   // --- the glass body ---
@@ -174,8 +190,9 @@ void main() {
     // Dual specular.
     vec3 H = normalize(L + V);
     float ndh = clamp(dot(N, H), 0.0, 1.0);
-    body += vec3(1.0) * pow(ndh, kSpecHardExp) * kSpecHardAmp;
-    body += vec3(1.0) * pow(ndh, kSpecSoftExp) * kSpecSoftAmp;
+    vec3 specTint = mix(vec3(1.0), uHi.rgb, kSpecTint);
+    body += specTint * pow(ndh, kSpecHardExp) * kSpecHardAmp;
+    body += specTint * pow(ndh, kSpecSoftExp) * kSpecSoftAmp;
 
     // Fresnel rim, replacing the uniform 1.5px stroke.
     body += uRim.rgb * fres * kFresnelAmp * (off ? 0.4 : 1.0);

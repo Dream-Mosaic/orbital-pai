@@ -23,9 +23,15 @@ double _sigma(double shadowBlur) => shadowBlur / 2.0;
 /// Mutable orb frame state. Acts as the `CustomPainter.repaint` listenable so the
 /// orb repaints without rebuilding the widget tree.
 class OrbFrame extends ChangeNotifier {
-  /// `analyser.fftSize = 1024` on BOTH web analysers (capture.js:56,
-  /// playback.js:8), so a frame draws the most recent 1024 samples.
-  static const int kWaveWindow = 1024;
+  /// Samples across the trace's full width, derived from [kWaveSeconds] at the
+  /// CURRENT feed rate so the trace shows the same DURATION whatever the stream.
+  ///
+  /// Was a fixed 1024 — the web analyser's fftSize, carried over unexamined.
+  /// At the 24kHz TTS rate that is 43ms across the whole width, which is why
+  /// the trace read as hair: 8 samples per bucket is inside a single pitch
+  /// period, and the whole thing scrolled a screen-width every 43ms.
+  int get _waveWindow =>
+      math.min((kWaveSeconds * _feedRate).round(), PcmRing.defaultCapacity);
 
   /// Points in the drawn trace. Unchanged from the per-chunk implementation.
   static const int kWavePoints = 128;
@@ -299,8 +305,25 @@ class OrbFrame extends ChangeNotifier {
     _readWindow(dt, observeGain: true);
   }
 
+  /// One symmetric 3-tap pass across the buckets.
+  ///
+  /// Polish only — the envelope is legible because of [kWaveSeconds], not
+  /// because of this. Runs before the gain is observed so the peak the gain
+  /// normalises against is the peak actually drawn.
+  void _smoothBuckets() {
+    if (kWaveSmoothing <= 0) return;
+    const w = kWaveSmoothing;
+    var prev = _waveScratch[0];
+    for (var i = 1; i < kWavePoints - 1; i++) {
+      final cur = _waveScratch[i];
+      _waveScratch[i] = cur * (1 - w) + (prev + _waveScratch[i + 1]) * (w / 2);
+      prev = cur;
+    }
+  }
+
   void _readWindow(double dt, {required bool observeGain}) {
-    _ring.readInto(_waveScratch, end: _playhead.floor(), window: kWaveWindow);
+    _ring.readInto(_waveScratch, end: _playhead.floor(), window: _waveWindow);
+    _smoothBuckets();
     if (observeGain) {
       // The loudest bucket in the window IS the instantaneous peak, so the gain
       // tracks exactly what is about to be drawn rather than a separate estimate

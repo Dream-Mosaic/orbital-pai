@@ -111,12 +111,19 @@ class PcmRing {
     // Anything older than this has already been overwritten by the ring.
     final oldestLive = math.max(0, _written - capacity);
     final bucket = window / points;
+    // Sub-sample inside each bucket. A 0.6s window at 24kHz puts ~112 samples
+    // in every bucket, and scanning all of them is ~14k iterations PER FRAME at
+    // up to 120Hz for no visible gain: the peak of 16 evenly spread samples
+    // tracks the peak of 112 closely enough that the difference does not
+    // survive being drawn 1px wide. Short windows are unaffected — the stride
+    // floors at 1, so a bucket of 8 still reads all 8.
+    final stride = (bucket / 16).floor().clamp(1, 1 << 20);
     for (var i = 0; i < points; i++) {
       final from = startAbs + (i * bucket).floor();
       var to = startAbs + ((i + 1) * bucket).floor();
       if (to <= from) to = from + 1;
       var peak = 0.0;
-      for (var j = from; j < to; j++) {
+      for (var j = from; j < to; j += stride) {
         // Also keeps j non-negative, so the modulo below is always well-defined.
         if (j < oldestLive || j >= stop) continue;
         final v = _buf[j % capacity] / 32768.0;

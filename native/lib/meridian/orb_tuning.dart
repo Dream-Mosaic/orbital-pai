@@ -34,11 +34,30 @@ const double kLevelRelease60 = 0.12;
 /// radius. The trace is mirrored, so the drawn band is twice this.
 const double kWaveAmp = 0.34;
 
+/// How much audio the trace shows across its full width, in seconds.
+///
+/// THE knob that decides whether this reads as a voice or as hair. It used to
+/// be a fixed 1024 samples — 43ms at the 24kHz TTS rate — so the trace was an
+/// oscilloscope zoomed in on individual glottal pulses, scrolling a whole
+/// screen-width every 43ms. Every bucket held 8 samples, which within a single
+/// pitch period swing wildly from one to the next; that is the spikiness, and
+/// no amount of smoothing fixes it because the detail is real. Over ~0.6s each
+/// bucket spans several pitch periods instead, so its peak becomes the SYLLABLE
+/// envelope: smooth, legible, and scrolling at a pace the eye can follow.
+///
+/// Bounded by PcmRing.defaultCapacity (1.37s at 24kHz) — leave margin.
+const double kWaveSeconds = 0.6;
+
+/// Neighbour blend applied across buckets, 0 = none.
+/// Takes the last of the hash off the envelope's edge. Deliberately small: this
+/// is polish on top of [kWaveSeconds], not a substitute for it.
+const double kWaveSmoothing = 0.35;
+
 /// Response curve applied to each normalised bucket magnitude.
 /// Below 1.0 LIFTS quiet detail (a 0.3 becomes 0.43 at 0.7), which is what
 /// stops soft syllables from disappearing. Above 1.0 would exaggerate peaks at
 /// the cost of everything else.
-const double kWaveCurve = 0.7;
+const double kWaveCurve = 0.8;
 
 /// Fill opacity of the envelope body at its widest.
 const double kWaveFillAlpha = 0.34;

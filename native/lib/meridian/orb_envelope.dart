@@ -5,6 +5,29 @@ import 'package:flutter/material.dart';
 
 import 'orb_tuning.dart';
 
+/// Append [pts] to [path] as a quadratic curve through their midpoints.
+///
+/// Each interior point is a CONTROL point, so the curve passes through the
+/// midpoints between them and never through the samples themselves — which is
+/// exactly what rounds the corners. The first and last points are kept exact so
+/// the envelope still starts and ends on the centreline where the taper puts
+/// it, rather than drifting off it.
+void _traceCurve(Path path, List<Offset> pts, {required bool moveTo}) {
+  if (moveTo) {
+    path.moveTo(pts.first.dx, pts.first.dy);
+  } else {
+    path.lineTo(pts.first.dx, pts.first.dy);
+  }
+  for (var i = 1; i < pts.length - 1; i++) {
+    final mid = Offset(
+      (pts[i].dx + pts[i + 1].dx) / 2,
+      (pts[i].dy + pts[i + 1].dy) / 2,
+    );
+    path.quadraticBezierTo(pts[i].dx, pts[i].dy, mid.dx, mid.dy);
+  }
+  path.lineTo(pts.last.dx, pts.last.dy);
+}
+
 /// Live waveform across the orb's core as a MIRRORED, FILLED envelope,
 /// tapered at both ends, with a soft glowing outline.
 ///
@@ -44,10 +67,12 @@ void drawOrbEnvelope(
     bottom.add(Offset(x, cy + dy));
   }
 
-  final path = Path()..addPolygon(top, false);
-  for (var i = n - 1; i >= 0; i--) {
-    path.lineTo(bottom[i].dx, bottom[i].dy);
-  }
+  // Curved, not a polygon. 128 straight segments meeting at hard corners is
+  // the other half of what read as "spikey" — even a smooth envelope looks
+  // jagged when every sample is a vertex.
+  final path = Path();
+  _traceCurve(path, top, moveTo: true);
+  _traceCurve(path, bottom.reversed.toList(growable: false), moveTo: false);
   path.close();
 
   // Fill: brightest at the two edges of the band, thinner through the middle,

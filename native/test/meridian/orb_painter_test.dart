@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -197,13 +198,51 @@ void main() {
       }
     }
 
-    test('consecutive frames overlap instead of jumping a whole chunk', () {
+    /// Audio with a varying ENVELOPE — a carrier under a slow amplitude
+    /// modulation, which is roughly the shape syllables make.
+    ///
+    /// The ramp `feed` above is unsuitable for these two: its amplitude is
+    /// constant, so over a 0.6s window every bucket's PEAK is the same value
+    /// and the trace is flat — which would make a slide assertion vacuous. That
+    /// it now matters is the point of the change: the trace shows an envelope,
+    /// not a waveform.
+    void feedSyllables(OrbFrame f, {required int rate, int samples = 40000}) {
+      const chunk = 512;
+      var k = 0;
+      while (k < samples) {
+        final b = ByteData(chunk * 2);
+        for (var i = 0; i < chunk; i++) {
+          final env = 0.2 + 0.8 * math.sin(2 * math.pi * k / 3000).abs();
+          b.setInt16(i * 2, ((k.isEven ? 1 : -1) * env * 12000).round(),
+              Endian.little);
+          k++;
+        }
+        f.feedPcm(b.buffer.asUint8List(), sampleRate: rate);
+      }
+    }
+
+    /// Seconds of playback that slide the trace by exactly [points] buckets, at
+    /// [rate]. The window is now a DURATION ([kWaveSeconds]) rather than a fixed
+    /// sample count, so the old "0.016s == 32 points" arithmetic no longer
+    /// holds — derive it instead of writing a number that a retune invalidates.
+    double secondsForPoints(int points, int rate) =>
+        points * kWaveSeconds / OrbFrame.kWavePoints;
+
+    test('consecutive frames slide the trace instead of redrawing it', () {
+      const rate = 24000;
       final f = OrbFrame()..state = OrbState.speaking;
-      feed(f);
-      f.advance(0.016);
+      feedSyllables(f, rate: rate);
+      // Play past one full window first: a run anchors the cursor at its FIRST
+      // sample, so until then the window is mostly the silence before the
+      // stream and the trace is legitimately flat.
+      for (var i = 0; i < 48; i++) {
+        f.advance(1 / 60); // 0.8s > kWaveSeconds
+      }
       final first = Float32List.fromList(f.waveform);
+
+      const shift = 4;
       // NO new audio this frame: the cursor alone must move the trace on.
-      f.advance(0.016);
+      f.advance(secondsForPoints(shift, rate));
       final second = Float32List.fromList(f.waveform);
 
       expect(first.toSet().length, greaterThan(10),
@@ -211,31 +250,46 @@ void main() {
       expect(second, isNot(equals(first)),
           reason: 'the trace must advance on frames where no chunk arrived');
 
-      // 0.016s at 16kHz = 256 samples = exactly 32 of the 128 points, so this
-      // frame is the previous one shifted left by 32 — a slide, not a redraw.
-      for (var i = 0; i < OrbFrame.kWavePoints - 32; i++) {
-        expect(second[i], closeTo(first[i + 32], 1e-9),
-            reason: 'point $i must be the previous frame\'s point ${i + 32}');
+      // Every point is the previous frame's point `shift` to its right — a
+      // slide, not a redraw. The tolerance absorbs the 3-tap bucket smoothing
+      // at the seams; the interior is otherwise exact.
+      var matched = 0;
+      for (var i = 2; i < OrbFrame.kWavePoints - shift - 2; i++) {
+        if ((second[i] - first[i + shift]).abs() < 0.02) matched++;
       }
+      expect(matched, greaterThan(OrbFrame.kWavePoints - shift - 20),
+          reason: 'the frame must be the previous one shifted, not a fresh read');
     });
 
-    test('the cursor advances at the feeding stream\'s sample rate', () {
-      final f = OrbFrame()..state = OrbState.speaking;
-      feed(f, rate: 24000); // TTS
-      f.advance(0.016);
-      final first = Float32List.fromList(f.waveform);
-      f.advance(0.016);
-      final second = Float32List.fromList(f.waveform);
+    test('the trace shows kWaveSeconds of audio, whatever the sample rate', () {
+      // The window is a duration now. It was a fixed 1024 samples — the web
+      // analyser's fftSize, carried over unexamined — which at the 24kHz TTS
+      // rate is 43ms across the whole width: an oscilloscope zoomed in on
+      // individual glottal pulses, scrolling a screen-width every 43ms. That
+      // is what read as hair.
+      for (final rate in [16000, 24000]) {
+        final f = OrbFrame()..state = OrbState.speaking;
+        feedSyllables(f, rate: rate);
+        for (var i = 0; i < 48; i++) {
+          f.advance(1 / 60);
+        }
+        final before = Float32List.fromList(f.waveform);
 
-      // 0.016s at 24kHz = 384 samples = 48 points. Reading 24k audio at the mic
-      // rate would slide 32 and drift out of sync with what is being heard.
-      for (var i = 0; i < OrbFrame.kWavePoints - 48; i++) {
-        expect(second[i], closeTo(first[i + 48], 1e-9),
-            reason: '24kHz audio must slide 48 points per 16ms frame');
+        // Slide by exactly half the width; the right half must become the left.
+        f.advance(secondsForPoints(OrbFrame.kWavePoints ~/ 2, rate));
+        final after = Float32List.fromList(f.waveform);
+
+        var matched = 0;
+        for (var i = 2; i < OrbFrame.kWavePoints ~/ 2 - 2; i++) {
+          if ((after[i] - before[i + OrbFrame.kWavePoints ~/ 2]).abs() < 0.02) {
+            matched++;
+          }
+        }
+        expect(matched, greaterThan(OrbFrame.kWavePoints ~/ 2 - 20),
+            reason: 'at ${rate}Hz the window must still span kWaveSeconds');
+        f.dispose();
       }
     });
-
-
 
     test('feedPcm does not notify — advance() drives the repaint', () {
       final f = OrbFrame()..state = OrbState.speaking;
