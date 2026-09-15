@@ -35,20 +35,6 @@ class OrbFrame extends ChangeNotifier {
   /// to be measured, not assumed.
   int _chunk = 0;
 
-  /// How far behind the newest sample the cursor runs. The stream arrives in
-  /// bursts while the cursor drains smoothly, so the lag sawtooths by one chunk
-  /// between arrivals; keeping TWO chunks of lead means the trough never reaches
-  /// the write head. Too small and the cursor starves once per chunk — which is
-  /// exactly the stutter this buffering exists to remove.
-  int get _waveTargetLag =>
-      math.max(kWaveWindow, math.min(_chunk * 2, PcmRing.defaultCapacity ~/ 4));
-
-  /// Resync threshold, both directions. In steady state neither bound is reached:
-  /// the cursor and the stream advance at the same long-run rate. It trips on
-  /// startup, on a stalled or bursty stream, and on slow drift between the frame
-  /// clock and the audio clock.
-  int get _waveMaxLag => _waveTargetLag * 2;
-
   OrbState _state = OrbState.off;
   final LevelSmoother _smoother = LevelSmoother(); // attack/release live here
   final AutoGain _gain = AutoGain();
@@ -66,10 +52,13 @@ class OrbFrame extends ChangeNotifier {
   double _playhead = 0.0;
   int _feedRate = 16000; // 16k mic / 24k TTS, set by whoever is feeding us
 
-  /// Seconds since the last [feedPcm]. The ring advances only when audio
-  /// arrives while the read cursor advances on wall-clock, so this is the only
-  /// thing that can tell a brief jitter stall from a stream that has stopped.
-  double _sinceFeed = 0.0;
+  /// Whether a playback run is in progress. A run begins with the first chunk
+  /// after the last one ended, and ends when the trace has drawn every sample
+  /// that arrived and faded out.
+  bool _runActive = false;
+
+  /// Seconds the cursor has spent having nothing left to draw. Drives the fade.
+  double _dryFor = 0.0;
 
   OrbState get state => _state;
   set state(OrbState v) {
@@ -84,7 +73,8 @@ class OrbFrame extends ChangeNotifier {
       _transient.reset();
       _gain.reset();
       _waveGain = 1.0;
-      _sinceFeed = 0.0;
+      _runActive = false;
+      _dryFor = 0.0;
       _audioTarget = 0.0;
       // Same reasoning for the trace: a wake must not flash the audio from
       // whatever was being said when we powered down.
@@ -104,8 +94,43 @@ class OrbFrame extends ChangeNotifier {
     _feedRate = sampleRate;
     final n = pcm16.lengthInBytes ~/ 2;
     if (n > _chunk) _chunk = n;
-    _sinceFeed = 0.0;
+    if (!_runActive) {
+      // A new playback run. Clear the ring and put the cursor at zero so the
+      // window before the first sample reads as silence rather than as the tail
+      // of the PREVIOUS utterance — the same reason powering off clears it.
+      // Zeroing also makes ring positions run-relative, which is what lets
+      // [syncPlayback] compare them against AudioTrack's run-relative clock
+      // without a second offset to keep in step.
+      _ring.clear();
+      _playhead = 0.0;
+      _gain.reset();
+      _runActive = true;
+      _dryFor = 0.0;
+    }
     _ring.write(pcm16);
+  }
+
+  /// Correct the cursor against the ACTUAL playback position, in run-relative
+  /// milliseconds (`AudioTrackPlayer.playedMs`).
+  ///
+  /// The cursor free-runs at real time between calls, which is right in the
+  /// long run because playback consumes at real time too — but it starts the
+  /// run a jitter-buffer ahead of the sound, and any underrun stretches
+  /// playback without stretching the cursor. This is the only clock that knows
+  /// either. Eased rather than snapped so a correction never reads as a jump;
+  /// a large error snaps, because easing across a long gap would crawl.
+  ///
+  /// `ms <= 0` is ignored: the player reports 0 when idle, and taking that
+  /// literally would rewind a live trace to the start of the utterance.
+  void syncPlayback(int ms) {
+    if (!_runActive || ms <= 0) return;
+    final target = ms * _feedRate / 1000.0;
+    final error = target - _playhead;
+    if (error.abs() > _feedRate * 0.25) {
+      _playhead = target;
+    } else {
+      _playhead += error * 0.25;
+    }
   }
 
   /// Whether the orb draws a waveform right now.
@@ -190,7 +215,8 @@ class OrbFrame extends ChangeNotifier {
       _transient.reset();
       _gain.reset();
       _waveGain = 1.0;
-      _sinceFeed = 0.0;
+      _runActive = false;
+      _dryFor = 0.0;
       _audioTarget = 0.0;
       return;
     }
@@ -217,38 +243,38 @@ class OrbFrame extends ChangeNotifier {
   /// stalled or bursty stream, and long-run drift between the frame clock and the
   /// audio clock.
   void _advanceWave(double dt) {
-    _sinceFeed += dt;
+    _playhead += dt * _feedRate;
+    final written = _ring.written;
 
-    // The stream has gone quiet. Hold the cursor where it is and fade the held
-    // window out, rather than letting it run on.
-    //
-    // This is the bug that made a waveform outlive its audio: the cursor
-    // advances on WALL-CLOCK while the ring only advances when audio arrives,
-    // so once the stream stops the cursor overruns the write head, the lag goes
-    // negative, and the resync below drops it straight back into the last
-    // written samples — re-reading the same window forever, sliding and
-    // re-syncing. On screen: a wave still open and still moving with nothing
-    // being said. The resync is right for the brief jitter stall it was built
-    // for; it simply cannot tell that from a stream that has ended, and only
-    // elapsed time can. A tool round is the case that matters — the brain goes
-    // quiet mid-turn while the orb is legitimately still `speaking`.
-    final dry = _sinceFeed - kWaveDrySeconds;
-    if (dry > 0) {
+    // DRYNESS IS "the cursor has drawn every sample that exists", not "no audio
+    // arrived recently". Those are wildly different for TTS: Cartesia streams an
+    // utterance far faster than real time, so a ten-second answer can ARRIVE in
+    // two and then play out for eight. Keyed on arrival, the trace faded
+    // half-way through Henry still talking.
+    if (_playhead >= written) {
+      // Hold at the write head. Letting it run on is what used to overrun the
+      // stream and trip the forward resync below into re-reading the tail
+      // forever — a wave still open with nothing being said.
+      _playhead = written.toDouble();
+      _dryFor += dt;
+      final dry = _dryFor - kWaveDrySeconds;
+      if (dry <= 0) {
+        // A grace period, so a single frame of overrun cannot flicker.
+        _readWindow(dt, observeGain: false);
+        return;
+      }
       final fade = 1.0 - (dry / kWaveFadeSeconds).clamp(0.0, 1.0);
       if (fade <= 0.0) {
         _waveScratch.fillRange(0, kWavePoints, 0.0);
         _waveform = _waveScratch;
-        // Park on the write head so the next chunk to arrive rebuilds the lead
-        // from scratch instead of inheriting a cursor that ran off during the
-        // silence.
-        _playhead = _ring.written.toDouble();
         _gain.reset();
+        _runActive = false; // the next chunk starts a fresh run
         return;
       }
       // Re-read the SAME window and scale it. Scaling in place would compound
       // frame over frame; `fade` is recomputed from elapsed time each frame, so
       // re-reading first keeps the ramp linear.
-      _ring.readInto(_waveScratch, end: _playhead.floor(), window: kWaveWindow);
+      _readWindow(dt, observeGain: false);
       for (var i = 0; i < kWavePoints; i++) {
         _waveScratch[i] *= fade;
       }
@@ -256,29 +282,37 @@ class OrbFrame extends ChangeNotifier {
       return;
     }
 
-    _playhead += dt * _feedRate;
-    final written = _ring.written;
-    final lag = written - _playhead;
-    // Both bounds resync to the same place. Clamping a starved cursor to the
-    // write head instead would leave it pinned there — reading `written` every
-    // frame is precisely the per-chunk behaviour this replaced, and nothing
-    // would ever restore the lead, so one stall would degrade the trace for the
-    // rest of the session.
-    if (lag < 0 || lag > _waveMaxLag) {
-      _playhead = (written - _waveTargetLag).toDouble();
+    _dryFor = 0.0;
+    // Deliberately NO forward resync. The old `lag > _waveMaxLag` clamp yanked
+    // the cursor up to the newest ARRIVED sample, which for a stream that
+    // arrives faster than it plays meant the trace ran seconds ahead of the
+    // sound. It was built for a real-time mic stream, where arrival and
+    // playback are the same rate and the clamp is harmless. The cursor's rate
+    // is now the only thing that decides what is drawn, so it stays honest by
+    // construction — and [syncPlayback] corrects the drift.
+    //
+    // Falling off the BACK is still possible if the ring evicts what we have
+    // not drawn yet (a very long stall); clamp up to the oldest live sample
+    // rather than reading silence that was really speech.
+    final oldestLive = written - PcmRing.defaultCapacity;
+    if (_playhead < oldestLive) _playhead = oldestLive.toDouble();
+    _readWindow(dt, observeGain: true);
+  }
+
+  void _readWindow(double dt, {required bool observeGain}) {
+    _ring.readInto(_waveScratch, end: _playhead.floor(), window: kWaveWindow);
+    if (observeGain) {
+      // The loudest bucket in the window IS the instantaneous peak, so the gain
+      // tracks exactly what is about to be drawn rather than a separate estimate
+      // that could disagree with it.
+      var peak = 0.0;
+      for (var i = 0; i < kWavePoints; i++) {
+        final v = _waveScratch[i];
+        if (v > peak) peak = v;
+      }
+      _gain.observe(peak, dt);
+      _waveGain = _gain.gain;
     }
-    _ring.readInto(_waveScratch,
-        end: _playhead.floor(), window: kWaveWindow);
-    // The loudest bucket in the window IS the instantaneous peak, so the gain
-    // tracks exactly what is about to be drawn rather than a separate estimate
-    // that could disagree with it.
-    var peak = 0.0;
-    for (var i = 0; i < kWavePoints; i++) {
-      final v = _waveScratch[i];
-      if (v > peak) peak = v;
-    }
-    _gain.observe(peak, dt);
-    _waveGain = _gain.gain;
     // Reused in place: advance() is the only writer and it runs on the frame
     // callback, and the painter reads it synchronously in the paint that this
     // same notifyListeners() schedules.

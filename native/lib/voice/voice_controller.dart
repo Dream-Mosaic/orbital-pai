@@ -300,7 +300,42 @@ class VoiceController extends ChangeNotifier {
     // cancel/stop can resolve after orbFrame.dispose() has already run.
     if (_disposed) return;
     orbFrame.state = orbState;
+    _syncPlaybackClock();
     _safeNotify();
+  }
+
+  /// How often the orb's cursor is corrected against AudioTrack's own clock.
+  /// Four times a second: enough to catch an underrun before it is visible,
+  /// cheap enough that the platform-channel round trip does not matter.
+  static const Duration _playbackSyncPeriod = Duration(milliseconds: 250);
+
+  Timer? _playbackSyncTimer;
+
+  /// Run a low-frequency poll of the real playback position while, and only
+  /// while, Henry is actually speaking.
+  ///
+  /// The lifecycle is deliberately tight. `flutter_test` fails a test that
+  /// leaves a Timer pending, and it checks BEFORE tearDown disposal (see the
+  /// note on [deviceIdReady]), so a timer that outlives its reason is not a
+  /// tidiness problem — it breaks the suite. It exists only between entering
+  /// and leaving `speaking`, and only with a live player.
+  void _syncPlaybackClock() {
+    final wanted = _playerReady && orbFrame.state == OrbState.speaking;
+    if (!wanted) {
+      _playbackSyncTimer?.cancel();
+      _playbackSyncTimer = null;
+      return;
+    }
+    if (_playbackSyncTimer != null) return;
+    _playbackSyncTimer = Timer.periodic(_playbackSyncPeriod, (_) async {
+      if (_disposed || !_playerReady) return;
+      try {
+        orbFrame.syncPlayback(await _player.playedMs());
+      } catch (_) {
+        // A platform-channel hiccup must not take the orb down. The cursor
+        // free-runs at real time on its own; this only corrects it.
+      }
+    });
   }
 
   /// The single place `_wakeLocked` is assigned. Reached from BOTH paths the
@@ -1401,6 +1436,8 @@ class VoiceController extends ChangeNotifier {
       _player.dispose();
       _playerReady = false;
     }
+    _playbackSyncTimer?.cancel();
+    _playbackSyncTimer = null;
     orbFrame.dispose();
     super.dispose();
   }

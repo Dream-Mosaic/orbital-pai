@@ -235,41 +235,7 @@ void main() {
       }
     });
 
-    test('the lead is sized from the observed chunk, not assumed', () {
-      // Chunk size is a device property (Android hands back whatever
-      // AudioRecord.getMinBufferSize decided), and a lead shorter than a chunk
-      // starves the cursor once per chunk.
-      final small = OrbFrame()..state = OrbState.speaking;
-      feed(small, chunks: 16, each: 512);
-      small.advance(0.016);
 
-      final large = OrbFrame()..state = OrbState.speaking;
-      feed(large, chunks: 4, each: 2048);
-      large.advance(0.016);
-
-      expect(large.debugWaveLag, greaterThan(small.debugWaveLag),
-          reason: 'a 2048-sample chunk needs more lead than a 512-sample one');
-      expect(large.debugWaveLag, greaterThanOrEqualTo(2048.0),
-          reason: 'the lead must cover at least one whole chunk');
-    });
-
-    test('a stalled stream does not leave the cursor pinned to the write head',
-        () {
-      final f = OrbFrame()..state = OrbState.speaking;
-      feed(f);
-      f.advance(0.016); // settles the cursor behind the newest sample
-
-      // The stream stalls (jitter, a late buffer) and the cursor eats its lead.
-      for (var i = 0; i < 6; i++) {
-        f.advance(0.016);
-      }
-
-      expect(f.debugWaveLag, greaterThanOrEqualTo(512.0),
-          reason: 'a cursor left on the write head reads a fresh window per '
-              'chunk forever after — the stutter this replaced');
-      expect(f.debugWaveLag, lessThanOrEqualTo(0.0 + 2048),
-          reason: 'and it must not fall so far behind that the ring evicts it');
-    });
 
     test('feedPcm does not notify — advance() drives the repaint', () {
       final f = OrbFrame()..state = OrbState.speaking;
@@ -469,8 +435,9 @@ void main() {
       f.advance(1 / 60);
       expect(f.waveform.any((v) => v != 0.0), isTrue, reason: 'sanity: drawing');
 
-      // Well past kWaveDrySeconds + kWaveFadeSeconds, with no new audio.
-      for (var i = 0; i < 60; i++) {
+      // Long enough to play out everything that arrived AND sit through the
+      // grace and the fade.
+      for (var i = 0; i < 120; i++) {
         f.advance(1 / 60);
       }
       expect(f.waveform.every((v) => v == 0.0), isTrue,
@@ -486,11 +453,17 @@ void main() {
       f.advance(1 / 60);
       final full = f.waveform.reduce((a, b) => a > b ? a : b);
 
-      // Land inside the fade window: past the dry threshold, short of the end.
-      var elapsed = 1 / 60;
-      while (elapsed < kWaveDrySeconds + kWaveFadeSeconds * 0.5) {
+      // Run the cursor until it has drawn everything that arrived — the dry
+      // clock starts THERE, not at the last feed, which is the whole point of
+      // the change (audio arrives far faster than it plays).
+      while (f.debugWaveLag > 0) {
         f.advance(1 / 60);
-        elapsed += 1 / 60;
+      }
+      // Then land inside the fade window.
+      var dryElapsed = 0.0;
+      while (dryElapsed < kWaveDrySeconds + kWaveFadeSeconds * 0.5) {
+        f.advance(1 / 60);
+        dryElapsed += 1 / 60;
       }
       final mid = f.waveform.reduce((a, b) => a > b ? a : b);
       expect(mid, lessThan(full));
@@ -503,7 +476,7 @@ void main() {
       // keeps talking.
       final f = OrbFrame()..state = OrbState.speaking;
       feed(f);
-      for (var i = 0; i < 60; i++) {
+      for (var i = 0; i < 120; i++) {
         f.advance(1 / 60);
       }
       expect(f.waveform.every((v) => v == 0.0), isTrue, reason: 'sanity: dry');
@@ -512,6 +485,93 @@ void main() {
       f.advance(1 / 60);
       f.advance(1 / 60);
       expect(f.waveform.any((v) => v != 0.0), isTrue);
+      f.dispose();
+    });
+  });
+
+  group('the cursor follows PLAYBACK, not arrival', () {
+    /// One second of 24kHz audio, delivered in a single burst — which is what
+    /// TTS actually does. Cartesia streams an utterance far faster than real
+    /// time, so a ten-second answer can ARRIVE in two and then play for eight.
+    void burst(OrbFrame f, {int seconds = 1}) {
+      const rate = 24000;
+      final b = ByteData(rate * seconds * 2);
+      for (var i = 0; i < rate * seconds; i++) {
+        b.setInt16(i * 2, (i % 257) * 100 - 12800, Endian.little);
+      }
+      f.feedPcm(b.buffer.asUint8List(), sampleRate: rate);
+    }
+
+    test('a fast-arriving stream does not drag the cursor to the newest sample',
+        () {
+      // THE regression test. The old code clamped the cursor to a fixed lead
+      // behind the write head, which is right for a real-time mic stream and
+      // badly wrong for TTS: it kept yanking the cursor onto the newest
+      // ARRIVED sample, so the trace ran SECONDS ahead of the sound, and then
+      // looped the tail once arrival stopped.
+      final f = OrbFrame()..state = OrbState.speaking;
+      burst(f); // a whole second lands at once
+      f.advance(1 / 60);
+
+      // One frame in, the cursor must be one frame into the audio — not at the
+      // end of it. 24000 - 400 = 23600 samples still to play.
+      expect(f.debugWaveLag, greaterThan(20000),
+          reason: 'the cursor must still have almost the whole second to play');
+      f.dispose();
+    });
+
+    test('it advances at real time however fast the audio arrived', () {
+      final f = OrbFrame()..state = OrbState.speaking;
+      burst(f);
+      final before = f.debugWaveLag;
+      for (var i = 0; i < 30; i++) {
+        f.advance(1 / 60); // half a second of frames
+      }
+      // Half a second of playback = 12000 samples consumed, give or take a
+      // frame. Nothing about the arrival burst may change that.
+      expect(before - f.debugWaveLag, closeTo(12000, 500));
+      f.dispose();
+    });
+
+    test('syncPlayback corrects the cursor toward the real playback position',
+        () {
+      // The cursor free-runs between syncs, which is right in the long run
+      // because playback consumes at real time too — but it starts a run a
+      // jitter-buffer ahead of the sound, and an underrun stretches playback
+      // without stretching the cursor. AudioTrack's clock is the only thing
+      // that knows either.
+      final f = OrbFrame()..state = OrbState.speaking;
+      burst(f);
+      for (var i = 0; i < 30; i++) {
+        f.advance(1 / 60);
+      }
+      final free = 24000 - f.debugWaveLag; // where the cursor thinks it is
+
+      // The player says only 100ms has really been heard.
+      f.syncPlayback(100);
+      final synced = 24000 - f.debugWaveLag;
+      expect(synced, lessThan(free), reason: 'must move back toward the truth');
+      f.dispose();
+    });
+
+    test('syncPlayback ignores an idle report', () {
+      // playedMs() returns 0 when the player is idle. Taking that literally
+      // would rewind a live trace to the start of the utterance.
+      final f = OrbFrame()..state = OrbState.speaking;
+      burst(f);
+      for (var i = 0; i < 30; i++) {
+        f.advance(1 / 60);
+      }
+      final before = f.debugWaveLag;
+      f.syncPlayback(0);
+      expect(f.debugWaveLag, before);
+      f.dispose();
+    });
+
+    test('syncPlayback before any audio is inert', () {
+      final f = OrbFrame()..state = OrbState.speaking;
+      f.syncPlayback(500);
+      expect(f.debugWaveLag, 0.0);
       f.dispose();
     });
   });
