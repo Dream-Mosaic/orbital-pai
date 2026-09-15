@@ -57,7 +57,9 @@ defmodule AppWeb.AuthController do
   # no callback coming back to read it from -- so this takes the target from params instead, same
   # as `GoogleAuthController.bail/3`. An app-initiated login that dies here must still return to
   # the app rather than leaving it with no signal that anything happened.
-  defp bail(conn, "app", _message), do: redirect(conn, external: AppLink.auth_error())
+  defp bail(conn, "app", message) do
+    app_return(conn, "Sign-in didn't complete", message, AppLink.auth_error())
+  end
 
   defp bail(conn, _target, message) do
     conn |> put_flash(:error, message) |> redirect(to: ~p"/login")
@@ -98,7 +100,7 @@ defmodule AppWeb.AuthController do
 
       if app_return? do
         code = AppCode.mint(user.id)
-        redirect(conn, external: AppLink.auth(code))
+        app_return(conn, "Signed in", "Signed in as #{user.name}.", AppLink.auth(code))
       else
         redirect(conn, to: return_to)
       end
@@ -140,10 +142,27 @@ defmodule AppWeb.AuthController do
       |> delete_session(:oidc_return)
 
     if app_return? do
-      redirect(conn, external: AppLink.auth_error())
+      app_return(conn, "Sign-in didn't complete", message, AppLink.auth_error())
     else
       conn |> put_flash(:error, message) |> redirect(to: ~p"/login")
     end
+  end
+
+  # The tab a native-app flow ends in. `message` is the same line the web branch would have
+  # flashed, plus the close hint; the deep link rides a meta refresh AND a button so a Custom
+  # Tab leaves immediately and a plain browser still has something to click. The session keys
+  # are cleared here too so a pre-hop `bail/3` (which never stored them) and a post-hop failure
+  # (which did) end in the same state. The root layout (router plug) supplies the dark shell;
+  # there is no app layout to suppress.
+  defp app_return(conn, title, message, link) do
+    conn
+    |> delete_session(:oidc_state)
+    |> delete_session(:oidc_return)
+    |> render(:app_return,
+      title: title,
+      body: String.trim("#{message} You can close this tab."),
+      link: link
+    )
   end
 
   def logout(conn, _params), do: UserAuth.log_out_user(conn)

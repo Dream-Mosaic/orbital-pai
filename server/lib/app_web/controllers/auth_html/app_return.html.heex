@@ -1,0 +1,11 @@
+<%!-- The tab a native-app flow finished in. Inside an Android Custom Tab the refresh fires the
+      deep link and the sheet dismisses before any of this is seen; in a plain browser this is
+      what the user reads. The root layout supplies the dark shell; no app layout exists. --%>
+<meta http-equiv="refresh" content={"0;url=" <> @link} />
+<div class="min-h-screen flex items-center justify-center">
+  <div class="text-center space-y-4 max-w-sm px-4">
+    <h1 class="text-2xl font-semibold">{@title}</h1>
+    <p class="opacity-70">{@body}</p>
+    <a href={@link} class="btn btn-primary">Open {App.Config.default().name}</a>
+  </div>
+</div>

@@ -3,6 +3,14 @@ defmodule AppWeb.AuthControllerTest do
 
   alias App.Auth.Oidc
 
+  # The app branches now render a page rather than 302 to the deep link. The link is in the
+  # body twice (meta refresh + button); this pulls the first and undoes HTML escaping.
+  defp app_link(conn) do
+    body = html_response(conn, 200)
+    [link] = Regex.run(~r/orbital:\/\/[a-z]+\?[^"]+/, body)
+    String.replace(link, "&amp;", "&")
+  end
+
   setup do
     Application.put_env(:app, :allowed_users, [%{email: "alice@x.com", name: "Alice"}])
     System.put_env("GOOGLE_CLIENT_ID", "id")
@@ -169,12 +177,14 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
-    url = redirected_to(conn, 302)
+    url = app_link(conn)
     assert String.starts_with?(url, "orbital://auth?")
     code = URI.decode_query(URI.parse(url).query)["code"]
     assert is_binary(code)
     # The 30-day credential must NOT be in the URL.
     refute url =~ "token"
+    assert html_response(conn, 200) =~ "Signed in as Alice"
+    assert html_response(conn, 200) =~ "You can close this tab"
   end
 
   test "the code exchanges for a token that authenticates that user", %{conn: conn} do
@@ -185,7 +195,7 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
-    url = redirected_to(conn, 302)
+    url = app_link(conn)
     code = URI.decode_query(URI.parse(url).query)["code"]
     user = App.Users.get_by_email("alice@x.com")
 
@@ -203,7 +213,7 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
-    url = redirected_to(conn, 302)
+    url = app_link(conn)
     code = URI.decode_query(URI.parse(url).query)["code"]
 
     # Spend the code once so the replay below finds it already used.
@@ -225,7 +235,8 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "expected", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=WRONG&code=c1")
 
-    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    assert app_link(conn) == AppWeb.AppLink.auth_error()
+    assert html_response(conn, 200) =~ "Sign-in didn&#39;t complete"
     refute get_session(conn, :user_id)
   end
 
@@ -238,7 +249,8 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=st&code=c1")
 
-    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    assert app_link(conn) == AppWeb.AppLink.auth_error()
+    assert html_response(conn, 200) =~ "Sign-in didn&#39;t complete"
     refute get_session(conn, :user_id)
   end
 
@@ -248,7 +260,22 @@ defmodule AppWeb.AuthControllerTest do
       |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
       |> get(~p"/auth/oidc/callback?state=st&error=access_denied")
 
-    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    assert app_link(conn) == AppWeb.AppLink.auth_error()
+    assert html_response(conn, 200) =~ "Sign-in didn&#39;t complete"
+  end
+
+  test "the app-return page carries the deep link as a meta refresh and a button", %{conn: conn} do
+    conn =
+      conn
+      |> init_test_session(%{oidc_state: "st", oidc_return: "app"})
+      |> get(~p"/auth/oidc/callback?state=st&error=access_denied")
+
+    body = html_response(conn, 200)
+    assert body =~ ~s(http-equiv="refresh")
+    assert body =~ ~s(content="0;url=orbital://auth?status=error")
+    assert body =~ ~s(href="orbital://auth?status=error")
+    assert body =~ "Open #{App.Config.default().name}"
+    refute get_session(conn, :oidc_return)
   end
 
   # The pre-hop failure: the browser never even leaves our domain, so without this the
@@ -260,7 +287,8 @@ defmodule AppWeb.AuthControllerTest do
 
     conn = get(conn, ~p"/auth/login?return=app")
 
-    assert redirected_to(conn, 302) == AppWeb.AppLink.auth_error()
+    assert app_link(conn) == AppWeb.AppLink.auth_error()
+    assert html_response(conn, 200) =~ "Sign-in didn&#39;t complete"
   end
 
   test "a web-flow login does NOT deep-link", %{conn: conn} do
