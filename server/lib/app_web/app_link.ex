@@ -4,14 +4,17 @@ defmodule AppWeb.AppLink do
 
   These are NOT OAuth redirect URIs. Google never sees them and has no opinion about them: by
   the time one is built, the OAuth flow is completely finished — the code was exchanged and the
-  account stored — and all that is left is telling the system browser it can hand control back
-  to the app it was launched from. That is why adding a connector needs no Google Cloud change
-  (see `AppWeb.GoogleAuthController.connect/2`'s `return` param).
+  account stored — and all that is left is handing the result to the app. The app opens these
+  flows in an OS auth session (`flutter_web_auth_2`), which returns this URL to the app directly
+  and dismisses itself; the callback also renders `AuthHTML`'s `app_return` page carrying the same
+  link for a plain browser tab. That is why adding a connector needs no Google Cloud change (see
+  `AppWeb.GoogleAuthController.connect/2`'s `return` param).
 
   ## Why these carry a status and nothing else
 
-  Any app installed on the device can fire `orbital://connectors?...` at us — an `intent-filter`
-  is open to all callers, not just to our own server. So everything here is treated as
+  Any app installed on the device can fire `orbital://connectors?...` at us — the `CallbackActivity`
+  intent-filter that receives these is open to all callers, not just to our own server. So
+  everything here is treated as
   attacker-controllable on arrival, and the payload is kept to a single allowlisted enum the
   client can validate exhaustively. A human-readable `message=` would be more convenient and
   would hand any installed app a text banner inside Henry to write whatever it liked.

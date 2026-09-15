@@ -256,7 +256,9 @@ defmodule AppWeb.GoogleAuthControllerTest do
         |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
         |> get(~p"/auth/google/callback?state=s1&code=auth-code")
 
-      assert redirected_to(conn, 302) == "orbital://connectors?status=ok"
+      assert app_link(conn) == "orbital://connectors?status=ok"
+      assert html_response(conn, 200) =~ "Connected"
+      assert html_response(conn, 200) =~ "You can close this tab"
       assert Accounts.get_by_email("deep@example.com")
       assert get_session(conn, :google_oauth_return) == nil
     end
@@ -267,7 +269,17 @@ defmodule AppWeb.GoogleAuthControllerTest do
         |> init_test_session(%{google_oauth_state: "s1", google_oauth_return: "app"})
         |> get(~p"/auth/google/callback?state=s1&error=access_denied")
 
-      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
+      assert app_link(conn) == "orbital://connectors?status=error"
+      assert html_response(conn, 200) =~ "Didn&#39;t complete"
+    end
+
+    test "a pre-hop failure on an app flow renders the page with an error link", %{conn: conn} do
+      System.delete_env("GOOGLE_CLIENT_ID")
+      System.delete_env("GOOGLE_CLIENT_SECRET")
+      conn = get(conn, ~p"/auth/google/connect?return=app&calendar=read")
+
+      assert app_link(conn) == "orbital://connectors?status=error"
+      assert html_response(conn, 200) =~ "Didn&#39;t complete"
     end
 
     # The web surface predates all of this and must be untouched by it: a flow with no recorded
@@ -308,7 +320,8 @@ defmodule AppWeb.GoogleAuthControllerTest do
       conn =
         get(conn, ~p"/auth/google/connect?return=app&account=#{acc.id}&calendar=read")
 
-      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
+      assert app_link(conn) == "orbital://connectors?status=error"
+      assert html_response(conn, 200) =~ "Didn&#39;t complete"
     end
 
     test "missing credentials on an app flow returns to the app", %{conn: conn} do
@@ -316,7 +329,8 @@ defmodule AppWeb.GoogleAuthControllerTest do
 
       conn = get(conn, ~p"/auth/google/connect?return=app&calendar=read")
 
-      assert redirected_to(conn, 302) == "orbital://connectors?status=error"
+      assert app_link(conn) == "orbital://connectors?status=error"
+      assert html_response(conn, 200) =~ "Didn&#39;t complete"
     end
   end
 
@@ -342,6 +356,12 @@ defmodule AppWeb.GoogleAuthControllerTest do
       assert redirected_to(conn) == "/login"
       assert get_session(conn, :user_return_to) == nil
     end
+  end
+
+  defp app_link(conn) do
+    body = html_response(conn, 200)
+    [link] = Regex.run(~r/orbital:\/\/[a-z]+\?[^"]+/, body)
+    String.replace(link, "&amp;", "&")
   end
 
   defp stub_token_exchange(email) do

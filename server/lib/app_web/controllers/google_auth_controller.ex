@@ -44,7 +44,8 @@ defmodule AppWeb.GoogleAuthController do
   # params instead. An app-initiated connect that dies here must STILL return to the app: the
   # alternative is the user stranded in a browser tab holding an error, with the app behind it
   # showing no sign anything happened.
-  defp bail(conn, "app", _message), do: redirect(conn, external: AppLink.connectors(:error))
+  defp bail(conn, "app", message),
+    do: app_return(conn, "Didn't complete", message, AppLink.connectors(:error))
 
   defp bail(conn, _target, message) do
     conn |> put_flash(:error, message) |> redirect(to: ~p"/")
@@ -132,7 +133,10 @@ defmodule AppWeb.GoogleAuthController do
       |> delete_session(:google_oauth_return)
 
     if target == "app" do
-      redirect(conn, external: AppLink.connectors(kind))
+      case kind do
+        :info -> app_return(conn, "Connected", "", AppLink.connectors(kind))
+        _ -> app_return(conn, "Didn't complete", message, AppLink.connectors(kind))
+      end
     else
       conn |> put_flash(kind, message) |> redirect(to: ~p"/")
     end
@@ -144,4 +148,16 @@ defmodule AppWeb.GoogleAuthController do
     do:
       System.get_env("GOOGLE_CLIENT_ID") not in [nil, ""] and
         System.get_env("GOOGLE_CLIENT_SECRET") not in [nil, ""]
+
+  # Same page the sign-in flow renders (AuthHTML's app_return) -- one template for every tab a
+  # native-app flow can end in. See AuthController.app_return/4 for why it is a page, not a 302.
+  defp app_return(conn, title, message, link) do
+    conn
+    |> put_view(html: AppWeb.AuthHTML)
+    |> render(:app_return,
+      title: title,
+      body: String.trim("#{message} You can close this tab."),
+      link: link
+    )
+  end
 end
