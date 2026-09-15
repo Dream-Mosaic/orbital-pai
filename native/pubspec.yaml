@@ -19,6 +19,7 @@ dependencies:
   flutter_svg: ^2.0.10
   url_launcher: ^6.3.2
   app_links: ^7.2.1
+  flutter_web_auth_2: ^5.1.0
   flutter_secure_storage: ^11.1.0
   http: ^1.2.0
 

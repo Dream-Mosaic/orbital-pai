@@ -28,19 +28,26 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- The return hop from a connector OAuth flow. The system browser finishes at
-                 the server, which redirects here (see server/lib/app_web/app_link.ex); this
-                 filter is what lets Android hand that URL back to us instead of leaving the
-                 user sitting on a web page. Combined with the singleTop launchMode above, it
-                 brings the RUNNING app forward rather than starting a second copy.
+        </activity>
+        <!-- The return hop from a sign-in or connector flow that ran in the OS auth session
+             (flutter_web_auth_2). The server finishes and redirects to orbital://…; this
+             activity receives it, hands the URL back to the awaiting Dart Future, and finishes,
+             which is what dismisses the Custom Tab. Exactly ONE activity declares this scheme —
+             a second would make Android show a chooser between our own activities.
 
-                 This is not an OAuth redirect URI and Google never sees it — no Google Cloud
-                 configuration corresponds to this block.
+             Still an open intent-filter: any app on the device can fire orbital:// at it. Every
+             URL it delivers is parsed as untrusted (lib/deep_link.dart). Not an OAuth redirect
+             URI; Google and Authentik never see it.
 
-                 The scheme must stay in sync with kAppScheme (lib/deep_link.dart) and @scheme
-                 (server/lib/app_web/app_link.ex). Android reads this at INSTALL time, so
-                 changing it requires a reinstall, not just a rebuild. -->
-            <intent-filter>
+             The scheme must stay in sync with kAppScheme (lib/deep_link.dart) and @scheme
+             (server/lib/app_web/app_link.ex). Android reads this at INSTALL time, so changing
+             it — or moving it here from MainActivity, as this commit did — requires a reinstall
+             (adb install -r), not just a rebuild. -->
+        <activity
+            android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
+            android:exported="true"
+            android:taskAffinity="">
+            <intent-filter android:label="flutter_web_auth_2">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
