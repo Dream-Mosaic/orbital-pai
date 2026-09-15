@@ -1,4 +1,4 @@
-/// Deep links the system browser hands back to this app.
+/// The `orbital://` callbacks the OS auth session resolves with (see auth/browser_session.dart).
 ///
 /// These are NOT OAuth redirect URIs. By the time one arrives the OAuth flow is already
 /// finished server-side — the code was exchanged and the account stored (connectors) or the
@@ -8,14 +8,14 @@
 ///
 /// ## Everything here is untrusted
 ///
-/// An `intent-filter` is open to every app on the device, not just to our own server: anything
-/// installed here can fire `orbital://connectors?status=...` or `orbital://auth?code=...` at us
-/// whenever it likes. So [parseAppLink] is written as an allowlist that returns null for anything
-/// it does not positively recognize, and the server deliberately sends only bounded/short values
-/// rather than a human-readable message or an unbounded blob — a free-text field would hand any
-/// installed app the ability to write whatever it wanted into a banner inside Henry, and an
-/// unbounded `code` would let a hostile app push an arbitrarily large value into the HTTP body the
-/// app later sends when exchanging it.
+/// `flutter_web_auth_2`'s `CallbackActivity` intent-filter is open to every app on the device, not
+/// just to our own server: anything installed here can fire `orbital://connectors?status=...` or
+/// `orbital://auth?code=...` at us whenever it likes. So [parseAppLink] is written as an allowlist
+/// that returns null for anything it does not positively recognize, and the server deliberately
+/// sends only bounded/short values rather than a human-readable message or an unbounded blob — a
+/// free-text field would hand any installed app the ability to write whatever it wanted into a
+/// banner inside Henry, and an unbounded `code` would let a hostile app push an arbitrarily large
+/// value into the HTTP body the app later sends when exchanging it.
 ///
 /// Nothing is lost by keeping the connectors status bounded: the panel refetches on resume, so the
 /// account list already shows the specifics. The status only decides which of two sentences to
@@ -23,7 +23,8 @@
 library;
 
 /// The custom scheme, matching `android:scheme` in
-/// android/app/src/main/AndroidManifest.xml and `@scheme` in server/lib/app_web/app_link.ex.
+/// android/app/src/main/AndroidManifest.xml — now on `flutter_web_auth_2`'s `CallbackActivity`
+/// rather than on our own activity — and `@scheme` in server/lib/app_web/app_link.ex.
 /// Chosen to match the applicationId (com.orbital.pai).
 ///
 /// Changing it means changing all three AND reinstalling the app — Android reads the

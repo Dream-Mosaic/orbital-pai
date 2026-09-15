@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -28,10 +27,9 @@ import 'package:orbital_pai/panels/memory_client.dart';
 import 'package:orbital_pai/panels/reminders_client.dart';
 import 'package:orbital_pai/panels/settings_client.dart';
 import 'package:orbital_pai/panels/voice_lock_client.dart';
-import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
+import 'support/fake_browser_session.dart';
 import 'support/fake_socket.dart';
-import 'support/fake_url_launcher.dart';
 
 /// The PRODUCTION station wiring — `main.dart`'s `_openPanel` — driven through
 /// a real [HenryHome] on a fake socket.
@@ -63,8 +61,8 @@ const String _memoryFrame = '[null,null,"panel:memory:henry","state",'
     '{"summary":"Likes coffee.","facts":[]}]';
 
 // The connectors panel renders nothing at all until its first `state` lands
-// (`ConnectorsPanelView.build` returns a shrink for a null state), so the deep
-// link tests below need one to have anything to assert a banner against.
+// (`ConnectorsPanelView.build` returns a shrink for a null state), so the
+// station that opens it needs one to have anything to render.
 const String _connectorsFrame = '[null,null,"panel:connectors:henry","state",'
     '{"connections":[],"catalog":[]}]';
 
@@ -133,10 +131,7 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  Future<(AppConnection, FakeSocket)> pumpHome(
-    WidgetTester tester, {
-    Stream<Uri>? deepLinks,
-  }) async {
+  Future<(AppConnection, FakeSocket)> pumpHome(WidgetTester tester) async {
     phone(tester);
     // `voice:henry` registers synchronously regardless of the device id
     // (VoiceController's constructor), so it is never at risk of going
@@ -172,7 +167,9 @@ void main() {
       rejoinBackoff: const [Duration(days: 1)],
     );
     await tester.pumpWidget(
-      MaterialApp(home: HenryHome(connection: conn, deepLinks: deepLinks)),
+      MaterialApp(
+        home: HenryHome(connection: conn, session: FakeBrowserSession()),
+      ),
     );
     // Two pumps: one for connect()'s await on the connector, one for the join
     // replies the fake delivers a microtask later.
@@ -407,113 +404,6 @@ void main() {
     await conn.disconnect();
   });
 
-  /// The return hop from a connector OAuth flow that finished in the system
-  /// browser. Production feeds this from `AppLinks().uriLinkStream`; here it is
-  /// a plain controller, which is the whole reason [HenryHome.deepLinks] is
-  /// injectable — see the note in main.dart.
-  group('deep links back from the browser', () {
-    testWidgets('a success link opens the closed Connectors drawer and reports it',
-        (tester) async {
-      // Broadcast, so `close()` completes whether or not a listener is still
-      // attached. A single-subscription controller's close() never completes
-      // once its listener has been cancelled — which is exactly what a FAILING
-      // test does on the way out, turning a clean failure into a hung suite.
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
-      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
-      addTearDown(conn.disconnect);
-
-      expect(find.byType(ConnectorsPanelView), findsNothing);
-
-      links.add(Uri.parse('orbital://connectors?status=ok'));
-      // Two pumps before the slide, same reason pumpHome needs two: a stream
-      // event is delivered a microtask after `add`, so the first pump is what
-      // lets _onDeepLink run at all and the second renders what it pushed.
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
-
-      expect(find.byType(ConnectorsPanelView), findsOneWidget);
-      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
-      expect(find.textContaining('up to date'), findsOneWidget);
-    });
-
-    testWidgets('a failure link says nothing changed', (tester) async {
-      // Broadcast, so `close()` completes whether or not a listener is still
-      // attached. A single-subscription controller's close() never completes
-      // once its listener has been cancelled — which is exactly what a FAILING
-      // test does on the way out, turning a clean failure into a hung suite.
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
-      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
-      addTearDown(conn.disconnect);
-
-      links.add(Uri.parse('orbital://connectors?status=error'));
-      // Two pumps before the slide, same reason pumpHome needs two: a stream
-      // event is delivered a microtask after `add`, so the first pump is what
-      // lets _onDeepLink run at all and the second renders what it pushed.
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
-
-      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
-      expect(find.textContaining("didn't finish"), findsOneWidget);
-    });
-
-    // The drawer is normally still open — the user launched the browser from
-    // it — and re-pushing the route on top of itself would leave two.
-    testWidgets('a link arriving while the drawer is already open does not stack a second one',
-        (tester) async {
-      // Broadcast, so `close()` completes whether or not a listener is still
-      // attached. A single-subscription controller's close() never completes
-      // once its listener has been cancelled — which is exactly what a FAILING
-      // test does on the way out, turning a clean failure into a hung suite.
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
-      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
-      addTearDown(conn.disconnect);
-
-      await tapStation(tester, MeridianTab.connectors);
-      expect(find.byType(ConnectorsPanelView), findsOneWidget);
-
-      links.add(Uri.parse('orbital://connectors?status=ok'));
-      // Two pumps before the slide, same reason pumpHome needs two: a stream
-      // event is delivered a microtask after `add`, so the first pump is what
-      // lets _onDeepLink run at all and the second renders what it pushed.
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
-
-      expect(find.byType(ConnectorsPanelView), findsOneWidget);
-      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
-    });
-
-    // Any app on the device can fire our scheme; an unrecognized link must not
-    // yank a drawer open, let alone claim a connection succeeded.
-    testWidgets('an unrecognized link is ignored entirely', (tester) async {
-      // Broadcast, so `close()` completes whether or not a listener is still
-      // attached. A single-subscription controller's close() never completes
-      // once its listener has been cancelled — which is exactly what a FAILING
-      // test does on the way out, turning a clean failure into a hung suite.
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
-      final (conn, _) = await pumpHome(tester, deepLinks: links.stream);
-      addTearDown(conn.disconnect);
-
-      links.add(Uri.parse('orbital://connectors?status=whatever'));
-      links.add(Uri.parse('orbital://somewhere-else?status=ok'));
-      links.add(Uri.parse('other://connectors?status=ok'));
-      // Two pumps before the slide, same reason pumpHome needs two: a stream
-      // event is delivered a microtask after `add`, so the first pump is what
-      // lets _onDeepLink run at all and the second renders what it pushed.
-      await tester.pump();
-      await tester.pump();
-      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
-
-      expect(find.byType(ConnectorsPanelView), findsNothing);
-    });
-  });
-
   // ---- sign-in gating: the login screen, and the handoff into the shell ----
   //
   // Every test above builds HenryHome with an explicit `connection`, which
@@ -547,38 +437,39 @@ void main() {
     });
 
     testWidgets(
-        "tapping Sign in launches Authentik's login in the EXTERNAL browser",
+        "tapping Sign in opens Authentik's login in the OS auth session",
         (tester) async {
       phone(tester);
-      final fakeLauncher = FakeUrlLauncher.register();
-      final auth = AuthController(store: freshStore());
+      final session = FakeBrowserSession();
+      final auth = AuthController(store: freshStore(), session: session);
       addTearDown(auth.dispose);
-      await tester.pumpWidget(MaterialApp(home: HenryHome(auth: auth)));
+      await tester.pumpWidget(
+          MaterialApp(home: HenryHome(auth: auth, session: session)));
       await tester.pump();
       await tester.pump();
 
       await tester.tap(find.byKey(const Key('login-screen-sign-in')));
       await tester.pump();
 
-      expect(fakeLauncher.launches, hasLength(1));
-      expect(fakeLauncher.launches.single.mode,
-          PreferredLaunchMode.externalApplication);
+      expect(session.opened, hasLength(1));
+      expect(session.opened.single.path, '/auth/login');
+      expect(session.opened.single.queryParameters['return'], 'app');
     });
 
     testWidgets(
-        'an auth error link keeps the login screen up and shows why',
+        'an error callback keeps the login screen up and shows why',
         (tester) async {
       phone(tester);
-      final auth = AuthController(store: freshStore());
+      final session =
+          FakeBrowserSession(result: Uri.parse('orbital://auth?status=error'));
+      final auth = AuthController(store: freshStore(), session: session);
       addTearDown(auth.dispose);
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
       await tester.pumpWidget(
-          MaterialApp(home: HenryHome(auth: auth, deepLinks: links.stream)));
+          MaterialApp(home: HenryHome(auth: auth, session: session)));
       await tester.pump();
       await tester.pump();
 
-      links.add(Uri.parse('orbital://auth?status=error'));
+      await tester.tap(find.byKey(const Key('login-screen-sign-in')));
       await tester.pump();
       await tester.pump();
 
@@ -587,23 +478,24 @@ void main() {
     });
 
     testWidgets(
-        'an auth code link exchanges, stores the token, and hands off to '
+        'a code callback exchanges, stores the token, and hands off to '
         'the connected shell — without ever dialing a real socket',
         (tester) async {
       phone(tester);
       final store = freshStore();
       final client = MockClient((request) async =>
           http.Response(jsonEncode({'token': 'exchanged-token'}), 200));
-      final auth = AuthController(store: store, httpClient: client);
+      final session =
+          FakeBrowserSession(result: Uri.parse('orbital://auth?code=the-code'));
+      final auth =
+          AuthController(store: store, httpClient: client, session: session);
       addTearDown(auth.dispose);
       final fake = FakeSocket();
-      final links = StreamController<Uri>.broadcast();
-      addTearDown(links.close);
 
       await tester.pumpWidget(MaterialApp(
         home: HenryHome(
           auth: auth,
-          deepLinks: links.stream,
+          session: session,
           // The seam that keeps this test from dialing the configured
           // server: HenryHome hands the freshly-signed-in token to this
           // instead of building a default AppConnection.
@@ -617,9 +509,9 @@ void main() {
       await tester.pump();
       expect(find.byType(LoginScreen), findsOneWidget);
 
-      links.add(Uri.parse('orbital://auth?code=the-code'));
-      // A stream event, an HTTP round trip (MockClient still hops a
-      // microtask), the store write, and connect()'s own await on the
+      await tester.tap(find.byKey(const Key('login-screen-sign-in')));
+      // The session's own resolution, an HTTP round trip (MockClient still
+      // hops a microtask), the store write, and connect()'s own await on the
       // connector — several pumps, not one.
       await tester.pump();
       await tester.pump();

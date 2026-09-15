@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -9,7 +8,6 @@ import 'auth/auth_controller.dart';
 import 'auth/browser_session.dart';
 import 'auth/token_store.dart';
 import 'connection/app_connection.dart';
-import 'deep_link.dart';
 import 'meridian/books_panel.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
@@ -58,11 +56,7 @@ class HenryApp extends StatelessWidget {
         theme: ThemeData.dark(useMaterial3: true).copyWith(
           scaffoldBackgroundColor: M.bg,
         ),
-        // The plugin is constructed HERE, not inside HenryHome, so that
-        // HenryHome stays buildable in a widget test without a platform
-        // channel behind it — every test builds HenryHome directly and simply
-        // passes no stream. See [HenryHome.deepLinks].
-        home: HenryHome(deepLinks: AppLinks().uriLinkStream),
+        home: const HenryHome(),
       );
 }
 
@@ -70,8 +64,8 @@ class HenryHome extends StatefulWidget {
   const HenryHome({
     super.key,
     this.connection,
-    this.deepLinks,
     this.auth,
+    this.session,
     this.buildConnection,
   });
 
@@ -89,13 +83,6 @@ class HenryHome extends StatefulWidget {
   /// is owned by this widget and disposed with it.
   final AppConnection? connection;
 
-  /// Deep links the OS delivers to this app — in practice the return hop from
-  /// a connector OAuth flow, or an Authentik login, that finished in the
-  /// system browser (see lib/deep_link.dart). Null means "no link source",
-  /// which is what widget tests want and what makes the plugin's absence a
-  /// non-event rather than a MissingPluginException.
-  final Stream<Uri>? deepLinks;
-
   /// The sign-in state machine. Ignored entirely when [connection] is
   /// supplied (see above). Null (production, no injected connection)
   /// constructs a real one over the platform secure-storage-backed
@@ -103,12 +90,18 @@ class HenryHome extends StatefulWidget {
   /// signed-in without a platform channel behind it.
   final AuthController? auth;
 
+  /// The OS auth session sign-in and the connectors panel launch into.
+  /// Null (production) is the real [WebAuthBrowserSession]; a test hands in a
+  /// FakeBrowserSession so nothing reaches a platform channel. One instance
+  /// is shared by everything that opens a browser, so there is exactly one
+  /// place a test decides how a browser round-trip comes back.
+  final BrowserSession? session;
+
   /// How to turn a freshly-signed-in token into the one real [AppConnection]
   /// this widget builds. Defaults to dialing the configured server. Tests
   /// that exercise the sign-in -> connected handoff override this to hand
   /// back an [AppConnection] wired to a fake socket instead — see
-  /// `main_routing_test.dart`'s "deep links back from the browser" ->
-  /// sign-in group.
+  /// `main_routing_test.dart`'s 'sign-in gating' group.
   /// Injected connection factory. It takes `onRejected` as a PARAMETER rather than letting the
   /// default supply it privately, because the seam must not hide the wiring it stands in for:
   /// when this took only a token, `main.dart` forgot to pass `onRejected` at all and every test
@@ -145,20 +138,18 @@ class _HenryHomeState extends State<HenryHome> {
   /// dispose a controller the caller still owns.
   bool _ownsAuth = false;
 
-  StreamSubscription<Uri>? _linkSub;
+  late final BrowserSession _session = widget.session ?? const WebAuthBrowserSession();
 
   @override
   void initState() {
     super.initState();
-    _linkSub = widget.deepLinks?.listen(_onDeepLink);
-
     final injected = widget.connection;
     if (injected != null) {
       _buildShell(injected);
       return;
     }
 
-    final auth = widget.auth ?? AuthController(store: TokenStore());
+    final auth = widget.auth ?? AuthController(store: TokenStore(), session: _session);
     _ownsAuth = widget.auth == null;
     _auth = auth;
     auth.addListener(_onAuthChanged);
@@ -325,7 +316,6 @@ class _HenryHomeState extends State<HenryHome> {
 
   @override
   void dispose() {
-    unawaited(_linkSub?.cancel());
     _teardownShell();
     if (_ownsAuth) {
       _auth?.dispose();
@@ -333,43 +323,6 @@ class _HenryHomeState extends State<HenryHome> {
       _auth?.removeListener(_onAuthChanged);
     }
     super.dispose();
-  }
-
-  /// A connector flow that went out to the system browser has come back.
-  ///
-  /// Opening the panel when it is closed is the point, not a nicety: the user
-  /// may well have shut the drawer — or the whole app — while they were away,
-  /// and a result delivered to a panel nobody can see is a result nobody gets.
-  /// [ConnectorsClient.isOpen] is the single source of truth for whether the
-  /// drawer is up; there is no second flag here to drift from it, because
-  /// `_openPanel` is the only thing that opens this client and the route's
-  /// `whenComplete` is the only thing that closes it.
-  ///
-  /// Order matters: open first, then record. [ConnectorsClient.close] clears
-  /// the result, so recording into a closed client and opening afterwards
-  /// would show nothing at all.
-  ///
-  /// [AuthCodeLink] and [AuthErrorLink] are the return hop from a sign-in
-  /// that finished in the system browser, and are [_auth]'s business, not
-  /// this panel-opening logic's — `_auth` is null exactly when there is no
-  /// sign-in state machine to hand them to (an injected [widget.connection]),
-  /// in which case there is nothing to do with them.
-  void _onDeepLink(Uri uri) {
-    final link = parseAppLink(uri);
-    // Null is every link this app does not positively recognize — including
-    // anything another app on the device fired at our scheme. Ignored, never
-    // guessed at. See parseAppLink.
-    if (link == null || !mounted) return;
-    switch (link) {
-      case ConnectorsResultLink(:final result):
-        final connectors = _connectors;
-        if (connectors == null) return; // no shell yet — nothing to open
-        if (!connectors.isOpen) _openPanel(MeridianTab.connectors);
-        connectors.noteOauthResult(result);
-      case AuthCodeLink():
-      case AuthErrorLink():
-        unawaited(_auth?.handleLink(link));
-    }
   }
 
   /// Every station is native. A `switch` over the enum, with no default arm,
@@ -406,7 +359,7 @@ class _HenryHomeState extends State<HenryHome> {
         Navigator.of(context)
             .push(meridianDrawerRoute(
               title: tab.label,
-              child: ConnectorsPanelView(client: connectors, session: const WebAuthBrowserSession()),
+              child: ConnectorsPanelView(client: connectors, session: _session),
             ))
             // whenComplete, not a then: a back gesture, a scrim tap and the ✕
             // all have to leave the topic, or the server keeps pushing state
