@@ -49,6 +49,22 @@ const float kSpecTint    = 0.45;
 /// black to sphere transition" at the top. Real glass never gets there: it is
 /// picking up light from every direction, not just the key.
 const float kEnvFloor    = 0.16;
+
+/// Where the contact glow starts and finishes fading to nothing, in rn.
+///
+/// The shader's rect is kOrbScale (1.55) of the bezel while the sphere is
+/// 0.93 of it, so along the horizontal and vertical axes the rect ENDS at
+/// rn = 1.55/0.93 = 1.667 — and the glow was still at ~8% alpha there, which
+/// is the hard squarish cut around the orb. A smooth window guarantees zero
+/// before that edge whatever the amplitudes below are tuned to, which simply
+/// making the numbers smaller would not: the glow's width also grows with
+/// uLevel and uPunch, so "small enough" at idle is not small enough when loud.
+///
+/// Note the outermost HALO can still reach rn ~= 1.60 at uLevel == uPunch == 1
+/// and is deliberately NOT windowed — it is a thin ring rather than a broad
+/// wash, and fading it would swallow the punch flare, which is the point of it.
+const float kGlowFadeStart = 1.30;
+const float kGlowFadeEnd   = 1.62;
 const float kCausticAmp  = 0.55;  // the focused spot low INSIDE the sphere
 const float kEnvAmp      = 0.85;  // how much refracted environment shows
 const vec3  kLightDir    = vec3(-0.45, -0.60, 0.66); // fixed upper-left
@@ -139,13 +155,14 @@ void main() {
     // x*x, never pow(x, 2.0): GLSL pow is UNDEFINED for a negative base, and
     // (rn - 1.0) is negative everywhere inside the sphere. The symptom would
     // be NaN pixels on some drivers and not others.
-    float gx = (rn - 1.0) / (0.70 + uLevel * 0.35 + uPunch * 0.25);
-    float g = exp(-gx * gx);
-    // Wider and brighter than before. The silhouette used to meet the
-    // background almost dead, so the gap between the glass edge and the first
-    // ring read as a hard dark moat rather than as air around a lit object.
-    col += uGlow.rgb * g * 0.20;
-    alpha += g * 0.20;
+    float gx = (rn - 1.0) / (0.58 + uLevel * 0.14 + uPunch * 0.10);
+    // Windowed to zero before the rect's edge — see kGlowFadeStart. Inside the
+    // window it stays a broad wash, so the silhouette still bleeds into air
+    // rather than meeting the background dead, which was the dark moat at the
+    // top of the sphere.
+    float g = exp(-gx * gx) * (1.0 - smoothstep(kGlowFadeStart, kGlowFadeEnd, rn));
+    col += uGlow.rgb * g * 0.16;
+    alpha += g * 0.16;
   }
 
   // --- the glass body ---
