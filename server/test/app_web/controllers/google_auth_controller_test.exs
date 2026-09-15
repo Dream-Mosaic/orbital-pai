@@ -259,6 +259,7 @@ defmodule AppWeb.GoogleAuthControllerTest do
       assert app_link(conn) == "orbital://connectors?status=ok"
       assert html_response(conn, 200) =~ "Connected"
       assert html_response(conn, 200) =~ "You can close this tab"
+      assert get_resp_header(conn, "cache-control") == ["no-store"]
       assert Accounts.get_by_email("deep@example.com")
       assert get_session(conn, :google_oauth_return) == nil
     end

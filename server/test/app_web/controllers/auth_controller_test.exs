@@ -275,6 +275,7 @@ defmodule AppWeb.AuthControllerTest do
     assert body =~ ~s(content="0;url=orbital://auth?status=error")
     assert body =~ ~s(href="orbital://auth?status=error")
     assert body =~ "Open #{App.Config.default().name}"
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
     refute get_session(conn, :oidc_return)
   end
 

@@ -12,11 +12,12 @@ defmodule AppWeb.AuthController do
   literal string `"app"` (never a URL) from `params["return"]` and stores it under `:oidc_return`
   — analogous to `:google_oauth_return`, and just as deliberately never honoring an
   attacker-supplied redirect target. On success, `callback/2` mints a single-use code
-  (`App.Auth.AppCode`) and deep-links to it (`AppWeb.AppLink.auth/1`) instead of redirecting to
-  `:user_return_to`, but it still calls `UserAuth.log_in_user/2` first — the same device may also
-  use the web monitor, so a browser session is established either way. Every failure path on the
-  app flow deep-links back to `orbital://auth?status=error` (`AppWeb.AppLink.auth_error/0`)
-  rather than stranding the browser on `/login`.
+  (`App.Auth.AppCode`) and renders `AuthHTML`'s `app_return` page carrying the
+  `orbital://auth?...` link (`AppWeb.AppLink.auth/1`) as a meta refresh and a button, instead of
+  redirecting to `:user_return_to`, but it still calls `UserAuth.log_in_user/2` first — the same
+  device may also use the web monitor, so a browser session is established either way. Every
+  failure path on the app flow deep-links back to `orbital://auth?status=error`
+  (`AppWeb.AppLink.auth_error/0`) rather than stranding the browser on `/login`.
   """
   use AppWeb, :controller
   require Logger
@@ -158,6 +159,7 @@ defmodule AppWeb.AuthController do
     conn
     |> delete_session(:oidc_state)
     |> delete_session(:oidc_return)
+    |> put_resp_header("cache-control", "no-store")
     |> render(:app_return,
       title: title,
       body: String.trim("#{message} You can close this tab."),

@@ -112,9 +112,10 @@ class AuthController extends ChangeNotifier {
   /// one that is not this controller's business).
   ///
   /// Only [AuthCodeLink] and [AuthErrorLink] are this controller's business —
-  /// main.dart routes [ConnectorsResultLink] to the connectors panel instead —
-  /// but [AppLink] is a sealed union, so every case has to be named here for
-  /// the switch to be exhaustive.
+  /// the connectors panel resolves its own [ConnectorsResultLink] callback
+  /// and never hands one here. That arm exists purely because [AppLink] is a
+  /// sealed union, so every case has to be named here for the switch to be
+  /// exhaustive.
   Future<void> handleLink(AppLink link) async {
     switch (link) {
       case AuthCodeLink(:final code):

@@ -154,6 +154,7 @@ defmodule AppWeb.GoogleAuthController do
   defp app_return(conn, title, message, link) do
     conn
     |> put_view(html: AppWeb.AuthHTML)
+    |> put_resp_header("cache-control", "no-store")
     |> render(:app_return,
       title: title,
       body: String.trim("#{message} You can close this tab."),
