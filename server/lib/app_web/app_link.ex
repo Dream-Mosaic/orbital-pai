@@ -12,12 +12,12 @@ defmodule AppWeb.AppLink do
 
   ## Why these carry a status and nothing else
 
-  Any app installed on the device can fire `orbital://connectors?...` at us — the `CallbackActivity`
-  intent-filter that receives these is open to all callers, not just to our own server. So
-  everything here is treated as
-  attacker-controllable on arrival, and the payload is kept to a single allowlisted enum the
-  client can validate exhaustively. A human-readable `message=` would be more convenient and
-  would hand any installed app a text banner inside Henry to write whatever it liked.
+  Any app installed on the device can fire `orbital://connectors?...` at us — the
+  `CallbackActivity` intent-filter that receives these is open to all callers, not just to our own
+  server. So everything here is treated as attacker-controllable on arrival, and the payload is
+  kept to a single allowlisted enum the client can validate exhaustively. A human-readable
+  `message=` would be more convenient and would hand any installed app a text banner inside Henry
+  to write whatever it liked.
 
   Nothing is lost by that: the panel refetches its `state` on resume, so the account list
   already shows the specifics. The status only has to say which of the two sentences to render
