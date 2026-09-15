@@ -9,6 +9,7 @@ import 'package:orbital_pai/meridian/hero_icon.dart';
 import 'package:orbital_pai/meridian/nav.dart';
 import 'package:orbital_pai/panels/connectors_client.dart';
 
+import '../support/fake_browser_session.dart';
 import '../support/fake_socket.dart';
 
 const String _connectorsFrame = '[null,null,"panel:connectors:henry","state",'
@@ -73,7 +74,7 @@ void main() {
     unawaited(navKey.currentState!
         .push(meridianDrawerRoute(
           title: MeridianTab.connectors.label,
-          child: ConnectorsPanelView(client: client),
+          child: ConnectorsPanelView(client: client, session: FakeBrowserSession()),
         ))
         .whenComplete(client.close));
     await tester.pump(Duration.zero); // let the join reply land

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'app_version.dart';
 import 'auth/auth_controller.dart';
+import 'auth/browser_session.dart';
 import 'auth/token_store.dart';
 import 'connection/app_connection.dart';
 import 'deep_link.dart';
@@ -405,7 +406,7 @@ class _HenryHomeState extends State<HenryHome> {
         Navigator.of(context)
             .push(meridianDrawerRoute(
               title: tab.label,
-              child: ConnectorsPanelView(client: connectors),
+              child: ConnectorsPanelView(client: connectors, session: const WebAuthBrowserSession()),
             ))
             // whenComplete, not a then: a back gesture, a scrim tap and the ✕
             // all have to leave the topic, or the server keeps pushing state

@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart' hide FormField;
-import 'package:url_launcher/url_launcher.dart';
 
+import '../auth/browser_session.dart';
 import '../deep_link.dart';
 import '../panels/connectors_client.dart';
 import 'hero_icon.dart';
@@ -71,9 +71,15 @@ const Color _dangerRed = Color(0xFFEA003E);
 /// user may have finished (or abandoned) the flow while away, and there is no
 /// other signal that tells this panel to look again.
 class ConnectorsPanelView extends StatefulWidget {
-  const ConnectorsPanelView({super.key, required this.client});
+  const ConnectorsPanelView({super.key, required this.client, required this.session});
 
   final ConnectorsClient client;
+
+  /// The OS auth session both the grant form and a multi-connector
+  /// Disconnect launch into. It resolves with the `orbital://connectors?…`
+  /// link the server ends on and dismisses itself; the result lands on
+  /// [ConnectorsClient.noteOauthResult] from here, not via main.dart.
+  final BrowserSession session;
 
   /// Scopes a find.text to one row: the access badge text ("read"/"write")
   /// repeats across rows, and so does "Disconnect".
@@ -203,10 +209,9 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
     if (url == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Acked BEFORE launching: url_launcher hands the intent to the OS and
-      // returns almost immediately, but there is no reason to let a
-      // pathological double-callback race ack against a second launch of the
-      // same url — ack first closes that window regardless.
+      // Acked BEFORE opening the session: it returns only when the sheet
+      // closes, and there is no reason to let a pathological double-callback
+      // race ack against a second open of the same url.
       widget.client.ackOauthUrl();
       setState(() {
         _waitingForBrowser = true;
@@ -217,9 +222,22 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
         // didn't take" at exactly the moment it did.
         _resetForm();
       });
-      unawaited(
-        launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-      );
+      unawaited(widget.session.run(Uri.parse(url)).then(
+        (uri) {
+          if (!mounted) return;
+          // Untrusted on arrival — any app can fire our scheme. Only a link
+          // parseAppLink positively recognises as a connectors result counts;
+          // a dismissed sheet (null) and anything else is "did not finish".
+          final link = uri == null ? null : parseAppLink(uri);
+          widget.client.noteOauthResult(link is ConnectorsResultLink
+              ? link.result
+              : ConnectorsOauthResult.failed);
+        },
+        onError: (Object _) {
+          if (!mounted) return;
+          widget.client.noteOauthResult(ConnectorsOauthResult.failed);
+        },
+      ));
     });
   }
 
@@ -308,8 +326,9 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
   /// looking exactly like it did before the tap: no dialog, no snackbar,
   /// nothing. Same red as [_unknownField]'s failure text; disappears the
   /// moment a new request goes out (`ConnectorsClient._push`'s doc).
-  /// The outcome of a flow that finished in the system browser, delivered by
-  /// deep link (see [ConnectorsClient.oauthResult] and lib/deep_link.dart).
+  /// The outcome of a flow that finished in the system browser, resolved by
+  /// [ConnectorsPanelView.session] (see [ConnectorsClient.oauthResult] and
+  /// lib/deep_link.dart).
   ///
   /// The copy is written HERE rather than sent by the server, and the link
   /// carries a bounded status rather than a message, for one reason: an

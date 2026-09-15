@@ -2,13 +2,14 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart' hide FormField;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/auth/browser_session.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/deep_link.dart';
 import 'package:orbital_pai/meridian/connectors_panel.dart';
 import 'package:orbital_pai/panels/connectors_client.dart';
-import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
+import '../support/fake_browser_session.dart';
 import '../support/fake_socket.dart';
-import '../support/fake_url_launcher.dart';
 
 Map<String, Object?> _conn({
   required int accountId,
@@ -159,7 +160,8 @@ void main() {
     return (client, conn, fake);
   }
 
-  Future<void> pumpPanel(WidgetTester tester, ConnectorsClient client) async {
+  Future<void> pumpPanel(WidgetTester tester, ConnectorsClient client,
+      {BrowserSession? session}) async {
     // Wrapped in a SingleChildScrollView because the real host does too
     // (drawer.dart's `Expanded(child: SingleChildScrollView(...))` around
     // its `child`) — same rationale as voice_lock_panel_test.dart's own
@@ -169,7 +171,12 @@ void main() {
     // real layout bug, since the drawer always scrolls it on device.
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
-        body: SingleChildScrollView(child: ConnectorsPanelView(client: client)),
+        body: SingleChildScrollView(
+          child: ConnectorsPanelView(
+            client: client,
+            session: session ?? FakeBrowserSession(),
+          ),
+        ),
       ),
     ));
     await tester.pumpAndSettle();
@@ -991,11 +998,11 @@ void main() {
     // reads as "that didn't take" at exactly the moment it did.
     testWidgets('submitting closes the form once the browser has taken over',
         (tester) async {
-      final launcher = FakeUrlLauncher.register();
+      final session = FakeBrowserSession();
       final catalog = [_googleConnector('calendar', 'Google Calendar')];
       final (client, conn, fake) = await openedClient(
           tester, _stateFrame(const [], catalog: catalog));
-      await pumpPanel(tester, client);
+      await pumpPanel(tester, client, session: session);
 
       await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
       await tester.pumpAndSettle();
@@ -1011,7 +1018,7 @@ void main() {
           {'url': 'https://accounts.google.com/o/oauth2/auth'});
       await tester.pumpAndSettle();
 
-      expect(launcher.launches, hasLength(1));
+      expect(session.opened, hasLength(1));
       expect(find.text('Add a connection'), findsNothing);
 
       await conn.disconnect();
@@ -1285,15 +1292,16 @@ void main() {
     });
   });
 
-  group('launching the OAuth URL (Task 5)', () {
+  group('launching the OAuth URL in the OS auth session', () {
     testWidgets(
-        'submitting the form launches exactly the URL the server returned, '
-        'once, with LaunchMode.externalApplication', (tester) async {
-      final launcher = FakeUrlLauncher.register();
+        'submitting the form opens exactly the URL the server returned, once, '
+        'and reports the ok callback', (tester) async {
+      final session = FakeBrowserSession(
+          result: Uri.parse('orbital://connectors?status=ok'));
       final catalog = [_googleConnector('calendar', 'Google Calendar')];
       final (client, conn, fake) = await openedClient(
           tester, _stateFrame(const [], catalog: catalog));
-      await pumpPanel(tester, client);
+      await pumpPanel(tester, client, session: session);
 
       await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
       await tester.pumpAndSettle();
@@ -1304,28 +1312,95 @@ void main() {
           {'url': 'https://accounts.google.com/o/oauth2/consent'});
       await tester.pumpAndSettle();
 
-      expect(launcher.launches, hasLength(1),
+      expect(session.opened, hasLength(1),
           reason: 'exactly once — a reply must not be launched twice across '
               'the rebuilds it triggers');
-      expect(launcher.launches.single.url,
-          'https://accounts.google.com/o/oauth2/consent');
-      expect(launcher.launches.single.mode,
-          PreferredLaunchMode.externalApplication);
+      expect(session.opened.single,
+          Uri.parse('https://accounts.google.com/o/oauth2/consent'));
       expect(client.oauthUrl, isNull,
           reason: 'ackOauthUrl() must have run so a later rebuild does not '
               'relaunch the same url');
+      expect(client.oauthResult, ConnectorsOauthResult.ok);
+      expect(find.byKey(ConnectorsPanelView.resultBannerKey), findsOneWidget);
+      expect(find.textContaining('up to date'), findsOneWidget);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('an error callback reports failed', (tester) async {
+      final session = FakeBrowserSession(
+          result: Uri.parse('orbital://connectors?status=error'));
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client, session: session);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/consent'});
+      await tester.pumpAndSettle();
+
+      expect(client.oauthResult, ConnectorsOauthResult.failed);
+      expect(find.textContaining("didn't finish"), findsOneWidget);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('a dismissed sheet reports failed — nothing changed', (tester) async {
+      final session = FakeBrowserSession(result: null);
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client, session: session);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/consent'});
+      await tester.pumpAndSettle();
+
+      expect(session.opened, hasLength(1));
+      expect(client.oauthResult, ConnectorsOauthResult.failed);
+
+      await conn.disconnect();
+    });
+
+    // Any app on the device can fire our scheme at CallbackActivity; a link we
+    // do not positively recognise must never read as success.
+    testWidgets('an unrecognised callback reports failed', (tester) async {
+      final session = FakeBrowserSession(
+          result: Uri.parse('orbital://connectors?status=whatever'));
+      final catalog = [_googleConnector('calendar', 'Google Calendar')];
+      final (client, conn, fake) = await openedClient(
+          tester, _stateFrame(const [], catalog: catalog));
+      await pumpPanel(tester, client, session: session);
+
+      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ConnectorsPanelView.grantSubmitKey));
+      await tester.pump();
+      replyTo(fake, 'grant_url', 'ok',
+          {'url': 'https://accounts.google.com/o/oauth2/consent'});
+      await tester.pumpAndSettle();
+
+      expect(client.oauthResult, ConnectorsOauthResult.failed);
 
       await conn.disconnect();
     });
 
     testWidgets(
-        'a bad_request (error) reply launches nothing — proof the fake '
-        'CAN launch, so "nothing launched" is a real result', (tester) async {
-      final launcher = FakeUrlLauncher.register();
+        'a bad_request (error) reply opens nothing — proof the fake CAN open, '
+        'so "nothing opened" is a real result', (tester) async {
+      final session = FakeBrowserSession();
       final catalog = [_googleConnector('calendar', 'Google Calendar')];
       final (client, conn, fake) = await openedClient(
           tester, _stateFrame(const [], catalog: catalog));
-      await pumpPanel(tester, client);
+      await pumpPanel(tester, client, session: session);
 
       await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
       await tester.pumpAndSettle();
@@ -1335,23 +1410,22 @@ void main() {
       replyTo(fake, 'grant_url', 'error', {'reason': 'bad_request'});
       await tester.pumpAndSettle();
 
-      expect(launcher.launches, isEmpty);
+      expect(session.opened, isEmpty);
       expect(client.oauthUrl, isNull);
+      expect(client.oauthResult, isNull);
 
       await conn.disconnect();
     });
 
     testWidgets(
-        'Disconnect on a multi-connector row launches the reduction URL '
+        'Disconnect on a multi-connector row opens the reduction URL '
         'without showing a form', (tester) async {
-      final launcher = FakeUrlLauncher.register();
+      final session = FakeBrowserSession(
+          result: Uri.parse('orbital://connectors?status=ok'));
       // A NON-EMPTY catalog is load-bearing here, not incidental: _grantForm
       // renders SizedBox.shrink() for an empty catalog regardless of
       // _formOpen, so with no catalog "no form appears" would be true no
-      // matter what Disconnect's handler does to _formOpen — the exact
-      // tautology this task's brief warns against, just one level down from
-      // the launcher. This catalog is what makes "without showing a form" a
-      // claim that could actually fail.
+      // matter what Disconnect's handler does to _formOpen.
       final catalog = [_googleConnector('calendar', 'Google Calendar')];
       final (client, conn, fake) = await openedClient(
         tester,
@@ -1363,23 +1437,17 @@ void main() {
               connector: 'calendar',
               label: 'Google Calendar',
               access: 'write',
-              // This account holds more than just `calendar` — the server's
-              // reply to Disconnect here is the consent-URL reduction, not a
-              // bare :ok deletion.
               onlyGrant: false,
             ),
           ],
           catalog: catalog,
         ),
       );
-      await pumpPanel(tester, client);
+      await pumpPanel(tester, client, session: session);
 
       await tester
           .tap(find.byKey(ConnectorsPanelView.disconnectKey(1, 'calendar')));
       await tester.pumpAndSettle();
-      // Disconnect now confirms first — it is destructive, and on a
-      // multi-connector account it also leaves the app for Google's
-      // consent page. Nothing is pushed until this is accepted.
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
 
@@ -1387,13 +1455,9 @@ void main() {
           {'url': 'https://accounts.google.com/o/oauth2/reduce'});
       await tester.pumpAndSettle();
 
-      expect(launcher.launches, hasLength(1));
-      expect(launcher.launches.single.url,
-          'https://accounts.google.com/o/oauth2/reduce');
-      expect(launcher.launches.single.mode,
-          PreferredLaunchMode.externalApplication);
-      // Disconnect's own reduction never opens the grant form — there is
-      // nothing here for the user to fill in, only a browser tab to finish.
+      expect(session.opened, hasLength(1));
+      expect(session.opened.single,
+          Uri.parse('https://accounts.google.com/o/oauth2/reduce'));
       expect(find.text('Add a connection'), findsNothing);
 
       await conn.disconnect();
