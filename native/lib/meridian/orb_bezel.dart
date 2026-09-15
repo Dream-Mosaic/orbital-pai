@@ -12,6 +12,18 @@ import 'tokens.dart';
 /// purpose. `--orb-scale` in app.css:402.
 const double kOrbScale = 1.55;
 
+/// The glass sphere's radius as a fraction of the BEZEL's width.
+///
+/// `OrbPainter`/`orb.frag` draw the sphere at `0.3 * min(w, h)` of the OrbView
+/// box, and OrbView is laid out at [kOrbScale] of the bezel, centred on it.
+/// Derived rather than written down so it cannot drift if either changes.
+const double kSphereRadiusOfBezel = 0.3 * kOrbScale;
+
+/// Half-width of the caption's box, as a fraction of the sphere's radius.
+/// Its half-HEIGHT is derived from this so the box stays inscribed — see
+/// [_captionBox].
+const double _kCaptionHalfWidthOfR = 0.82;
+
 /// The machined bezel: a lit well with the animated orb inside it, the live
 /// caption over it, and the four control detents on its diagonals. Fills whatever
 /// square box its parent gives it — the parent owns `min(272px, 74%)`.
@@ -47,6 +59,41 @@ class OrbBezel extends StatelessWidget {
 
   static const double _detent = 37.0;
 
+  /// Your live speech, centred IN the glass, inscribed in the sphere.
+  ///
+  /// It used to sit in the bezel's lower half (`top: 58%`), deliberately clear
+  /// of the middle so it would not cover the waveform while you talked. That
+  /// reason is gone: the waveform is Henry's voice only now, and this caption
+  /// is only ever your own — set from `partial`, cleared on `transcript` — so
+  /// the two can no longer be on screen together. Nothing is left to dodge, and
+  /// the text gets the whole orb.
+  ///
+  /// The box is INSCRIBED in the sphere rather than merely centred on it: a
+  /// rectangle centred in a circle of radius R fits when `w² + h² ≤ R²`, so
+  /// fixing the half-width at [_kCaptionHalfWidthOfR] of R derives the
+  /// half-height. Get that wrong in the generous direction and long captions
+  /// spill over the glass edge, which reads as a layout bug rather than as
+  /// text. LiveCaption's own ladder then shrinks the type to fit the box.
+  Widget _captionBox(double d, String caption) {
+    final r = kSphereRadiusOfBezel * d;
+    final halfW = r * _kCaptionHalfWidthOfR;
+    final halfH = r *
+        math.sqrt(1 - _kCaptionHalfWidthOfR * _kCaptionHalfWidthOfR);
+    return Positioned(
+      left: d / 2 - halfW,
+      top: d / 2 - halfH,
+      width: halfW * 2,
+      height: halfH * 2,
+      child: IgnorePointer(
+        child: LiveCaption(
+          text: caption,
+          width: halfW * 2,
+          height: halfH * 2,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -71,19 +118,7 @@ class OrbBezel extends StatelessWidget {
                   child: CustomPaint(painter: BezelPainter(glow: glow)),
                 ),
               ),
-              Positioned(
-                left: -0.04 * d, // #orb-caption left/right: -4%
-                top: 0.58 * d, // top: 58%
-                width: 1.08 * d,
-                height: 0.42 * d, // clamped to the bezel's lower half (spec §5)
-                child: IgnorePointer(
-                  child: LiveCaption(
-                    text: caption,
-                    width: 1.08 * d,
-                    height: 0.42 * d,
-                  ),
-                ),
-              ),
+              _captionBox(d, caption),
               _at(
                   d,
                   0.08,

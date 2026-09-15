@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/live_caption.dart';
 import 'package:orbital_pai/meridian/orb_bezel.dart';
 import 'package:orbital_pai/meridian/orb_painter.dart';
 import 'package:orbital_pai/meridian/orb_view.dart';
@@ -181,5 +184,34 @@ void main() {
       ),
     ));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the caption sits inside the glass, not under it', (tester) async {
+    // It used to be a strip at `top: 58%`, deliberately clear of the middle so
+    // it would not cover the waveform while you talked. The waveform is Henry's
+    // voice only now, and this caption is only ever yours (set from `partial`,
+    // cleared on `transcript`), so the two can never be on screen together.
+    await tester.pumpWidget(host());
+    const d = 240.0;
+
+    final box = tester.getRect(find.byType(LiveCaption));
+    final bezel = tester.getRect(find.byType(OrbBezel));
+    final cx = bezel.left + d / 2;
+    final cy = bezel.top + d / 2;
+
+    expect(box.center.dx, closeTo(cx, 0.01), reason: 'centred horizontally');
+    expect(box.center.dy, closeTo(cy, 0.01),
+        reason: 'centred VERTICALLY — this is the half that moved');
+
+    // Inscribed, not merely centred: every corner must lie within the sphere,
+    // or a long caption spills over the glass edge and reads as a layout bug
+    // rather than as text.
+    const r = kSphereRadiusOfBezel * d;
+    for (final corner in [box.topLeft, box.topRight, box.bottomLeft, box.bottomRight]) {
+      final dx = corner.dx - cx;
+      final dy = corner.dy - cy;
+      expect(math.sqrt(dx * dx + dy * dy), lessThanOrEqualTo(r + 0.01),
+          reason: 'corner $corner escapes the sphere (r = $r)');
+    }
   });
 }

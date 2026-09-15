@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
 import 'tokens.dart';
 
-/// Your live speech, over the orb. Ported from `#orb-caption` in app.css and
-/// `setCaption()` in index.js — **with the overflow fixed**.
+/// Your live speech, centred IN the orb. Ported from `#orb-caption` in app.css
+/// and `setCaption()` in index.js — **with the overflow fixed**.
+///
+/// The box it is given comes from `OrbBezel._captionBox`, which inscribes it in
+/// the glass sphere. It used to be a strip under the orb, kept clear of the
+/// middle so it would not cover the waveform while you talked; the waveform is
+/// Henry's voice only now, and this is only ever yours, so the two can never be
+/// on screen at once.
 ///
 /// The web sets an inline font-size from a three-step length ladder
 /// (index.js:485) and nothing else, so a long partial transcript spills out of
@@ -69,12 +75,18 @@ class LiveCaption extends StatelessWidget {
     return SizedBox(
       width: width,
       height: height,
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        maxLines: maxLines,
-        overflow: TextOverflow.ellipsis,
-        style: _style(size),
+      // Centred vertically, not top-aligned. The box is now the sphere's
+      // inscribed rectangle rather than a strip under the orb, so a one-line
+      // caption in a top-aligned box would sit visibly high of the glass's
+      // centre instead of in it.
+      child: Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          maxLines: maxLines,
+          overflow: TextOverflow.ellipsis,
+          style: _style(size),
+        ),
       ),
     );
   }
