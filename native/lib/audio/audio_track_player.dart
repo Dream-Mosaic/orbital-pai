@@ -17,6 +17,12 @@ class AudioTrackPlayer {
   Future<int> playedMs() async =>
       (await _ch.invokeMethod<int>('playedMs')) ?? 0;
 
+  /// Frames played since the last [stopAndFlush] (or [init]) — NOT relative to
+  /// a playback "run". See the Kotlin note: a clock that re-anchors under a
+  /// consumer that does not is what made the orb's trace reset.
+  Future<int> playedFrames() async =>
+      (await _ch.invokeMethod<int>('playedFrames')) ?? 0;
+
   Future<void> setVolume(double v) =>
       _ch.invokeMethod('setVolume', {'volume': v});
 

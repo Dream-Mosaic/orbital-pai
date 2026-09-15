@@ -361,6 +361,13 @@ class FakePlayer implements AudioTrackPlayer {
   @override
   Future<int> playedMs() async => 0;
 
+  /// Frames the fake claims to have played. Settable so a test can drive the
+  /// orb's level lookup to a chosen position on the timeline.
+  int playedFramesValue = 0;
+
+  @override
+  Future<int> playedFrames() async => playedFramesValue;
+
   @override
   Future<void> setVolume(double v) async {}
 

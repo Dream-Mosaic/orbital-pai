@@ -53,6 +53,7 @@ class AudioTrackPlayer(messenger: BinaryMessenger, private val context: Context)
             "write" -> { enqueue(call.arguments as ByteArray); result.success(null) }
             "stopAndFlush" -> result.success(stopAndFlush())
             "playedMs" -> result.success(playedMs())
+            "playedFrames" -> result.success(playedFrames())
             "setVolume" -> {
                 track?.setVolume((call.argument<Double>("volume") ?: 1.0).toFloat())
                 result.success(null)
@@ -200,6 +201,18 @@ class AudioTrackPlayer(messenger: BinaryMessenger, private val context: Context)
     }
 
     private fun enqueue(bytes: ByteArray) { queue.offer(bytes) }
+
+    /// Frames played since the last flush (or init) — NOT run-relative.
+    ///
+    /// Deliberately raw `playbackHeadPosition`: AudioTrack resets it on
+    /// flush(), and flush() is the same event Dart resets its own accounting
+    /// on, so the two stay on one timeline with no anchoring to keep in step.
+    ///
+    /// playedMs() below is run-relative on purpose — barge-in accounting wants
+    /// "how much of THIS answer did they hear". The orb wants the opposite: a
+    /// clock that never re-anchors, because a clock that re-anchors under a
+    /// consumer that doesn't is precisely what made the waveform reset.
+    private fun playedFrames(): Int = track?.playbackHeadPosition ?: 0
 
     private fun playedMs(): Int {
         val t = track ?: return 0
