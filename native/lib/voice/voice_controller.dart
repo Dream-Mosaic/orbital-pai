@@ -300,44 +300,29 @@ class VoiceController extends ChangeNotifier {
     // cancel/stop can resolve after orbFrame.dispose() has already run.
     if (_disposed) return;
     orbFrame.state = orbState;
-    _syncPlaybackClock();
     _safeNotify();
   }
 
-  /// How often the orb's cursor is corrected against AudioTrack's own clock.
-  /// Four times a second: enough to catch an underrun before it is visible,
-  /// cheap enough that the platform-channel round trip does not matter.
-  static const Duration _playbackSyncPeriod = Duration(milliseconds: 250);
-
-  Timer? _playbackSyncTimer;
-
-  /// Run a low-frequency poll of the real playback position while, and only
-  /// while, Henry is actually speaking.
+  /// There is no playback-clock poll, and that is deliberate.
   ///
-  /// The lifecycle is deliberately tight. `flutter_test` fails a test that
-  /// leaves a Timer pending, and it checks BEFORE tearDown disposal (see the
-  /// note on [deviceIdReady]), so a timer that outlives its reason is not a
-  /// tidiness problem — it breaks the suite. It exists only between entering
-  /// and leaving `speaking`, and only with a live player.
-  void _syncPlaybackClock() {
-    final wanted = _playerReady && orbFrame.state == OrbState.speaking;
-    if (!wanted) {
-      _playbackSyncTimer?.cancel();
-      _playbackSyncTimer = null;
-      return;
-    }
-    if (_playbackSyncTimer != null) return;
-    _playbackSyncTimer = Timer.periodic(_playbackSyncPeriod, (_) async {
-      if (_disposed || !_playerReady) return;
-      try {
-        orbFrame.syncPlayback(await _player.playedMs());
-      } catch (_) {
-        // A platform-channel hiccup must not take the orb down. The cursor
-        // free-runs at real time on its own; this only corrects it.
-      }
-    });
-  }
-
+  /// An earlier version corrected the orb's cursor against
+  /// `AudioTrackPlayer.playedMs()` every 250ms, to shed the jitter-buffer lead
+  /// and to follow an underrun. It shipped unsmoked and was wrong:
+  /// **`playedMs` is relative to the PLAYER's run, and the player's run is not
+  /// the orb's run.** Kotlin re-anchors whenever its queue drains and the head
+  /// catches up; the orb re-anchors when its trace has drawn everything that
+  /// arrived and faded. A gap between the reflex's audio and the brain's is
+  /// enough to desynchronise them — the player restarts near zero while the
+  /// cursor is seconds in, the correction sees a huge error and snaps, and the
+  /// trace jumps back to the start. On a 250ms timer that reads exactly as it
+  /// was reported: the waveform "keeps resetting".
+  ///
+  /// Making it correct would need the two runs to share an identity, i.e. a
+  /// Kotlin change reporting absolute frames or a run id. Not worth it for what
+  /// it buys: the cursor free-runs at real time from the start of its run and
+  /// playback consumes the same audio at the same rate from the same anchor, so
+  /// they track by construction. The residual is a constant jitter-buffer lead
+  /// of well under a fifth of a second on a 0.6s window.
   /// The single place `_wakeLocked` is assigned. Reached from BOTH paths the
   /// server uses to tell us it locked — the `locked` event and the `state`
   /// reconnect snapshot — so the gate can never see one without the other.
@@ -1436,8 +1421,6 @@ class VoiceController extends ChangeNotifier {
       _player.dispose();
       _playerReady = false;
     }
-    _playbackSyncTimer?.cancel();
-    _playbackSyncTimer = null;
     orbFrame.dispose();
     super.dispose();
   }

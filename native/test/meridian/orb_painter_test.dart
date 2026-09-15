@@ -587,46 +587,7 @@ void main() {
       f.dispose();
     });
 
-    test('syncPlayback corrects the cursor toward the real playback position',
-        () {
-      // The cursor free-runs between syncs, which is right in the long run
-      // because playback consumes at real time too — but it starts a run a
-      // jitter-buffer ahead of the sound, and an underrun stretches playback
-      // without stretching the cursor. AudioTrack's clock is the only thing
-      // that knows either.
-      final f = OrbFrame()..state = OrbState.speaking;
-      burst(f);
-      for (var i = 0; i < 30; i++) {
-        f.advance(1 / 60);
-      }
-      final free = 24000 - f.debugWaveLag; // where the cursor thinks it is
 
-      // The player says only 100ms has really been heard.
-      f.syncPlayback(100);
-      final synced = 24000 - f.debugWaveLag;
-      expect(synced, lessThan(free), reason: 'must move back toward the truth');
-      f.dispose();
-    });
 
-    test('syncPlayback ignores an idle report', () {
-      // playedMs() returns 0 when the player is idle. Taking that literally
-      // would rewind a live trace to the start of the utterance.
-      final f = OrbFrame()..state = OrbState.speaking;
-      burst(f);
-      for (var i = 0; i < 30; i++) {
-        f.advance(1 / 60);
-      }
-      final before = f.debugWaveLag;
-      f.syncPlayback(0);
-      expect(f.debugWaveLag, before);
-      f.dispose();
-    });
-
-    test('syncPlayback before any audio is inert', () {
-      final f = OrbFrame()..state = OrbState.speaking;
-      f.syncPlayback(500);
-      expect(f.debugWaveLag, 0.0);
-      f.dispose();
-    });
   });
 }

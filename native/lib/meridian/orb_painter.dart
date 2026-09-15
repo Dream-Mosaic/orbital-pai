@@ -104,9 +104,6 @@ class OrbFrame extends ChangeNotifier {
       // A new playback run. Clear the ring and put the cursor at zero so the
       // window before the first sample reads as silence rather than as the tail
       // of the PREVIOUS utterance — the same reason powering off clears it.
-      // Zeroing also makes ring positions run-relative, which is what lets
-      // [syncPlayback] compare them against AudioTrack's run-relative clock
-      // without a second offset to keep in step.
       _ring.clear();
       _playhead = 0.0;
       _gain.reset();
@@ -116,28 +113,13 @@ class OrbFrame extends ChangeNotifier {
     _ring.write(pcm16);
   }
 
-  /// Correct the cursor against the ACTUAL playback position, in run-relative
-  /// milliseconds (`AudioTrackPlayer.playedMs`).
-  ///
-  /// The cursor free-runs at real time between calls, which is right in the
-  /// long run because playback consumes at real time too — but it starts the
-  /// run a jitter-buffer ahead of the sound, and any underrun stretches
-  /// playback without stretching the cursor. This is the only clock that knows
-  /// either. Eased rather than snapped so a correction never reads as a jump;
-  /// a large error snaps, because easing across a long gap would crawl.
-  ///
-  /// `ms <= 0` is ignored: the player reports 0 when idle, and taking that
-  /// literally would rewind a live trace to the start of the utterance.
-  void syncPlayback(int ms) {
-    if (!_runActive || ms <= 0) return;
-    final target = ms * _feedRate / 1000.0;
-    final error = target - _playhead;
-    if (error.abs() > _feedRate * 0.25) {
-      _playhead = target;
-    } else {
-      _playhead += error * 0.25;
-    }
-  }
+  // There is deliberately NO playedMs() correction here — see
+  // VoiceController's note where the poll used to live. AudioTrackPlayer's
+  // clock is relative to ITS run, and the player's run is not this one: it
+  // re-anchors whenever its queue drains, which a gap between the reflex's
+  // audio and the brain's is enough to cause. A cursor corrected against a
+  // clock that re-anchors independently gets yanked back to the start every
+  // time the two disagree.
 
   /// Whether the orb draws a waveform right now.
   ///
@@ -295,7 +277,8 @@ class OrbFrame extends ChangeNotifier {
     // sound. It was built for a real-time mic stream, where arrival and
     // playback are the same rate and the clamp is harmless. The cursor's rate
     // is now the only thing that decides what is drawn, so it stays honest by
-    // construction — and [syncPlayback] corrects the drift.
+    // construction: playback consumes the same audio at the same real-time
+    // rate from the same anchor.
     //
     // Falling off the BACK is still possible if the ring evicts what we have
     // not drawn yet (a very long stall); clamp up to the oldest live sample
