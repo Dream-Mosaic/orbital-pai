@@ -230,14 +230,16 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   is already bound to a DIFFERENT subject is `{:error, :subject_conflict}` — refuse, never rebind,
   or one user silently inherits the other's turns, facts and connectors.
 - **The native app signs in like the web — there is no token to paste.** `kSocketToken` is gone
-  from `config.dart`; tapping Sign in opens `/auth/login?return=app` in the SYSTEM browser (an
-  embedded webview is refused by most IdPs), the server deep-links back `orbital://auth?code=…`
-  with a **single-use 60s code**, and the app exchanges it at `POST /api/auth/exchange` for a
-  token it keeps in platform secure storage. Single-use + 60s only defeats a *later* replay of a
-  captured code (browser history, Android's intent log, a nosy reader) — it does NOT defend
-  against *interception*, since the `orbital` intent-filter is open to every app on the device and
-  any of them can win the chooser and take the code first. PKCE is the real mitigation for that
-  and is deliberately not implemented, on the reasoning that this is a two-user personal instance.
+  from `config.dart`; tapping Sign in opens `/auth/login?return=app` in the OS auth session
+  (`flutter_web_auth_2`; a Custom Tab, so still the system browser — an embedded webview is refused
+  by most IdPs), the server ends on `orbital://auth?code=…`, which the session returns to the app
+  and dismisses itself on, with a **single-use 60s code**, and the app exchanges it at
+  `POST /api/auth/exchange` for a token it keeps in platform secure storage. Single-use + 60s only
+  defeats a *later* replay of a captured code (browser history, Android's intent log, a nosy
+  reader) — it does NOT defend against *interception*, since the `orbital` intent-filter (on the
+  package's `CallbackActivity`) is open to every app on the device and any of them can win the
+  chooser and take the code first. PKCE is the real mitigation for that and is deliberately not
+  implemented, on the reasoning that this is a two-user personal instance.
   Don't overstate the code's guarantee as "the token never rides a URL" either — that's true only
   of *this deep link*; the token still rides the socket URL's query string (`kSocketUrl`,
   pre-existing), which reaches Cloudflare's access logs on every connect.
