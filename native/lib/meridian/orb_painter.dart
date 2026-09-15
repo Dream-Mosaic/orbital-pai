@@ -66,6 +66,11 @@ class OrbFrame extends ChangeNotifier {
   double _playhead = 0.0;
   int _feedRate = 16000; // 16k mic / 24k TTS, set by whoever is feeding us
 
+  /// Seconds since the last [feedPcm]. The ring advances only when audio
+  /// arrives while the read cursor advances on wall-clock, so this is the only
+  /// thing that can tell a brief jitter stall from a stream that has stopped.
+  double _sinceFeed = 0.0;
+
   OrbState get state => _state;
   set state(OrbState v) {
     if (v == _state) return;
@@ -79,6 +84,7 @@ class OrbFrame extends ChangeNotifier {
       _transient.reset();
       _gain.reset();
       _waveGain = 1.0;
+      _sinceFeed = 0.0;
       _audioTarget = 0.0;
       // Same reasoning for the trace: a wake must not flash the audio from
       // whatever was being said when we powered down.
@@ -98,8 +104,23 @@ class OrbFrame extends ChangeNotifier {
     _feedRate = sampleRate;
     final n = pcm16.lengthInBytes ~/ 2;
     if (n > _chunk) _chunk = n;
+    _sinceFeed = 0.0;
     _ring.write(pcm16);
   }
+
+  /// Whether the orb draws a waveform right now.
+  ///
+  /// SPEAKING ONLY — deliberately narrower than [_reactive]. The trace is
+  /// Henry's voice; a trace of the user's own speech competes with the live
+  /// transcript, which is the thing they are actually reading while they talk.
+  /// Listening still reacts (see [_reactive]) so the halos pulse and the orb
+  /// visibly hears them; it just does not draw.
+  bool get _drawsWave => _state == OrbState.speaking;
+
+  /// Whether the orb reacts to audio at all — level, punch, halo flare.
+  /// Wider than [_drawsWave] on purpose.
+  bool get _reactive =>
+      _state == OrbState.listening || _state == OrbState.speaking;
 
   /// Raw loudness in (0..1). Set from the audio chunk listener; smoothed per
   /// FRAME by [advance] so the response is frame-locked and device-independent
@@ -169,17 +190,17 @@ class OrbFrame extends ChangeNotifier {
       _transient.reset();
       _gain.reset();
       _waveGain = 1.0;
+      _sinceFeed = 0.0;
       _audioTarget = 0.0;
       return;
     }
-    final reactive =
-        _state == OrbState.listening || _state == OrbState.speaking;
+    final reactive = _reactive;
     final target = reactive ? _audioTarget : 0.0;
     _smoother.update(target, dt);
     // Fed the RAW target, not the smoothed level: the whole job here is to see
     // the attack of a syllable, and the smoother exists to take attacks off.
     _transient.update(target, dt);
-    if (reactive) _advanceWave(dt);
+    if (_drawsWave) _advanceWave(dt);
     final speed = _state == OrbState.thinking
         ? 1.4
         : 1.0 + (reactive ? _smoother.value * 1.4 : 0.0);
@@ -196,6 +217,45 @@ class OrbFrame extends ChangeNotifier {
   /// stalled or bursty stream, and long-run drift between the frame clock and the
   /// audio clock.
   void _advanceWave(double dt) {
+    _sinceFeed += dt;
+
+    // The stream has gone quiet. Hold the cursor where it is and fade the held
+    // window out, rather than letting it run on.
+    //
+    // This is the bug that made a waveform outlive its audio: the cursor
+    // advances on WALL-CLOCK while the ring only advances when audio arrives,
+    // so once the stream stops the cursor overruns the write head, the lag goes
+    // negative, and the resync below drops it straight back into the last
+    // written samples — re-reading the same window forever, sliding and
+    // re-syncing. On screen: a wave still open and still moving with nothing
+    // being said. The resync is right for the brief jitter stall it was built
+    // for; it simply cannot tell that from a stream that has ended, and only
+    // elapsed time can. A tool round is the case that matters — the brain goes
+    // quiet mid-turn while the orb is legitimately still `speaking`.
+    final dry = _sinceFeed - kWaveDrySeconds;
+    if (dry > 0) {
+      final fade = 1.0 - (dry / kWaveFadeSeconds).clamp(0.0, 1.0);
+      if (fade <= 0.0) {
+        _waveScratch.fillRange(0, kWavePoints, 0.0);
+        _waveform = _waveScratch;
+        // Park on the write head so the next chunk to arrive rebuilds the lead
+        // from scratch instead of inheriting a cursor that ran off during the
+        // silence.
+        _playhead = _ring.written.toDouble();
+        _gain.reset();
+        return;
+      }
+      // Re-read the SAME window and scale it. Scaling in place would compound
+      // frame over frame; `fade` is recomputed from elapsed time each frame, so
+      // re-reading first keeps the ramp linear.
+      _ring.readInto(_waveScratch, end: _playhead.floor(), window: kWaveWindow);
+      for (var i = 0; i < kWavePoints; i++) {
+        _waveScratch[i] *= fade;
+      }
+      _waveform = _waveScratch;
+      return;
+    }
+
     _playhead += dt * _feedRate;
     final written = _ring.written;
     final lag = written - _playhead;
@@ -371,9 +431,8 @@ class OrbPainter extends CustomPainter {
     // playback) — idle/ambient/thinking draw no waveform at all. Gating on
     // `!off` alone would leave the last listening/speaking buffer frozen on
     // screen (OrbFrame.waveform is never cleared) across those other states.
-    final reactive =
-        frame.state == OrbState.listening || frame.state == OrbState.speaking;
-    if (reactive) {
+    // SPEAKING only — the trace is Henry's voice. See OrbFrame._drawsWave.
+    if (frame.state == OrbState.speaking) {
       drawOrbEnvelope(
         canvas,
         wave: frame.waveform,

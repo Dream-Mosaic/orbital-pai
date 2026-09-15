@@ -83,7 +83,10 @@ void main() {
     // except t isolates exactly the term this test is about.
     Rect fillBounds(double t) {
       final f = OrbFrame()
-        ..state = OrbState.listening
+        // SPEAKING: the trace is Henry's voice, and listening no longer draws
+        // one at all — a listening frame here would assert against an empty
+        // canvas and pass for the wrong reason.
+        ..state = OrbState.speaking
         ..debugT = t
         ..debugSetLevel(0.5)
         ..waveform = Float32List.fromList(List.generate(64, (i) => 0.6));

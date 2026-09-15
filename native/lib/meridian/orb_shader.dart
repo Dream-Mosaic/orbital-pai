@@ -107,9 +107,8 @@ class OrbShaderPainter extends CustomPainter {
 
     // The waveform stays a Canvas path, drawn by the same function the
     // fallback painter uses so the two cannot diverge.
-    final reactive = frame.state == OrbState.listening ||
-        frame.state == OrbState.speaking;
-    if (!reactive) return;
+    // SPEAKING only — the trace is Henry's voice. See OrbFrame._drawsWave.
+    if (frame.state != OrbState.speaking) return;
 
     // Must match orb.frag's `breathe` and orb_painter.dart's `r` EXACTLY: the
     // wave sits on the sphere's surface, so a wave computed against the

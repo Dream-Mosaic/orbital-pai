@@ -715,7 +715,13 @@ defmodule App.Conversations.ConversationTest do
     assert line =~ "can't reach my brain"
   end
 
-  test "streams brain text deltas to the client mid-turn" do
+  test "streams brain text deltas to the client mid-turn, never ahead of the reflex" do
+    # The caption is gated on reflex_sent exactly like the audio is. Before the
+    # gate existed, a slow reflex put the brain's ANSWER on screen before Henry
+    # had said the filler: you read the answer, then saw the filler, then heard
+    # the filler, then heard the answer. Deltas that arrive early are held and
+    # released by :flush_brain, joined — the client appends, so one send of the
+    # concatenation renders identically to N sends.
     Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer."])
     on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
     stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
@@ -723,10 +729,30 @@ defmodule App.Conversations.ConversationTest do
     pid = start_conv()
     Conversation.endpoint(pid, "q")
 
-    assert_receive {:to_client, {:brain_delta, "The "}}, 1000
-    assert_receive {:to_client, {:brain_delta, "answer."}}, 1000
+    assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+    assert_receive {:to_client, {:brain_delta, delta}}, 1000
+    assert delta == "The answer."
     # the final full text still arrives as the markdown-finalize signal
     assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+  end
+
+  test "a brain delta that lands AFTER the reflex is passed straight through" do
+    # The gate must not become a permanent buffer: once the reflex has been
+    # spoken the caption is live again, one delta at a time. Without this the
+    # fix for the ordering bug would silently cost the live caption its whole
+    # reason for existing.
+    Application.put_env(:app, :fake_brain_text_deltas, [])
+    on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
+    stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+    assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+
+    send(pid, {:brain_text, "late "})
+    assert_receive {:to_client, {:brain_delta, "late "}}, 1000
+    send(pid, {:brain_text, "delta"})
+    assert_receive {:to_client, {:brain_delta, "delta"}}, 1000
   end
 
   test "an empty brain answer never goes silent — speaks a canned line instead" do

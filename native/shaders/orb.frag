@@ -33,10 +33,10 @@ out vec4 fragColor;
 const float kIor         = 1.45;  // index of refraction; higher bends more
 const float kDispersion  = 0.012; // R/G/B IOR spread — the rainbow at the rim
 const float kHaloSigma   = 0.055; // ring softness (was MaskFilter.blur)
-const float kSpecHardExp = 220.0; // primary highlight: small, hard, bright
+const float kSpecHardExp = 90.0;  // primary highlight: small, hard, bright
 const float kSpecSoftExp = 12.0;  // secondary: wide, dim
-const float kSpecHardAmp = 0.85;
-const float kSpecSoftAmp = 0.22;
+const float kSpecHardAmp = 0.40;
+const float kSpecSoftAmp = 0.26;
 const float kFresnelAmp  = 0.9;   // grazing-angle rim brightness
 const float kCausticAmp  = 0.55;  // the focused spot low INSIDE the sphere
 const float kEnvAmp      = 0.85;  // how much refracted environment shows

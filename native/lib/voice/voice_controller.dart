@@ -1170,9 +1170,14 @@ class VoiceController extends ChangeNotifier {
         // that never updates its level looks dead rather than gated. Set the
         // TARGET only — OrbFrame.advance() smooths it once per frame, so the
         // orb's responsiveness never depends on the device's audio buffer size.
+        //
+        // The TARGET only, and deliberately no feedPcm: the orb draws a
+        // waveform for HENRY'S voice, not the user's. A trace of your own
+        // speech competes with the live transcript, which is the thing you
+        // actually read while talking. The level still moves, so the halos
+        // pulse and the orb visibly hears you.
         if (orbFrame.state == OrbState.listening) {
           orbFrame.audioTarget = rmsFromPcm16(chunk);
-          orbFrame.feedPcm(chunk, sampleRate: 16000); // mic rate
         }
         // Fail-open lives HERE, not in whether the gate ever learns about a
         // lock (see `_applyWakeLocked`): while the spotter has not finished

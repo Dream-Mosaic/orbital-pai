@@ -165,6 +165,13 @@ defmodule App.Conversations.Conversation do
       brain_pid: nil,
       brain_ref: nil,
       brain_buffer: [],
+      # Live caption deltas held until the reflex has been spoken, newest first.
+      # The AUDIO gate (`%{policy: %{reflex_sent: true}}` on :brain_audio) has
+      # always ordered the sound correctly; the caption had no such gate, so a
+      # slow reflex put the brain's answer ON SCREEN before Henry had said the
+      # filler — you would read the answer, then see the filler, then hear the
+      # filler, then hear the answer. Same rule for both streams now.
+      caption_buffer: [],
       # a brain pre-warmed at speech onset (turn.start while listening), before any transcript
       # exists: {pid, ref} | nil. Adopted (BrainStream.begin/3) by the next :start_brain effect,
       # or killed by the :prewarm_ttl timer if the turn never materializes.
@@ -659,10 +666,23 @@ defmodule App.Conversations.Conversation do
   # Live caption: stream each brain text delta to the client as Gemini generates it (ahead of the
   # spoken audio). Only while a turn is live — a stale delta from an abandoned/barged turn (phase
   # back to :listening) is dropped, mirroring the {:brain_done, _} guard below.
-  def handle_event(:info, {:brain_text, delta}, _s, %{policy: %{phase: phase}} = data)
+  def handle_event(
+        :info,
+        {:brain_text, delta},
+        _s,
+        %{policy: %{phase: phase, reflex_sent: true}} = data
+      )
       when phase != :listening do
     send(data.client, {:to_client, {:brain_delta, delta}})
     {:keep_state, data}
+  end
+
+  # The reflex has not been spoken yet — hold the caption rather than racing it
+  # onto the screen ahead of the filler. :flush_brain releases it in the same
+  # breath as the buffered audio, so the transcript and the sound agree.
+  def handle_event(:info, {:brain_text, delta}, _s, %{policy: %{phase: phase}} = data)
+      when phase != :listening do
+    {:keep_state, %{data | caption_buffer: [delta | data.caption_buffer]}}
   end
 
   def handle_event(:info, {:brain_text, _delta}, _s, data), do: {:keep_state, data}
@@ -1751,12 +1771,24 @@ defmodule App.Conversations.Conversation do
   end
 
   defp run_effect(:flush_brain, {data, acts}) do
+    # Caption first, then audio: the text should be on screen by the time the
+    # sound for it starts, which is the ordering the live caption exists for.
+    # Joined into ONE delta — the client appends deltas, so N sends and one send
+    # of the concatenation render identically, and one is cheaper.
+    case data.caption_buffer do
+      [] ->
+        :ok
+
+      deltas ->
+        send(data.client, {:to_client, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()}})
+    end
+
     data =
       data.brain_buffer
       |> Enum.reverse()
       |> Enum.reduce(data, fn pcm, d -> push_audio_chunk(:brain, pcm, d) end)
 
-    {%{data | brain_buffer: []}, acts}
+    {%{data | brain_buffer: [], caption_buffer: []}, acts}
   end
 
   defp run_effect(:arm_drain, {data, acts}) do

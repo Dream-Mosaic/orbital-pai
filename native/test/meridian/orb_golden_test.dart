@@ -13,6 +13,10 @@ import 'package:orbital_pai/meridian/orb_state.dart';
 ///
 /// Regenerate deliberately (never to silence a failure you have not explained):
 ///   flutter test --update-goldens test/meridian/orb_golden_test.dart
+///
+/// SPEAKING, not listening: the waveform is drawn for speaking only now, and a
+/// golden of a state that draws no wave would stop covering the envelope — the
+/// most intricate thing on the canvas and the half this golden exists for.
 void main() {
   Widget host(OrbFrame frame, Key key) => MaterialApp(
         home: Center(
@@ -31,9 +35,9 @@ void main() {
         ),
       );
 
-  testWidgets('listening orb, t=1.0, level=0.5', (tester) async {
+  testWidgets('speaking orb, t=1.0, level=0.5', (tester) async {
     final frame = OrbFrame();
-    frame.state = OrbState.listening;
+    frame.state = OrbState.speaking;
     frame.debugT = 1.0;
     frame.debugSetLevel(0.5);
     // Unsigned bucket peaks now, not a signed trace — a rectified carrier under
@@ -52,7 +56,7 @@ void main() {
 
     await expectLater(
       find.byKey(key),
-      matchesGoldenFile('goldens/orb_listening.png'),
+      matchesGoldenFile('goldens/orb_speaking.png'),
     );
 
     await tester.pumpWidget(const SizedBox());

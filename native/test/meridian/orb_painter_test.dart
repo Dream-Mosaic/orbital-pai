@@ -198,7 +198,7 @@ void main() {
     }
 
     test('consecutive frames overlap instead of jumping a whole chunk', () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       feed(f);
       f.advance(0.016);
       final first = Float32List.fromList(f.waveform);
@@ -239,11 +239,11 @@ void main() {
       // Chunk size is a device property (Android hands back whatever
       // AudioRecord.getMinBufferSize decided), and a lead shorter than a chunk
       // starves the cursor once per chunk.
-      final small = OrbFrame()..state = OrbState.listening;
+      final small = OrbFrame()..state = OrbState.speaking;
       feed(small, chunks: 16, each: 512);
       small.advance(0.016);
 
-      final large = OrbFrame()..state = OrbState.listening;
+      final large = OrbFrame()..state = OrbState.speaking;
       feed(large, chunks: 4, each: 2048);
       large.advance(0.016);
 
@@ -255,7 +255,7 @@ void main() {
 
     test('a stalled stream does not leave the cursor pinned to the write head',
         () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       feed(f);
       f.advance(0.016); // settles the cursor behind the newest sample
 
@@ -272,7 +272,7 @@ void main() {
     });
 
     test('feedPcm does not notify — advance() drives the repaint', () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       var notified = 0;
       f.addListener(() => notified++);
       feed(f, chunks: 1, each: 32);
@@ -281,7 +281,7 @@ void main() {
 
     test('a stream that never started draws silence rather than reading garbage',
         () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       f.advance(0.016);
       expect(f.waveform.every((v) => v == 0.0), isTrue);
       f.advance(0.016);
@@ -289,20 +289,20 @@ void main() {
     });
 
     test('powering off clears the ring so a wake shows no stale trace', () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       feed(f);
       f.advance(0.016);
       expect(f.waveform.any((v) => v != 0.0), isTrue);
 
       f.state = OrbState.off;
-      f.state = OrbState.listening;
+      f.state = OrbState.speaking;
       f.advance(0.016);
       expect(f.waveform.every((v) => v == 0.0), isTrue,
           reason: 'a wake must not flash whatever was being said at power-down');
     });
 
-    test('non-reactive states do not resample (idle/thinking draw no trace)', () {
-      final f = OrbFrame()..state = OrbState.listening;
+    test('states that draw no wave do not resample (idle/thinking/listening)', () {
+      final f = OrbFrame()..state = OrbState.speaking;
       feed(f);
       f.advance(0.016);
       final live = Float32List.fromList(f.waveform);
@@ -370,7 +370,7 @@ void main() {
     test('quiet speech is normalised up toward full scale', () {
       // The thing that made the old orb a 2px squiggle: real speech peaks
       // around a quarter of full scale and was drawn at that size.
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       feedAt(f, 0.25);
       f.advance(1 / 60);
       expect(f.waveGain, greaterThan(3.0));
@@ -379,7 +379,7 @@ void main() {
     });
 
     test('already-loud audio is never attenuated', () {
-      final f = OrbFrame()..state = OrbState.listening;
+      final f = OrbFrame()..state = OrbState.speaking;
       feedAt(f, 1.0);
       f.advance(1 / 60);
       // int16's positive maximum is 32767, so "full scale" lands a hair under
@@ -391,13 +391,128 @@ void main() {
       final f = OrbFrame();
       expect(f.waveGain, 1.0);
 
-      f.state = OrbState.listening;
+      f.state = OrbState.speaking;
       feedAt(f, 0.2);
       f.advance(1 / 60);
       expect(f.waveGain, greaterThan(1.0), reason: 'sanity: gain moved');
 
       f.state = OrbState.off;
       expect(f.waveGain, 1.0);
+    });
+  });
+
+  group('the trace is Henry only', () {
+    void feed(OrbFrame f, {int rate = 16000}) {
+      for (var c = 0; c < 8; c++) {
+        final b = ByteData(512 * 2);
+        for (var i = 0; i < 512; i++) {
+          b.setInt16(i * 2, (i % 257) * 100 - 12800, Endian.little);
+        }
+        f.feedPcm(b.buffer.asUint8List(), sampleRate: rate);
+      }
+    }
+
+    test('listening does not resample, so it cannot draw a trace', () {
+      // A trace of the user's own speech competes with the live transcript,
+      // which is what they are actually reading while they talk.
+      final f = OrbFrame()..state = OrbState.listening;
+      feed(f);
+      f.advance(1 / 60);
+      expect(f.waveform.every((v) => v == 0.0), isTrue);
+      f.dispose();
+    });
+
+    test('listening still REACTS — the halos must show it is hearing you', () {
+      // The narrower "draws a wave" rule must not take the level with it, or
+      // the only ambient signal that the mic is live goes too.
+      final f = OrbFrame()
+        ..state = OrbState.listening
+        ..audioTarget = 1.0;
+      for (var i = 0; i < 10; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.level, greaterThan(0.5));
+      expect(f.punch, greaterThan(0.0));
+      f.dispose();
+    });
+
+    test('speaking draws', () {
+      final f = OrbFrame()..state = OrbState.speaking;
+      feed(f, rate: 24000);
+      f.advance(1 / 60);
+      expect(f.waveform.any((v) => v != 0.0), isTrue);
+      f.dispose();
+    });
+  });
+
+  group('a dry stream', () {
+    void feed(OrbFrame f) {
+      for (var c = 0; c < 8; c++) {
+        final b = ByteData(512 * 2);
+        for (var i = 0; i < 512; i++) {
+          b.setInt16(i * 2, (i % 257) * 100 - 12800, Endian.little);
+        }
+        f.feedPcm(b.buffer.asUint8List(), sampleRate: 24000);
+      }
+    }
+
+    test('the trace does not outlive its audio', () {
+      // THE bug this group exists for. The read cursor advances on wall-clock
+      // while the ring only advances when audio arrives, so once the stream
+      // stopped the cursor overran the write head, the lag went negative, and
+      // the resync dropped it back into the last written samples — re-reading
+      // the same window forever. On screen: a waveform still open and still
+      // moving with nothing being said. A TOOL ROUND is the case that matters,
+      // where the brain goes quiet mid-turn while the orb is still `speaking`.
+      final f = OrbFrame()..state = OrbState.speaking;
+      feed(f);
+      f.advance(1 / 60);
+      expect(f.waveform.any((v) => v != 0.0), isTrue, reason: 'sanity: drawing');
+
+      // Well past kWaveDrySeconds + kWaveFadeSeconds, with no new audio.
+      for (var i = 0; i < 60; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.waveform.every((v) => v == 0.0), isTrue,
+          reason: 'silence must draw silence');
+      f.dispose();
+    });
+
+    test('it fades rather than cutting', () {
+      // A hard cut reads as a glitch. Sampled mid-fade, the trace must be
+      // smaller than it was but not yet gone.
+      final f = OrbFrame()..state = OrbState.speaking;
+      feed(f);
+      f.advance(1 / 60);
+      final full = f.waveform.reduce((a, b) => a > b ? a : b);
+
+      // Land inside the fade window: past the dry threshold, short of the end.
+      var elapsed = 1 / 60;
+      while (elapsed < kWaveDrySeconds + kWaveFadeSeconds * 0.5) {
+        f.advance(1 / 60);
+        elapsed += 1 / 60;
+      }
+      final mid = f.waveform.reduce((a, b) => a > b ? a : b);
+      expect(mid, lessThan(full));
+      expect(mid, greaterThan(0.0));
+      f.dispose();
+    });
+
+    test('audio arriving again restores the trace', () {
+      // The fade must not be a one-way latch — a tool round ends and Henry
+      // keeps talking.
+      final f = OrbFrame()..state = OrbState.speaking;
+      feed(f);
+      for (var i = 0; i < 60; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.waveform.every((v) => v == 0.0), isTrue, reason: 'sanity: dry');
+
+      feed(f);
+      f.advance(1 / 60);
+      f.advance(1 / 60);
+      expect(f.waveform.any((v) => v != 0.0), isTrue);
+      f.dispose();
     });
   });
 }

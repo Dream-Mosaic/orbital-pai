@@ -108,18 +108,26 @@ void main() {
     expect(oval.height, closeTo(r0 * 0.6, 1e-9));
   });
 
-  test('the waveform is drawn for reactive states only', () {
+  test('the waveform is drawn for SPEAKING only', () {
     // Unsigned bucket peaks — the envelope is mirrored, so a signed input would
     // just render its negative half as a positive one.
     final wave = Float32List.fromList(
         List<double>.generate(64, (i) => math.sin(i * 0.3).abs()));
-    // Two paths per reactive frame: the gradient-filled envelope body and the
+    // Two paths per speaking frame: the gradient-filled envelope body and the
     // blurred outline traced around it.
-    expect(paintAt(OrbState.listening, wave: wave).of('drawPath'), hasLength(2));
     expect(paintAt(OrbState.speaking, wave: wave).of('drawPath'), hasLength(2));
-    for (final s in [OrbState.idle, OrbState.ambient, OrbState.thinking]) {
+    // LISTENING is in this list deliberately. The trace is Henry's voice; a
+    // trace of the user's own speech competes with the live transcript, which
+    // is what they are actually reading while they talk. The orb still REACTS
+    // while listening (halos, glow, breathe) — it just draws no wave.
+    for (final s in [
+      OrbState.idle,
+      OrbState.ambient,
+      OrbState.thinking,
+      OrbState.listening,
+    ]) {
       expect(paintAt(s, wave: wave).of('drawPath'), isEmpty,
-          reason: '$s must not inherit a frozen trace from the last reactive state');
+          reason: '$s must not draw a trace');
     }
   });
 

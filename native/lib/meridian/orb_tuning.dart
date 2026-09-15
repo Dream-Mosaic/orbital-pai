@@ -46,6 +46,24 @@ const double kWaveFillAlpha = 0.34;
 /// Opacity of the glowing outline traced around the envelope.
 const double kWaveEdgeAlpha = 0.72;
 
+/// How long the audio stream may go dry before the trace starts fading out.
+///
+/// Without this the wave outlived its audio. The read cursor advances on
+/// WALL-CLOCK while the ring only advances when audio arrives, so once the
+/// stream stops the cursor overruns the write head, the lag goes negative, and
+/// the resync drops it straight back into the last written samples — re-reading
+/// the same window forever. On screen that is a waveform still open and still
+/// moving with nothing being said. The resync itself is right, but it exists
+/// for brief jitter stalls and cannot tell one from a stream that has ended.
+///
+/// A TOOL ROUND is the case that matters: the brain goes quiet mid-turn while
+/// the orb is legitimately still `speaking`.
+const double kWaveDrySeconds = 0.12;
+
+/// How long the held trace takes to fade to nothing once it has gone dry.
+/// A hard cut would read as a glitch; this reads as the wave settling.
+const double kWaveFadeSeconds = 0.18;
+
 // ---------------------------------------------------------------------------
 // Auto-gain — what stops conversational speech from drawing a 2px squiggle.
 // ---------------------------------------------------------------------------
