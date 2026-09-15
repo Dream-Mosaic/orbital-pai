@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../deep_link.dart';
 import '../server_config.dart';
+import 'browser_session.dart';
 import 'token_store.dart';
 
 /// Where the app's sign-in state machine currently is.
@@ -16,26 +16,29 @@ import 'token_store.dart';
 enum AuthState { unknown, signedOut, signedIn }
 
 /// The sign-in state machine: reads the stored token at startup, opens the
-/// Authentik flow in the system browser (`GET /auth/login?return=app`), and
-/// exchanges the one-time code the server deep-links back
-/// (`orbital://auth?code=…`) for a real socket token
+/// Authentik flow in the OS auth session (`GET /auth/login?return=app`, see
+/// [BrowserSession]), and exchanges the one-time code the server hands back
+/// at the end (`orbital://auth?code=…`) for a real socket token
 /// (`POST /api/auth/exchange`).
 ///
 /// Injectable [httpClient] and [store] so this is testable headless — no
 /// platform channel, no real network call. See
-/// test/auth/auth_controller_test.dart. `signIn()` itself calls
-/// `package:url_launcher`'s top-level `launchUrl` directly rather than through
-/// an injected seam, matching how `connectors_panel.dart` does the same thing
-/// — a test registers a [FakeUrlLauncher] as the platform instance instead.
+/// test/auth/auth_controller_test.dart. Injectable [session] so tests never
+/// touch a platform channel — see test/support/fake_browser_session.dart.
 class AuthController extends ChangeNotifier {
-  AuthController({required TokenStore store, http.Client? httpClient})
-      : _store = store,
-        _http = httpClient ?? http.Client() {
+  AuthController({
+    required TokenStore store,
+    http.Client? httpClient,
+    BrowserSession? session,
+  })  : _store = store,
+        _http = httpClient ?? http.Client(),
+        _session = session ?? const WebAuthBrowserSession() {
     _ready = _init();
   }
 
   final TokenStore _store;
   final http.Client _http;
+  final BrowserSession _session;
   late final Future<void> _ready;
 
   AuthState _state = AuthState.unknown;
@@ -67,21 +70,46 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Opens the Authentik sign-in flow in the system browser.
+  /// Runs the Authentik sign-in flow in the OS auth session and finishes it.
   ///
-  /// EXTERNAL, not an in-app webview: Authentik (like Google) refuses to
-  /// authenticate inside one, and `connectors_panel.dart` already made this
-  /// exact call for the exact same reason — see its `_launchIfNeeded`.
+  /// EXTERNAL browser context, not an in-app webview: Authentik (like Google)
+  /// refuses to authenticate inside one. A Custom Tab is the system browser
+  /// with its cookies, so it passes. The session resolves with the
+  /// `orbital://auth?…` link the server ends on and dismisses itself; that
+  /// link then goes through the same [handleLink] path a deep link used to.
   Future<void> signIn() async {
     _error = null;
     notifyListeners();
-    await launchUrl(
-      Uri.parse('$kHttpBase/auth/login?return=app'),
-      mode: LaunchMode.externalApplication,
-    );
+
+    final Uri? uri;
+    try {
+      uri = await _session.run(Uri.parse('$kHttpBase/auth/login?return=app'));
+    } catch (_) {
+      // The sheet never opened (no browser, platform refusal). Not a
+      // rejection, nothing stored changed — same retryable line as a failed
+      // exchange for the same reason.
+      _error = 'Could not reach the server. Check your connection and try again.';
+      _state = AuthState.signedOut;
+      notifyListeners();
+      return;
+    }
+
+    // Dismissed by the user. Nothing happened, and telling them so would be
+    // announcing their own action back at them.
+    if (uri == null) return;
+
+    final link = parseAppLink(uri);
+    if (link == null) {
+      _error = "Sign-in didn't complete. Try again.";
+      _state = AuthState.signedOut;
+      notifyListeners();
+      return;
+    }
+    await handleLink(link);
   }
 
-  /// The deep link the browser hands back after the flow finishes.
+  /// The callback the session resolved with (or, for [ConnectorsResultLink],
+  /// one that is not this controller's business).
   ///
   /// Only [AuthCodeLink] and [AuthErrorLink] are this controller's business —
   /// main.dart routes [ConnectorsResultLink] to the connectors panel instead —

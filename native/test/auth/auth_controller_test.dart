@@ -7,12 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:orbital_pai/auth/auth_controller.dart';
+import 'package:orbital_pai/auth/browser_session.dart';
 import 'package:orbital_pai/auth/token_store.dart';
 import 'package:orbital_pai/deep_link.dart';
 import 'package:orbital_pai/server_config.dart';
-import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
-import '../support/fake_url_launcher.dart';
+import '../support/fake_browser_session.dart';
 
 void main() {
   group('AuthController', () {
@@ -23,11 +23,14 @@ void main() {
       fakePlatform = TestFlutterSecureStoragePlatform(<String, String>{});
       FlutterSecureStoragePlatform.instance = fakePlatform;
       store = TokenStore(storage: const FlutterSecureStorage());
-      FakeUrlLauncher.register();
     });
 
-    AuthController build({http.Client? httpClient}) =>
-        AuthController(store: store, httpClient: httpClient);
+    AuthController build({http.Client? httpClient, BrowserSession? session}) =>
+        AuthController(
+          store: store,
+          httpClient: httpClient,
+          session: session ?? FakeBrowserSession(),
+        );
 
     test('starts unknown, then settles to signedIn with a stored token',
         () async {
@@ -52,22 +55,79 @@ void main() {
       expect(auth.token, isNull);
     });
 
-    test('signIn opens /auth/login?return=app in the EXTERNAL browser',
-        () async {
-      final auth = build();
+    test('signIn opens /auth/login?return=app in the OS auth session', () async {
+      final session = FakeBrowserSession();
+      final auth = build(session: session);
       await auth.ready;
 
-      final fake = FakeUrlLauncher.register();
       await auth.signIn();
 
-      expect(fake.launches, hasLength(1));
+      expect(session.opened, hasLength(1));
       // Compared as a Uri, not a literal string: `Uri.parse` drops an
-      // explicit port that matches its scheme's default (443 for https), so
-      // the string this app builds and the string a naive literal would
-      // predict legitimately differ in exactly that case.
-      expect(Uri.parse(fake.launches.single.url),
-          Uri.parse('$kHttpBase/auth/login?return=app'));
-      expect(fake.launches.single.mode, PreferredLaunchMode.externalApplication);
+      // explicit port that matches its scheme's default (443 for https).
+      expect(session.opened.single, Uri.parse('$kHttpBase/auth/login?return=app'));
+    });
+
+    test('a dismissed sheet leaves signedOut with nothing to say', () async {
+      final auth = build(session: FakeBrowserSession(result: null));
+      await auth.ready;
+
+      await auth.signIn();
+
+      expect(auth.state, AuthState.signedOut);
+      expect(auth.error, isNull);
+      expect(await store.read(), isNull);
+    });
+
+    test('a code callback exchanges and becomes signedIn', () async {
+      final client = MockClient((_) async =>
+          http.Response(jsonEncode({'token': 'exchanged'}), 200));
+      final auth = build(
+        httpClient: client,
+        session: FakeBrowserSession(result: Uri.parse('orbital://auth?code=c1')),
+      );
+      await auth.ready;
+
+      await auth.signIn();
+
+      expect(auth.state, AuthState.signedIn);
+      expect(auth.token, 'exchanged');
+      expect(await store.read(), 'exchanged');
+    });
+
+    test('an error callback stays signedOut and says why', () async {
+      final auth = build(
+        session: FakeBrowserSession(result: Uri.parse('orbital://auth?status=error')),
+      );
+      await auth.ready;
+
+      await auth.signIn();
+
+      expect(auth.state, AuthState.signedOut);
+      expect(auth.error, "Sign-in didn't complete. Try again.");
+    });
+
+    test('an unrecognised callback is treated as not completed', () async {
+      final auth = build(
+        session: FakeBrowserSession(result: Uri.parse('orbital://somewhere?x=1')),
+      );
+      await auth.ready;
+
+      await auth.signIn();
+
+      expect(auth.state, AuthState.signedOut);
+      expect(auth.error, "Sign-in didn't complete. Try again.");
+      expect(await store.read(), isNull);
+    });
+
+    test('a session that fails to open surfaces a retryable error', () async {
+      final auth = build(session: FakeBrowserSession(error: StateError('no browser')));
+      await auth.ready;
+
+      await auth.signIn();
+
+      expect(auth.state, AuthState.signedOut);
+      expect(auth.error, 'Could not reach the server. Check your connection and try again.');
     });
 
     test('an AuthCodeLink on 200 writes the token and becomes signedIn',
