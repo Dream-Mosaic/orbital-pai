@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -14,8 +13,9 @@ class Rec {
 }
 
 /// A Canvas that records draw calls instead of rasterising them. `paint` is a
-/// pure function of (state, t, level, waveform, size), so pinning t + level makes
-/// every radius and rect below exactly predictable from orb.js's formulas.
+/// pure function of (state, t, level, presence, size), so pinning t + level
+/// makes every radius and rect below exactly predictable from orb.js's
+/// formulas.
 class RecordingCanvas implements Canvas {
   final List<Rec> calls = <Rec>[];
 
@@ -45,13 +45,19 @@ void main() {
   const cy = 150.0;
   const r0 = 90.0; // min(w, h) * 0.3
 
+  /// [advance] is seconds of frames to run BEFORE pinning t and level — the
+  /// line is gated on `presence`, which only exists after the frame has been
+  /// advanced. Pinning happens last so `paint` stays a pure function of
+  /// (state, t, level, presence, size).
   RecordingCanvas paintAt(OrbState state,
-      {double t = 0.0, double level = 0.0, Float32List? wave}) {
+      {double t = 0.0, double level = 0.0, double advance = 0.0}) {
     final frame = OrbFrame();
     frame.state = state;
+    for (var i = 0; i < (advance * 60).round(); i++) {
+      frame.advance(1 / 60);
+    }
     frame.debugT = t;
     frame.debugSetLevel(level);
-    if (wave != null) frame.waveform = wave;
     final canvas = RecordingCanvas();
     OrbPainter(frame).paint(canvas, size);
     frame.dispose();
@@ -108,27 +114,30 @@ void main() {
     expect(oval.height, closeTo(r0 * 0.6, 1e-9));
   });
 
-  test('the waveform is drawn for SPEAKING only', () {
-    // Unsigned bucket peaks — the envelope is mirrored, so a signed input would
-    // just render its negative half as a positive one.
-    final wave = Float32List.fromList(
-        List<double>.generate(64, (i) => math.sin(i * 0.3).abs()));
-    // Two paths per speaking frame: the gradient-filled envelope body and the
-    // blurred outline traced around it.
-    expect(paintAt(OrbState.speaking, wave: wave).of('drawPath'), hasLength(2));
-    // LISTENING is in this list deliberately. The trace is Henry's voice; a
-    // trace of the user's own speech competes with the live transcript, which
-    // is what they are actually reading while they talk. The orb still REACTS
-    // while listening (halos, glow, breathe) — it just draws no wave.
+  test('the line is drawn where PRESENCE is, and nowhere else', () {
+    // Two paths per present frame: the gradient-filled body and the blurred
+    // outline traced around it.
+    expect(paintAt(OrbState.speaking, advance: 0.5).of('drawPath'),
+        hasLength(2));
+    expect(paintAt(OrbState.thinking, advance: 0.5).of('drawPath'),
+        hasLength(2), reason: 'thinking has no audio but still has a line');
+    // LISTENING is in this list deliberately. The line is Henry's half of the
+    // conversation; a line over the user's own speech competes with the live
+    // transcript, which is what they are actually reading while they talk. The
+    // orb still REACTS while listening (halos, glow, breathe) — it just draws
+    // no line.
     for (final s in [
       OrbState.idle,
       OrbState.ambient,
-      OrbState.thinking,
       OrbState.listening,
     ]) {
-      expect(paintAt(s, wave: wave).of('drawPath'), isEmpty,
-          reason: '$s must not draw a trace');
+      expect(paintAt(s, advance: 0.5).of('drawPath'), isEmpty,
+          reason: '$s must not draw a line');
     }
+    // And an un-advanced speaking frame draws nothing either: presence starts
+    // at zero and fades, so the gate is genuinely presence and not the state.
+    expect(paintAt(OrbState.speaking).of('drawPath'), isEmpty,
+        reason: 'presence starts at 0 — the line fades in, it does not cut in');
   });
 
   test('the specular gradient centre is pre-rotated into the canvas frame', () {

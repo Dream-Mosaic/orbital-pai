@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/orb_painter.dart';
@@ -14,7 +12,7 @@ class _Rec {
 
 /// A Canvas that records draw calls instead of rasterising them — the same
 /// technique `orb_geometry_test.dart` uses for the fallback painter, applied
-/// here to the shader painter's Canvas-drawn waveform. This never touches the
+/// here to the shader painter's Canvas-drawn line. This never touches the
 /// shader's rasterised output (the drawRect carrying the shader is recorded,
 /// not rendered), so it cannot hang the way a pixel comparison would.
 class _RecordingCanvas implements Canvas {
@@ -54,8 +52,7 @@ void main() {
     for (final s in OrbState.values) {
       final f = OrbFrame()
         ..state = s
-        ..audioTarget = 0.9
-        ..waveform = Float32List.fromList(List.generate(64, (i) => 0.4));
+        ..audioTarget = 0.9;
       for (var i = 0; i < 10; i++) {
         f.advance(1 / 60);
       }
@@ -75,21 +72,24 @@ void main() {
   });
 
   testWidgets(
-      'the waveform breathes with t — a regression test for the un-breathing r0 bug',
+      'the line breathes with t — a regression test for the un-breathing r0 bug',
       (tester) async {
     await OrbShaderProgram.load();
 
-    // Pure function of (state, t, level, waveform, size): pinning everything
+    // Pure function of (state, t, level, presence, size): pinning everything
     // except t isolates exactly the term this test is about.
     Rect fillBounds(double t) {
-      final f = OrbFrame()
-        // SPEAKING: the trace is Henry's voice, and listening no longer draws
-        // one at all — a listening frame here would assert against an empty
-        // canvas and pass for the wrong reason.
-        ..state = OrbState.speaking
-        ..debugT = t
-        ..debugSetLevel(0.5)
-        ..waveform = Float32List.fromList(List.generate(64, (i) => 0.6));
+      // SPEAKING: the line is Henry's half of the conversation, and listening
+      // draws none at all — a listening frame here would assert against an
+      // empty canvas and pass for the wrong reason.
+      final f = OrbFrame()..state = OrbState.speaking;
+      // Presence only exists once the frame has been advanced; pin t and level
+      // afterwards so the geometry stays a pure function of them.
+      for (var i = 0; i < 30; i++) {
+        f.advance(1 / 60);
+      }
+      f.debugT = t;
+      f.debugSetLevel(0.5);
       final canvas = _RecordingCanvas();
       OrbShaderPainter(f, OrbShaderProgram.shader!)
           .paint(canvas, const Size(300, 300));
@@ -99,19 +99,24 @@ void main() {
           .where((c) => (c.args[1] as Paint).style == PaintingStyle.fill)
           .toList();
       expect(fills, hasLength(1),
-          reason: 'exactly one filled envelope path per paint');
+          reason: 'exactly one filled line path per paint');
       return (fills.single.args[0] as Path).getBounds();
     }
 
-    // Under the bug (`r = side * 0.3`, never breathing), the wave's geometry
-    // is a pure function of (level, waveform, size) — t never enters it — so
-    // this would fail (bounds identical) on the pre-fix code. With the fix,
-    // `r` carries `kBreathe * (0.015*sin(t*1.6) + level*0.04)`, which varies
-    // with t even at a fixed level, so the drawn bounds must move.
+    // WIDTH, not the whole rect. The line's own shape is now a function of t
+    // (t is its phase), so "the bounds moved" would pass on the un-breathing
+    // bug too — it would just be reading the phase. The path spans exactly
+    // [cx - halfW, cx + halfW] and halfW is r * 0.72, so the bounds' WIDTH is
+    // 1.44r and nothing else: phase-free, and carrying the breathe term alone.
+    //
+    // Under the bug (`r = side * 0.3`, never breathing) the width is a pure
+    // function of (size) and these two are identical. With the fix, `r` carries
+    // `kBreathe * (0.015*sin(t*1.6) + level*0.04)`, which varies with t even at
+    // a fixed level — about 2px across at r=90.
     final a = fillBounds(0.0);
     final b = fillBounds(1.0);
-    expect(a, isNot(equals(b)),
-        reason: 'the wave must sit on the breathing sphere (varies with t), '
+    expect(b.width, isNot(closeTo(a.width, 0.5)),
+        reason: 'the line must sit on the breathing sphere (varies with t), '
             'not the frozen r0 the shader painter used to pass in');
   });
 

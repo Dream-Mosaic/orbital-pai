@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/audio_levels.dart';
-import 'package:orbital_pai/meridian/orb_tuning.dart';
 
 /// Build PCM16LE mono bytes from int16 samples.
 Uint8List pcm(List<int> samples) {
@@ -31,130 +30,6 @@ void main() {
     // constant amplitude 0.1 full-scale -> rms 0.1 -> *3 = 0.3
     final s = List.filled(256, (0.1 * 32768).round());
     expect(rmsFromPcm16(pcm(s)), closeTo(0.3, 0.01));
-  });
-
-  group('PcmRing', () {
-    test('the newest sample lands at the end of the window', () {
-      final r = PcmRing(capacity: 8);
-      r.write(pcm([1000, 2000, 3000, 4000]));
-      final out = Float32List(4);
-      r.readInto(out, end: r.written, window: 4);
-      expect(out.last, closeTo(4000 / 32768.0, 1e-6));
-      expect(out.first, closeTo(1000 / 32768.0, 1e-6));
-    });
-
-    test('a window reaching before the start of the stream pads with silence', () {
-      final r = PcmRing(capacity: 8);
-      r.write(pcm([1000, 2000]));
-      final out = Float32List(4);
-      r.readInto(out, end: r.written, window: 4);
-      expect(out[0], 0.0);
-      expect(out[1], 0.0);
-      expect(out[2], closeTo(1000 / 32768.0, 1e-6));
-      expect(out[3], closeTo(2000 / 32768.0, 1e-6));
-    });
-
-    test('samples older than the capacity read as silence, not as stale audio', () {
-      final r = PcmRing(capacity: 4);
-      r.write(pcm([1, 2, 3, 4, 5, 6]));
-      final out = Float32List(4);
-      r.readInto(out, end: r.written, window: 4);
-      expect(out.first, closeTo(3 / 32768.0, 1e-6));
-      expect(out.last, closeTo(6 / 32768.0, 1e-6));
-      // The evicted 1 and 2 must not reappear when the window reaches back for them.
-      final older = Float32List(6);
-      r.readInto(older, end: r.written, window: 6);
-      expect(older[0], 0.0);
-      expect(older[1], 0.0);
-      expect(older[2], closeTo(3 / 32768.0, 1e-6));
-    });
-
-    test('a write spanning the wrap point stays in order', () {
-      final r = PcmRing(capacity: 4);
-      r.write(pcm([1, 2, 3]));
-      r.write(pcm([4, 5])); // wraps
-      final out = Float32List(4);
-      r.readInto(out, end: r.written, window: 4);
-      expect(out.first, closeTo(2 / 32768.0, 1e-6));
-      expect(out.last, closeTo(5 / 32768.0, 1e-6));
-    });
-
-    test('reads are addressed absolutely, so an earlier end sees earlier audio', () {
-      final r = PcmRing(capacity: 16);
-      r.write(pcm([10, 20, 30, 40, 50, 60, 70, 80]));
-      final a = Float32List(2);
-      final b = Float32List(2);
-      r.readInto(a, end: 4, window: 2); // samples 30,40
-      r.readInto(b, end: 8, window: 2); // samples 70,80
-      expect(a.last, closeTo(40 / 32768.0, 1e-6));
-      expect(b.last, closeTo(80 / 32768.0, 1e-6));
-    });
-
-    test('written is the absolute sample clock, not a byte count', () {
-      final r = PcmRing(capacity: 16);
-      r.write(pcm([1, 2, 3]));
-      expect(r.written, 3);
-      r.write(pcm([4]));
-      expect(r.written, 4);
-    });
-
-    test('a negative sample reads as its own magnitude, not as unsigned garbage',
-        () {
-      // The output is unsigned now, so "the sign survived" is no longer the
-      // guard. The underlying hazard is unchanged though: reading int16 -30000
-      // as UNSIGNED gives 35536, i.e. >full-scale, which would clamp to 1.0 and
-      // silently peg the envelope open on any loud negative excursion.
-      final r = PcmRing(capacity: 4);
-      r.write(pcm([-30000, -30000, -30000, -30000]));
-      final out = Float32List(4);
-      r.readInto(out, end: r.written, window: 4);
-      expect(out.every((v) => v > 0), isTrue, reason: 'magnitude, so positive');
-      for (final v in out) {
-        expect(v, closeTo(30000 / 32768.0, 1e-6));
-      }
-    });
-
-    test('clear() empties the window and resets the clock', () {
-      final r = PcmRing(capacity: 4);
-      r.write(pcm([9000, 9000]));
-      r.clear();
-      expect(r.written, 0);
-      final out = Float32List(4);
-      r.readInto(out, end: 0, window: 4);
-      expect(out.every((v) => v == 0.0), isTrue);
-    });
-
-    test('takes each bucket PEAK when the window is wider than the output', () {
-      final r = PcmRing(capacity: 1024);
-      // A ramp, not an alternating signal: with an alternating signal the mean
-      // and the peak differ so dramatically that the test would pass by luck.
-      r.write(pcm(List.generate(1024, (i) => i * 16)));
-      final out = Float32List(128);
-      r.readInto(out, end: r.written, window: 1024);
-      expect(out.length, 128);
-      // Last bucket = samples 1016..1023 -> peak 1023*16 = 16368 (mean 16312).
-      expect(out.last, closeTo(16368 / 32768.0, 1e-6));
-      // First bucket = samples 0..7 -> peak 7*16 = 112 (mean 56).
-      expect(out.first, closeTo(112 / 32768.0, 1e-6));
-    });
-
-    test('a bucket of alternating samples keeps its amplitude instead of '
-        'cancelling to zero', () {
-      // THE regression this whole change exists for. Speech routinely flips
-      // sign between adjacent samples; the old per-bucket MEAN cancelled it and
-      // collapsed the trace onto the centreline, which is why the orb looked
-      // dead. A peak envelope cannot cancel.
-      final r = PcmRing(capacity: 1024);
-      r.write(pcm(List.generate(1024, (i) => i.isEven ? 8000 : -8000)));
-      final out = Float32List(128);
-      r.readInto(out, end: r.written, window: 1024);
-      expect(out.every((v) => v > 0.2), isTrue,
-          reason: 'every bucket must carry the real 8000/32768 amplitude; '
-              'averaging would have produced ~0 everywhere');
-      for (final v in out) {
-        expect(v, closeTo(8000 / 32768.0, 1e-6));
-      }
-    });
   });
 
   group('alphaForDt', () {
@@ -219,49 +94,6 @@ void main() {
       final s = LevelSmoother()..debugSet(0.8);
       s.reset();
       expect(s.value, 0.0);
-    });
-  });
-
-  group('AutoGain', () {
-    test('adopts a peak instantly and releases it slowly', () {
-      final g = AutoGain();
-      g.observe(0.5, 1 / 60);
-      expect(g.peak, closeTo(0.5, 1e-9), reason: 'instant attack');
-
-      g.observe(0.0, 1.0); // a full second of silence
-      expect(g.peak, closeTo(0.5 * kAgcDecayPerSec, 1e-6));
-      expect(g.peak, greaterThan(0.0),
-          reason: 'a slow release is what keeps the scale steady across a '
-              'syllable instead of pumping inside one');
-    });
-
-    test('normalises quiet speech up toward full scale', () {
-      final g = AutoGain();
-      g.observe(0.25, 1 / 60);
-      expect(0.25 * g.gain, closeTo(1.0, 1e-6));
-    });
-
-    test('never attenuates audio that is already loud', () {
-      final g = AutoGain();
-      g.observe(1.0, 1 / 60);
-      expect(g.gain, 1.0);
-    });
-
-    test('a silent room is not amplified into a fake waveform', () {
-      // The ceiling is the entire safety argument for auto-gain: without it,
-      // normalising against a near-zero peak turns the noise floor into a
-      // convincing trace of a conversation nobody is having.
-      final g = AutoGain();
-      g.observe(0.0005, 1 / 60);
-      expect(g.gain, kAgcMaxGain);
-      expect(0.0005 * g.gain, lessThan(0.01),
-          reason: 'still draws as effectively flat');
-    });
-
-    test('reset clears the tracked peak', () {
-      final g = AutoGain()..observe(0.9, 1 / 60);
-      g.reset();
-      expect(g.peak, 0.0);
     });
   });
 

@@ -1,22 +1,19 @@
-import 'dart:math' as math;
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/orb_painter.dart';
 import 'package:orbital_pai/meridian/orb_state.dart';
 
 /// A 2x gradient bug shipped in A1 precisely because no test could see pixels.
-/// `paint` is pure in (state, t, level, waveform, size), so pinning t and level
+/// `paint` is pure in (state, t, level, presence, size), so pinning t and level
 /// makes a golden the exact guard that would have caught it — the framing that
 /// "the orb is animated, therefore goldens are impossible" does not hold.
 ///
 /// Regenerate deliberately (never to silence a failure you have not explained):
 ///   flutter test --update-goldens test/meridian/orb_golden_test.dart
 ///
-/// SPEAKING, not listening: the waveform is drawn for speaking only now, and a
-/// golden of a state that draws no wave would stop covering the envelope — the
-/// most intricate thing on the canvas and the half this golden exists for.
+/// SPEAKING, not listening: listening draws no line, and a golden of a state
+/// without one would stop covering the line — the most intricate thing on the
+/// canvas and the half this golden exists for.
 void main() {
   Widget host(OrbFrame frame, Key key) => MaterialApp(
         home: Center(
@@ -38,17 +35,17 @@ void main() {
   testWidgets('speaking orb, t=1.0, level=0.5', (tester) async {
     final frame = OrbFrame();
     frame.state = OrbState.speaking;
+    // Presence is the one input with no test seam — it exists only as the
+    // accumulated result of advancing. Half a second of 60Hz frames puts it at
+    // ~0.999 (kLinePresenceSeconds is 0.22), i.e. a fully faded-in line.
+    for (var i = 0; i < 30; i++) {
+      frame.advance(1 / 60);
+    }
+    // Pinned AFTER the advances, which would otherwise decay the level toward
+    // the (unset, zero) audio target and move the clock — the golden has to be
+    // a pure function of its inputs.
     frame.debugT = 1.0;
     frame.debugSetLevel(0.5);
-    // Unsigned bucket peaks now, not a signed trace — a rectified carrier under
-    // a slow amplitude modulation, which is roughly the shape speech makes.
-    frame.waveform = Float32List.fromList(List<double>.generate(
-        128,
-        (i) =>
-            math.sin(i * 0.19).abs() * (0.4 + 0.6 * math.sin(i * 0.031).abs())));
-    // Pinned for the same reason as t and level: the auto-gain is a function of
-    // audio history, and a golden must be a pure function of its inputs.
-    frame.debugSetWaveGain(1.0);
 
     const key = ValueKey<String>('orb-golden');
     await tester.pumpWidget(host(frame, key));

@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'orb_envelope.dart';
+import 'orb_line.dart';
 import 'orb_painter.dart' show OrbFrame, kBreathe;
 import 'orb_state.dart';
 import 'orb_tuning.dart';
@@ -77,7 +77,7 @@ abstract final class OrbShaderProgram {
 }
 
 /// Paints the orb with `shaders/orb.frag`: one drawRect for the halos, the
-/// contact glow and the glass body, then the waveform as a Canvas path on top.
+/// contact glow and the glass body, then the line as a Canvas path on top.
 ///
 /// Replaces the five per-frame MaskFilter.blur passes the Canvas painter needs.
 class OrbShaderPainter extends CustomPainter {
@@ -105,16 +105,18 @@ class OrbShaderPainter extends CustomPainter {
     }
     canvas.drawRect(rect, Paint()..shader = shader);
 
-    // The waveform stays a Canvas path, drawn by the same function the
-    // fallback painter uses so the two cannot diverge.
-    // SPEAKING only — the trace is Henry's voice. See OrbFrame._drawsWave.
-    if (frame.state != OrbState.speaking) return;
+    // The line stays a Canvas path, drawn by the same function the fallback
+    // painter uses so the two cannot diverge.
+    // Gated on PRESENCE, not on the state: presence already IS the state rule
+    // (thinking + speaking, faded), and gating on the state as well would cut
+    // the fade off at its first frame so it would never be seen.
+    if (frame.presence <= 0) return;
 
     // Must match orb.frag's `breathe` and orb_painter.dart's `r` EXACTLY: the
     // wave sits on the sphere's surface, so a wave computed against the
     // un-breathing r0 drifts off it by up to ~5.5% of the radius at full level.
-    // This is also what makes orb_envelope.dart's "both painters draw the same
-    // wave by construction" claim true rather than aspirational.
+    // This is also what makes orb_line.dart's "both painters draw the same
+    // line by construction" claim true rather than aspirational.
     final breathe = frame.state == OrbState.off
         ? 0.0
         : kBreathe * (0.015 * math.sin(frame.t * 1.6) + frame.level * 0.04);
@@ -122,13 +124,14 @@ class OrbShaderPainter extends CustomPainter {
     final cx = rect.center.dx;
     final cy = rect.center.dy;
     // The fallback painter clips this to the sphere; deliberately omitted
-    // here — the envelope's own reach (~0.4r plus blur) stays well inside
+    // here — the line's own reach (~0.4r plus blur) stays well inside
     // the silhouette at the current amplitude, so there is nothing to clip.
     // Don't "fix" this as a forgotten clipPath without re-checking that.
-    drawOrbEnvelope(
+    drawOrbLine(
       canvas,
-      wave: frame.waveform,
-      gain: frame.waveGain,
+      level: frame.level,
+      presence: frame.presence,
+      t: frame.t,
       color: paletteFor(frame.state).wave,
       cx: cx,
       cy: cy + r * 0.06,

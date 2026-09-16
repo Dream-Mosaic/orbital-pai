@@ -27,75 +27,18 @@ const double kLevelAttack60 = 0.45;
 const double kLevelRelease60 = 0.12;
 
 // ---------------------------------------------------------------------------
-// Waveform render.
+// Line render.
 // ---------------------------------------------------------------------------
 
-/// Half-height of the envelope at full scale, as a fraction of the sphere
-/// radius. The trace is mirrored, so the drawn band is twice this.
+/// Half-height of the line at full scale, as a fraction of the sphere radius.
+/// The line is mirrored about its centre, so the drawn band is twice this.
 const double kWaveAmp = 0.34;
 
-/// How much audio the trace shows across its full width, in seconds.
-///
-/// THE knob that decides whether this reads as a voice or as hair. It used to
-/// be a fixed 1024 samples — 43ms at the 24kHz TTS rate — so the trace was an
-/// oscilloscope zoomed in on individual glottal pulses, scrolling a whole
-/// screen-width every 43ms. Every bucket held 8 samples, which within a single
-/// pitch period swing wildly from one to the next; that is the spikiness, and
-/// no amount of smoothing fixes it because the detail is real. Over ~0.6s each
-/// bucket spans several pitch periods instead, so its peak becomes the SYLLABLE
-/// envelope: smooth, legible, and scrolling at a pace the eye can follow.
-///
-/// Bounded by PcmRing.defaultCapacity (1.37s at 24kHz) — leave margin.
-const double kWaveSeconds = 0.6;
-
-/// Neighbour blend applied across buckets, 0 = none.
-/// Takes the last of the hash off the envelope's edge. Deliberately small: this
-/// is polish on top of [kWaveSeconds], not a substitute for it.
-const double kWaveSmoothing = 0.35;
-
-/// Response curve applied to each normalised bucket magnitude.
-/// Below 1.0 LIFTS quiet detail (a 0.3 becomes 0.43 at 0.7), which is what
-/// stops soft syllables from disappearing. Above 1.0 would exaggerate peaks at
-/// the cost of everything else.
-const double kWaveCurve = 0.8;
-
-/// Fill opacity of the envelope body at its widest.
+/// Fill opacity of the line's body at its widest.
 const double kWaveFillAlpha = 0.34;
 
-/// Opacity of the glowing outline traced around the envelope.
+/// Opacity of the glowing outline traced around the line.
 const double kWaveEdgeAlpha = 0.72;
-
-/// How long the audio stream may go dry before the trace starts fading out.
-///
-/// Without this the wave outlived its audio. The read cursor advances on
-/// WALL-CLOCK while the ring only advances when audio arrives, so once the
-/// stream stops the cursor overruns the write head, the lag goes negative, and
-/// the resync drops it straight back into the last written samples — re-reading
-/// the same window forever. On screen that is a waveform still open and still
-/// moving with nothing being said. The resync itself is right, but it exists
-/// for brief jitter stalls and cannot tell one from a stream that has ended.
-///
-/// A TOOL ROUND is the case that matters: the brain goes quiet mid-turn while
-/// the orb is legitimately still `speaking`.
-const double kWaveDrySeconds = 0.12;
-
-/// How long the held trace takes to fade to nothing once it has gone dry.
-/// A hard cut would read as a glitch; this reads as the wave settling.
-const double kWaveFadeSeconds = 0.18;
-
-// ---------------------------------------------------------------------------
-// Auto-gain — what stops conversational speech from drawing a 2px squiggle.
-// ---------------------------------------------------------------------------
-
-/// Hard ceiling on the normalising gain. This is the knob that stops a SILENT
-/// room from having its noise floor amplified into a convincing fake waveform:
-/// anything quieter than 1/kAgcMaxGain full-scale stays visibly small.
-const double kAgcMaxGain = 8.0;
-
-/// Fraction of the tracked peak still remaining one second later. Peaks are
-/// adopted instantly and released at this rate, so the trace's scale holds
-/// steady across a whole syllable instead of pumping inside one.
-const double kAgcDecayPerSec = 0.55;
 
 // ---------------------------------------------------------------------------
 // Transient detection — the per-syllable "punch" that flares the halos.
