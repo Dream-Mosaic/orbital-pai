@@ -125,6 +125,17 @@ const double kPunchSpread = 0.10;
 const double kPunchGlow = 0.9;
 
 // ---------------------------------------------------------------------------
+// The line's presence — whether it is on screen at all.
+// ---------------------------------------------------------------------------
+
+/// Seconds for the line to fade fully in or out.
+///
+/// Presence is a function of STATE, not of level: the line is there while Henry
+/// is thinking or speaking, and gone while listening or idle. A fade rather
+/// than a cut, because the state can flip several times in a turn.
+const double kLinePresenceSeconds = 0.22;
+
+// ---------------------------------------------------------------------------
 // Glass (shader only).
 // ---------------------------------------------------------------------------
 //

@@ -590,4 +590,70 @@ void main() {
 
 
   });
+
+  group('presence', () {
+    void run(OrbFrame f, double seconds) {
+      for (var i = 0; i < (seconds * 60).round(); i++) {
+        f.advance(1 / 60);
+      }
+    }
+
+    test('fades IN for thinking and for speaking', () {
+      for (final s in [OrbState.thinking, OrbState.speaking]) {
+        final f = OrbFrame()..state = s;
+        expect(f.presence, 0.0, reason: '$s starts absent');
+        run(f, 0.5);
+        expect(f.presence, greaterThan(0.95), reason: '$s must show the line');
+        f.dispose();
+      }
+    });
+
+    test('fades OUT for listening, idle and ambient', () {
+      for (final s in [OrbState.listening, OrbState.idle, OrbState.ambient]) {
+        final f = OrbFrame()..state = OrbState.speaking;
+        run(f, 0.5);
+        expect(f.presence, greaterThan(0.95), reason: 'sanity: it was up');
+
+        f.state = s;
+        run(f, 0.5);
+        expect(f.presence, lessThan(0.05), reason: '$s must hide the line');
+        f.dispose();
+      }
+    });
+
+    test('it FADES rather than cutting', () {
+      // Sampled mid-transition it must be strictly between the two ends; a cut
+      // would read as a glitch when the state flips mid-turn, which it does
+      // several times (listening -> thinking -> speaking -> listening).
+      final f = OrbFrame()..state = OrbState.speaking;
+      run(f, kLinePresenceSeconds * 0.5);
+      expect(f.presence, greaterThan(0.05));
+      expect(f.presence, lessThan(0.95));
+      f.dispose();
+    });
+
+    test('powering off clears it immediately', () {
+      // Same reasoning as the level: the ticker stops the instant we go off, so
+      // there is no next tick to finish a fade.
+      final f = OrbFrame()..state = OrbState.speaking;
+      run(f, 0.5);
+      f.state = OrbState.off;
+      expect(f.presence, 0.0);
+      f.dispose();
+    });
+
+    test('it is frame-rate independent', () {
+      final at60 = OrbFrame()..state = OrbState.speaking;
+      for (var i = 0; i < 12; i++) {
+        at60.advance(1 / 60);
+      }
+      final at120 = OrbFrame()..state = OrbState.speaking;
+      for (var i = 0; i < 24; i++) {
+        at120.advance(1 / 120);
+      }
+      expect(at120.presence, closeTo(at60.presence, 1e-6));
+      at60.dispose();
+      at120.dispose();
+    });
+  });
 }

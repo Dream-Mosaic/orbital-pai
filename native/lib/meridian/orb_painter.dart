@@ -66,6 +66,25 @@ class OrbFrame extends ChangeNotifier {
   /// Seconds the cursor has spent having nothing left to draw. Drives the fade.
   double _dryFor = 0.0;
 
+  double _presence = 0.0;
+
+  /// How much of the line is on screen, 0..1.
+  ///
+  /// A function of STATE, not of level. The line belongs to Henry's half of the
+  /// conversation: it fades in while he is thinking or speaking and out while
+  /// he is listening or idle, so the live transcript owns the orb when the
+  /// user is the one talking.
+  double get presence => _presence;
+
+  bool get _lineWanted =>
+      _state == OrbState.thinking || _state == OrbState.speaking;
+
+  /// kLinePresenceSeconds expressed as a 60Hz smoothing coefficient: reaching
+  /// ~95% in that time means shedding 5% of the remaining gap per frame at
+  /// 1 - 0.05^(1/(seconds*60)).
+  static final double _presenceAlpha60 =
+      1.0 - math.pow(0.05, 1.0 / (kLinePresenceSeconds * 60.0)).toDouble();
+
   OrbState get state => _state;
   set state(OrbState v) {
     if (v == _state) return;
@@ -82,6 +101,7 @@ class OrbFrame extends ChangeNotifier {
       _runActive = false;
       _dryFor = 0.0;
       _audioTarget = 0.0;
+      _presence = 0.0;
       // Same reasoning for the trace: a wake must not flash the audio from
       // whatever was being said when we powered down.
       _ring.clear();
@@ -206,6 +226,7 @@ class OrbFrame extends ChangeNotifier {
       _runActive = false;
       _dryFor = 0.0;
       _audioTarget = 0.0;
+      _presence = 0.0;
       return;
     }
     final reactive = _reactive;
@@ -219,6 +240,8 @@ class OrbFrame extends ChangeNotifier {
         ? 1.4
         : 1.0 + (reactive ? _smoother.value * 1.4 : 0.0);
     _t += dt * speed;
+    _presence += ((_lineWanted ? 1.0 : 0.0) - _presence) *
+        alphaForDt(_presenceAlpha60, dt);
     notifyListeners();
   }
 
