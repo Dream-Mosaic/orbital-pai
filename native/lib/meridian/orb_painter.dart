@@ -217,6 +217,11 @@ class OrbFrame extends ChangeNotifier {
   /// long since converged on, so setting only the fast one would pin the orb
   /// in a state it can never actually be in (tall but drawn at rest cycles)
   /// and quietly make the golden a picture of nothing real.
+  ///
+  /// [v] is in CURVED units, not raw RMS. Production feeds `audioTarget`
+  /// through `curvedLevel` at the poll, so `_smoother.value` never holds a raw
+  /// RMS — a test that passes one here is pinning a level the orb cannot reach
+  /// (raw 0.25 arrives as 0.54). See `kLevelCurve`.
   @visibleForTesting
   void debugSetLevel(double v) {
     _smoother.debugSet(v);

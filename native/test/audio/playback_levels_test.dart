@@ -170,4 +170,16 @@ void main() {
     // ...and the distant past has been dropped rather than retained forever.
     expect(l.debugEntryCount, lessThan(20));
   });
+
+  test('a span is finer than the poll that reads it', () {
+    // The two resolutions are chosen against each other: spans are 40ms
+    // BECAUSE the playback poll runs every 50ms (VoiceController's
+    // _levelPollPeriod). If a span ever grew past a poll period, the poll —
+    // not the index — would become what limits the line, and S1's whole point
+    // was to stop the line's resolution being decided somewhere else.
+    // Retuning either constant alone should trip this.
+    const pollPeriodFrames = 24000 * 50 ~/ 1000;
+    expect(kLevelSpanFrames, lessThanOrEqualTo(pollPeriodFrames),
+        reason: 'a span longer than one poll period makes the poll the limit');
+  });
 }
