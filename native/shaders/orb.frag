@@ -19,16 +19,23 @@ uniform vec4  uRim;          // 20..23
 uniform float uPunchSpread;  // 24    from orb_tuning.dart
 uniform float uPunchGlow;    // 25    from orb_tuning.dart
 uniform float uRingPhase;    // 26    the rings' own clock, from orb_tuning.dart
+// Each ring's centre offset, as a FRACTION of the sphere radius, evaluated
+// once per frame by ringDrift() in orb_tuning.dart. Appended after uRingPhase
+// on purpose: appending cannot renumber a slot that already exists, where
+// inserting anywhere above silently shifts every uniform after it.
+uniform vec2  uDrift0;       // 27,28
+uniform vec2  uDrift1;       // 29,30
+uniform vec2  uDrift2;       // 31,32 -- OrbU.count is 33
 
 out vec4 fragColor;
 
 // ---------------------------------------------------------------------------
 // Glass tuning. These are the GLASS-ONLY knobs. The PUNCH constants
-// (uPunchSpread, uPunchGlow) ride as uniforms above, so those two cannot
-// drift from orb_painter.dart. The GEOMETRY constants below (kBreathe,
-// kHalos, kGlowGain) are duplicated by hand from orb_painter.dart — they are
-// NOT guaranteed to stay in step, and a change to one side must be mirrored
-// on the other manually.
+// (uPunchSpread, uPunchGlow) and the ring ORBIT (uDrift0..2) ride as uniforms
+// above, so none of those can drift from orb_painter.dart. The GEOMETRY
+// constants below (kBreathe, kHalos, kGlowGain) are duplicated by hand from
+// orb_painter.dart — they are NOT guaranteed to stay in step, and a change to
+// one side must be mirrored on the other manually.
 // Edit here, rebuild, look at it.
 // ---------------------------------------------------------------------------
 const float kIor         = 1.45;  // index of refraction; higher bends more
@@ -75,25 +82,19 @@ const float kBreathe  = 1.05;
 const float kSphereR  = 0.60; // r0 = min(w,h)*0.3 over a half-extent of min/2
 const int   kHalos    = 3;
 const float kGlowGain = 1.10; // (0.5 + kGlow*0.5) with kGlow = 1.2
-// How far each ring's centre orbits off the sphere's, as a fraction of the
-// sphere radius. Hand-kept in step with kRingDrift in orb_tuning.dart, exactly
-// as kBreathe and kHalos are with orb_painter.dart: the fallback painter draws
-// the same orbit from the Dart copy, and a change to one side that is not
-// mirrored on the other makes the two renderers disagree.
-//
-// 0.12, not the 0.045 this shipped with. The rings ARE Gaussians of
-// kHaloSigma = 0.055 in these same units, and 0.045 puts the largest possible
-// displacement (kRingDriftMax, below) at 0.0636 = 1.16*kHaloSigma: an orbit
-// smaller than the blur drawing it, so the effect could not be judged on a
-// device at all. 0.12 puts it at 0.1697 = 3.09*kHaloSigma. The early-out bound
-// in main() is written in terms of kRingDriftMax so it follows this number
-// rather than having to be re-derived by hand.
-const float kRingDrift = 0.12;
-// The most a drifted centre can sit from the sphere's centre. NOT kRingDrift:
-// the drift's two components carry independent phases, so sin and cos can both
-// peak at once and |drift| reaches kRingDrift*sqrt(2). Rounded UP from
-// 1.4142136 so the bound is conservative.
-const float kRingDriftMax = kRingDrift * 1.41422;
+// How far each ring's centre orbits off the sphere's is NOT a constant here
+// any more: kRingDrift lives in orb_tuning.dart alone, and the three evaluated
+// drifts arrive as uDrift0..2 (see the uniform block). That retires the last
+// hand-kept motion value in this file — there is nothing left to mirror, and
+// the early-out bound in main() reads the uniforms rather than re-deriving a
+// copy of the knob.
+
+// Ring i's drift. SELECTED, not indexed: SkSL's runtime-effect subset does not
+// promise dynamic indexing, and with kHalos == 3 a ternary chain is exact and
+// free (the loop below has a constant trip count, so it unrolls anyway).
+vec2 ringDrift(int i) {
+  return i == 0 ? uDrift0 : (i == 1 ? uDrift1 : uDrift2);
+}
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -117,11 +118,12 @@ float haloField(vec2 p, float R) {
   float acc = 0.0;
   for (int i = 0; i < kHalos; i++) {
     float fi = float(i) / float(kHalos - 1);
-    // Two independent phases, so each ring traces a Lissajous rather than a
-    // circle and the three never lock into a formation. Mirrored exactly in
-    // orb_painter.dart's fallback halo loop.
-    vec2 drift = kRingDrift * vec2(sin(uRingPhase + float(i) * 2.1),
-                                   cos(uRingPhase * 0.83 + float(i) * 1.7));
+    // The Lissajous each ring orbits on — computed in Dart, because it is
+    // constant across the whole draw and this ran per ring per fragment, in a
+    // function the glass calls TWICE (direct and refracted): 12 sin/cos per
+    // inner fragment to arrive at three numbers. Same call the fallback
+    // painter makes, so the orbit cannot differ between the two renderers.
+    vec2 drift = ringDrift(i);
     float rn = length(p / R - drift);
     float spread = 1.06 + float(i) * 0.17 + uLevel * 0.05 + uPunch * uPunchSpread;
     float rr = spread + sin(uRingPhase * 1.3 + float(i) * 1.4) * 0.025 * kBreathe * (1.0 + uLevel);
@@ -176,18 +178,30 @@ void main() {
   // the ring's already-small peak amplitude: nothing visible is cut.
   //
   // That derivation is measured from the SPHERE's centre, and the rings no
-  // longer sit on it: each orbits by up to kRingDriftMax (= kRingDrift*sqrt(2)
-  // ~= 0.1697 at kRingDrift = 0.12). A fragment's distance from a DRIFTED
-  // centre is at least rn - kRingDriftMax, so a fragment as far out as
-  // rn ~= 1.6025 + 0.1697 ~= 1.7722 can still land on a ring's peak. Raising
-  // the cut by exactly kRingDriftMax restores the clearance the paragraph
-  // above established -- 2.0697 - 1.7722 = 0.2975 = 5.4*kHaloSigma, the same
-  // 4e-7 of peak as before -- rather than eroding it by an amount nothing
-  // would have noticed until a ring's outer edge started getting clipped
-  // square at full level. The `+ kRingDriftMax` form is what makes that true
-  // for ANY kRingDrift: the clearance is independent of it by construction, so
-  // re-tuning the orbit cannot silently start clipping the rings.
-  if (rn > 1.9 + kRingDriftMax) {
+  // longer sit on it: each orbits by its own drift. A fragment's distance from
+  // a DRIFTED centre is at least rn - |drift|, so a fragment as far out as
+  // rn ~= 1.6025 + dMax can still land on a ring's peak, where dMax is the
+  // largest of the three. Raising the cut by exactly dMax restores the
+  // clearance the paragraph above established -- (1.9 + dMax) - (1.6025 + dMax)
+  // = 0.2975 = 5.4*kHaloSigma, the same 4e-7 of peak as before -- rather than
+  // eroding it by an amount nothing would have noticed until a ring's outer
+  // edge started getting clipped square at full level. The `+ dMax` form makes
+  // that true for ANY drift: the clearance is independent of the orbit's size
+  // by construction, so re-tuning kRingDrift cannot silently start clipping.
+  //
+  // dMax comes from the uniforms themselves now, not from a GLSL copy of
+  // kRingDrift. The old bound was the constant kRingDrift*sqrt(2) ~= 0.1697 --
+  // the value dMax PEAKS at, because the drift's two components carry
+  // independent phases and sin and cos can both peak at once. So this is that
+  // same bound at the worst phase (1.9 + 0.1697 = 2.0697) and strictly tighter
+  // at every other, never looser, and never re-derived by hand again.
+  //
+  // Compared SQUARED so the max costs no sqrt: for ex > 0 and dMax >= 0,
+  // ex > dMax is exactly ex*ex > dMax*dMax. (x*x, never pow -- see below.)
+  float dMax2 = max(dot(uDrift0, uDrift0),
+                    max(dot(uDrift1, uDrift1), dot(uDrift2, uDrift2)));
+  float ex = rn - 1.9;
+  if (ex > 0.0 && ex * ex > dMax2) {
     fragColor = vec4(0.0);
     return;
   }

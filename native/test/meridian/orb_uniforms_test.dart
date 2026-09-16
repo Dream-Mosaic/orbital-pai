@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -11,7 +12,10 @@ void main() {
   test('packs exactly the slots the shader declares', () {
     // The GLSL uniform block's declaration ORDER is the contract; a mismatch
     // here does not error, it silently shades with the wrong numbers.
-    expect(OrbU.count, 27);
+    // 27 floats through uRingPhase, then three vec2 drifts at 27,28 / 29,30 /
+    // 31,32.
+    expect(OrbU.count, 33);
+    expect(OrbU.drift0, 27);
   });
 
   test('origin and size come from the rect, never assumed', () {
@@ -133,7 +137,39 @@ void main() {
     }
     final u = orbUniforms(f, const Rect.fromLTWH(0, 0, 100, 100));
     expect(u[OrbU.ringPhase], closeTo(f.ringPhase, 1e-6));
-    expect(OrbU.count, 27, reason: 'one slot added; the GLSL must match');
+    expect(OrbU.count, 33, reason: 'the GLSL must declare exactly these');
+    f.dispose();
+  });
+
+  test('the ring drifts are computed once here, not per fragment', () {
+    final f = OrbFrame()..state = OrbState.speaking;
+    for (var i = 0; i < 40; i++) {
+      f.advance(1 / 60);
+    }
+    expect(f.ringPhase, greaterThan(0.1),
+        reason: 'sanity: a phase of 0 would make sin() vanish and pass for a '
+            'packer that hardcoded zero');
+    final u = orbUniforms(f, const Rect.fromLTWH(0, 0, 100, 100));
+    for (var i = 0; i < 3; i++) {
+      // The same call `orb_painter.dart` makes for the fallback's halo
+      // centres. That shared call is the point of the uniform: `orb.frag`
+      // used to carry its own copy of kRingDrift and evaluate the Lissajous
+      // per ring per fragment, so the two renderers could be re-tuned apart.
+      final want = ringDrift(i, f.ringPhase);
+      expect(u[OrbU.drift0 + i * 2], closeTo(want.dx, 1e-6), reason: 'drift$i x');
+      expect(u[OrbU.drift0 + i * 2 + 1], closeTo(want.dy, 1e-6),
+          reason: 'drift$i y');
+      // Dimensionless — a fraction of the sphere radius, never a pixel offset.
+      // The shader scales it by the BREATHING R and the fallback by r0, which
+      // is the one difference between them and only stays a uniform scale if
+      // what rides the wire carries no radius of its own.
+      expect(want.distance, lessThanOrEqualTo(kRingDrift * math.sqrt2 + 1e-9),
+          reason: 'drift$i magnitude peaks at kRingDrift*sqrt(2) — the bound '
+              "orb.frag's early-out is derived to preserve");
+    }
+    // Not all three the same: the per-ring phase offsets are what stop the
+    // rings locking into a formation.
+    expect(u[OrbU.drift0], isNot(closeTo(u[OrbU.drift0 + 2], 1e-6)));
     f.dispose();
   });
 }

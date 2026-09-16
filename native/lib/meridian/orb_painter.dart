@@ -359,17 +359,18 @@ class OrbPainter extends CustomPainter {
                 0.025 *
                 kBreathe *
                 (1 + level);
-        // Each ring orbits its own little Lissajous — two independent phases,
-        // so the three never lock into a formation. The formula is the
-        // shader's `haloField` drift verbatim; the only difference is the base
-        // radius, r0 here against the shader's breathing R, which is the same
-        // base the halo radii above already use. Keeping the centre on that
-        // base is what keeps the whole ring assembly a uniform scale of the
-        // shader's rather than a distorted one.
-        final drift = Offset(
-          kRingDrift * r0 * math.sin(ringPhase + i * 2.1),
-          kRingDrift * r0 * math.cos(ringPhase * 0.83 + i * 1.7),
-        );
+        // Each ring orbits its own little Lissajous. NOT a copy of the
+        // shader's formula any more — literally the same call: `ringDrift` is
+        // what `orb_uniforms.dart` packs into uDrift0..2, so there is one
+        // evaluation of the orbit and the two renderers cannot disagree on it.
+        //
+        // It returns a FRACTION of the radius, and the base radius is the one
+        // difference that remains: r0 here against the shader's breathing R,
+        // which is the same base the halo radii above already use. Keeping the
+        // centre on that base is what keeps the whole ring assembly a uniform
+        // scale of the shader's rather than a distorted one.
+        final unit = ringDrift(i, ringPhase);
+        final drift = Offset(unit.dx * r0, unit.dy * r0);
         final alpha = (0.42 - f * 0.3) *
             (0.6 + level * 0.6) *
             (0.5 + kGlow * 0.5) *

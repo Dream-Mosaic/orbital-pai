@@ -14,6 +14,9 @@
 /// number in this file.
 library;
 
+import 'dart:math' as math;
+import 'dart:ui' show Offset;
+
 // ---------------------------------------------------------------------------
 // Level ballistics — how the smoothed loudness chases the raw loudness.
 // ---------------------------------------------------------------------------
@@ -229,7 +232,9 @@ const double kLineShapeSeconds = 2.0;
 // Anything SHARED with the fallback Canvas painter stays here and is passed
 // to the shader as a uniform (see orb_uniforms.dart), so the two renderers
 // cannot drift apart on a value they both use. kPunchSpread and kPunchGlow
-// above are the two that qualify today.
+// above qualify, and so does the ring orbit below — which rides as the three
+// evaluated drifts (see [ringDrift]) rather than as kRingDrift itself, because
+// what both renderers actually consume is the drift, not the knob.
 
 // ---------------------------------------------------------------------------
 // Ring cadence — the ambient loop, per state.
@@ -257,16 +262,49 @@ const double kRingSpeedLevelBoost = 0.80;
 /// How far each ring drifts off-centre, as a fraction of the sphere radius.
 /// This is what makes them ORBIT rather than only breathe in place.
 ///
-/// Hand-kept in step with `kRingDrift` in `shaders/orb.frag` — GLSL cannot
-/// read Dart constants, and this one is geometry rather than a shared motion
-/// value worth a uniform slot of its own. Change one, change the other, or the
-/// fallback painter stops looking like the shader.
+/// **Read only by [ringDrift], which both renderers go through.** There is no
+/// longer a copy of this number in `shaders/orb.frag`: the three drifts are
+/// evaluated here, once per frame, and the shader receives them as the
+/// `uDrift0..2` uniforms. Re-tune it freely — nothing else has to be mirrored
+/// by hand.
 ///
 /// 0.12, not the 0.045 this shipped with. The rings are drawn as Gaussians of
 /// `kHaloSigma` = 0.055 (in the same units), and 0.045 puts the largest
 /// possible displacement, `kRingDrift * sqrt(2)` = 0.064, at 1.16 sigma — an
 /// orbit smaller than the blur that draws it, which is to say not an orbit you
 /// can see. 0.12 puts it at 0.170, or 3.09 sigma. The shader's early-out bound
-/// is written as `1.9 + kRingDriftMax` precisely so it tracks this number;
-/// see the derivation in `shaders/orb.frag`.
+/// is derived from the drift uniforms themselves rather than from this number,
+/// so it follows any re-tune exactly; see the derivation in
+/// `shaders/orb.frag`.
 const double kRingDrift = 0.12;
+
+/// Where ring [i]'s centre sits at [ringPhase], as a fraction of the sphere
+/// radius — the displacement itself, with no base radius folded in.
+///
+/// **The orbit has exactly one definition, and this is it.** The shader takes
+/// the three results as uniforms (`orb_uniforms.dart` packs them) and the
+/// fallback painter calls this directly, so the two renderers cannot disagree
+/// on the orbit the way they could while `shaders/orb.frag` carried a
+/// hand-kept copy of [kRingDrift] — the same policy [kPunchSpread] and
+/// [kPunchGlow] already ride on.
+///
+/// It is also the cheap place to compute it. The drift is constant across a
+/// draw, but `haloField` ran this per RING per FRAGMENT, and it runs twice per
+/// fragment inside the sphere (direct and refracted) — 12 sin/cos per inner
+/// fragment, ~90k times a frame, on a device that is on 24/7, to arrive at
+/// three numbers.
+///
+/// Two independent phases, so each ring traces a Lissajous rather than a
+/// circle and the three never lock into a formation.
+///
+/// Dimensionless ON PURPOSE. The shader measures the rings in units of the
+/// BREATHING radius R (`length(p / R - drift)`); the fallback multiplies this
+/// by the un-breathing r0, which is the same base its halo radii use. Carrying
+/// the fraction rather than a pixel offset is what keeps the shader's whole
+/// halo assembly a uniform (1 + breathe) scale of the fallback's about the
+/// centre, rather than a distorted one — a deliberate difference, and the only
+/// one left between them here.
+Offset ringDrift(int i, double ringPhase) => Offset(
+      kRingDrift * math.sin(ringPhase + i * 2.1),
+      kRingDrift * math.cos(ringPhase * 0.83 + i * 1.7),
+    );

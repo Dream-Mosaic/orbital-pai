@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui';
 
-import 'orb_painter.dart' show OrbFrame;
+import 'orb_painter.dart' show OrbFrame, kHalos;
 import 'orb_state.dart';
 import 'orb_tuning.dart';
 import 'palette.dart';
@@ -30,7 +30,18 @@ abstract final class OrbU {
   static const int punchSpread = 24;
   static const int punchGlow = 25;
   static const int ringPhase = 26;
-  static const int count = 27;
+
+  /// The three ring drifts, each a vec2 and so two slots: 27,28 / 29,30 /
+  /// 31,32. Declared LAST in the GLSL for the reason above — appending cannot
+  /// move a slot that already exists, where inserting silently renumbers every
+  /// uniform after it.
+  ///
+  /// Ring `i` lives at `drift0 + i * 2`; [kHalos] is the same constant the
+  /// fallback painter and `orb.frag` loop over, so the pack below and the
+  /// consumers agree by construction.
+  static const int drift0 = 27;
+
+  static const int count = drift0 + 2 * kHalos;
 }
 
 /// Pack one frame's shader uniforms.
@@ -64,6 +75,17 @@ Float32List orbUniforms(OrbFrame frame, Rect rect) {
   out[OrbU.punchSpread] = kPunchSpread;
   out[OrbU.punchGlow] = kPunchGlow;
   out[OrbU.ringPhase] = frame.ringPhase;
+
+  // The rings' orbit, evaluated ONCE per frame here rather than per ring per
+  // fragment in `haloField` (which the glass calls twice, direct and
+  // refracted). `ringDrift` is the same function the fallback painter calls,
+  // which is what retires the hand-kept kRingDrift copy the shader used to
+  // carry. Dimensionless — a fraction of the sphere radius; see [ringDrift].
+  for (var i = 0; i < kHalos; i++) {
+    final drift = ringDrift(i, frame.ringPhase);
+    out[OrbU.drift0 + i * 2] = drift.dx;
+    out[OrbU.drift0 + i * 2 + 1] = drift.dy;
+  }
   return out;
 }
 
