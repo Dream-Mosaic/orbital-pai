@@ -46,21 +46,98 @@ class MeridianVoiceScreen extends StatefulWidget {
 
 class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
   final ScrollController _scroll = ScrollController();
-  int _lastLength = 0;
+
+  /// How close to the bottom still counts as "at the bottom". One thread body
+  /// line is ~22px (14.88px at line-height 1.5), so this is a little over a
+  /// line: enough that a rounding error, a half-scrolled line or a stray pixel
+  /// of overscroll still reads as pinned, not enough to swallow a deliberate
+  /// scroll away.
+  static const double _anchorSlack = 32.0;
+
+  /// Whether growing content should drag the viewport with it.
+  ///
+  /// Starts true — an empty thread IS at its bottom — and thereafter tracks
+  /// exactly one thing: where the viewport came to rest. Scroll up and it
+  /// disarms; come back to the bottom and it re-arms.
+  bool _anchored = true;
+
+  /// The extent we last anchored to. The SIGNAL this reacts to.
+  ///
+  /// Thread *length* is the wrong signal: `brain_delta` rewrites one existing
+  /// `ThreadLine` in place, so a streaming answer grows the list's height
+  /// without ever changing its length — which is precisely how the view came
+  /// to sit still while the answer ran off the bottom of the screen. The
+  /// height is what moved, so the height (`maxScrollExtent`) is what we watch.
+  double _lastExtent = -1;
+
+  /// True from the moment a finger takes hold of the list until the scroll it
+  /// started (drag *and* the fling after it) comes to rest. We never jump
+  /// during that window — the one thing worse than a list that won't follow is
+  /// a list that snatches itself out from under you mid-gesture.
+  bool _dragging = false;
+
+  bool _anchorScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+  }
 
   @override
   void dispose() {
+    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
   }
 
-  /// index.js scrolls the log to the bottom on every append.
-  void _autoScroll(int length) {
-    if (length == _lastLength) return;
-    _lastLength = length;
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final p = _scroll.position;
+    // Read the intent off the RESULT — where the viewport ended up — rather
+    // than off the gesture, so a drag, a fling and our own jump all obey one
+    // rule and none of them can leave the flag disagreeing with the view.
+    _anchored = p.maxScrollExtent - p.pixels <= _anchorSlack;
+  }
+
+  bool _onScrollNotification(ScrollNotification n) {
+    // A fling emits no ScrollEndNotification until the ballistic simulation
+    // settles, so this stays true for the whole user-owned window, not just
+    // while the finger is down.
+    if (n is ScrollStartNotification) {
+      _dragging = n.dragDetails != null;
+    } else if (n is ScrollEndNotification) {
+      _dragging = false;
+    }
+    return false;
+  }
+
+  /// Keep the reader pinned to the bottom as the transcript grows — including
+  /// while a single streaming line grows taller, which is the case the old
+  /// length check missed entirely.
+  ///
+  /// Post-frame, because the extent we want is the one the frame we just asked
+  /// for produces. `jumpTo`, not `animateTo`: the extent changes once per
+  /// delta at 20–60Hz, and each new `animateTo` cancels the last, so an
+  /// animated follow never actually reaches the bottom while an answer is
+  /// streaming — it just lags behind it. A jump applied in the same frame as
+  /// the growth that caused it is invisible; the text simply stays put and the
+  /// history slides up.
+  void _scheduleAnchor() {
+    if (_anchorScheduled) return;
+    _anchorScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      _anchorScheduled = false;
+      if (!mounted || !_scroll.hasClients) return;
+      final p = _scroll.position;
+      final extent = p.maxScrollExtent;
+      // Nothing grew (or shrank) — leave the viewport exactly where it is.
+      // Without this, every unrelated rebuild would re-assert the bottom.
+      if (extent == _lastExtent) return;
+      _lastExtent = extent;
+      if (!_anchored || _dragging) return;
+      if (p.pixels == extent) return;
+      p.jumpTo(extent);
     });
   }
 
@@ -93,7 +170,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
       builder: (context, _) {
         final orb = vc.orbState;
         final glow = paletteFor(orb).glow;
-        _autoScroll(vc.thread.length);
+        _scheduleAnchor();
 
         return MeridianSurface(
           state: orb,
@@ -122,11 +199,14 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                         _orbPane(vc, glow),
                         const SizedBox(height: M.columnGap),
                         Expanded(
-                          child: Thread(
-                            items: vc.thread,
-                            glow: glow,
-                            scrollController: _scroll,
-                            onAck: vc.ackReminder,
+                          child: NotificationListener<ScrollNotification>(
+                            onNotification: _onScrollNotification,
+                            child: Thread(
+                              items: vc.thread,
+                              glow: glow,
+                              scrollController: _scroll,
+                              onAck: vc.ackReminder,
+                            ),
                           ),
                         ),
                         const SizedBox(height: M.columnGap),

@@ -276,4 +276,161 @@ void main() {
     expect(find.byKey(const ValueKey('due-dot')), findsOneWidget,
         reason: 'the screen must be listening to the badges client, not snapshotting it');
   });
+
+  // ---- the scroll anchor ----
+  //
+  // The bug: `_autoScroll` keyed off the thread's LENGTH, and a streaming
+  // answer rewrites ONE existing ThreadLine in place (`brain_delta`), so the
+  // length never moved while the line grew taller and ran off the bottom.
+
+  /// The Thread's own scroll position, for reading pixels/extent directly.
+  ScrollPosition threadPosition(WidgetTester tester) => tester
+      .state<ScrollableState>(find
+          .descendant(of: find.byType(Thread), matching: find.byType(Scrollable))
+          .first)
+      .position;
+
+  /// `pumpAndSettle` is unusable on this screen — the orb animates forever —
+  /// so pump a fixed stretch instead, long enough for a drag's ballistic tail
+  /// to come to rest.
+  Future<void> settleScroll(WidgetTester tester) async {
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// Enough turns to overflow the viewport, so there is somewhere to scroll.
+  Future<void> fillThread(WidgetTester tester, VoiceController vc) async {
+    for (var i = 0; i < 40; i++) {
+      vc.debugHandleMessage(DecodedMessage(
+        topic: 'voice:henry',
+        event: 'transcript',
+        json: {'text': 'turn number $i with a reasonably long body to wrap'},
+      ));
+    }
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  /// Grow ONE brain line, without ever changing the thread's length.
+  Future<void> streamAnswer(WidgetTester tester, VoiceController vc,
+      {int chunks = 8}) async {
+    for (var i = 0; i < chunks; i++) {
+      vc.debugHandleMessage(const DecodedMessage(
+        topic: 'voice:henry',
+        event: 'brain_delta',
+        json: {
+          'delta': 'and then it kept on talking for quite a while longer still '
+        },
+      ));
+      await tester.pump();
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  testWidgets('a streaming answer keeps a bottom-anchored view at the bottom',
+      (tester) async {
+    // Would have caught the report verbatim: with the length check, every
+    // delta after the first returned early and the offset froze.
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await fillThread(tester, vc);
+
+    // Open the brain line (this one DOES change the length) and settle there.
+    vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'brain_delta',
+      json: {'delta': 'well '},
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final lengthBefore = vc.thread.length;
+    final extentBefore = threadPosition(tester).maxScrollExtent;
+
+    await streamAnswer(tester, vc);
+
+    final pos = threadPosition(tester);
+    expect(vc.thread.length, lengthBefore,
+        reason: 'the deltas must grow ONE line, not append — else the old '
+            'length check would have passed this by accident');
+    expect(pos.maxScrollExtent, greaterThan(extentBefore),
+        reason: 'the line has to actually get taller for this to test anything');
+    expect(pos.pixels, moreOrLessEquals(pos.maxScrollExtent, epsilon: 0.5),
+        reason: 'a reader at the bottom stays at the bottom as the answer grows');
+  });
+
+  testWidgets('growing content does not yank a reader who scrolled up',
+      (tester) async {
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await fillThread(tester, vc);
+
+    // Drag the content DOWN, i.e. scroll back up through the history.
+    await tester.drag(
+        find.descendant(of: find.byType(Thread), matching: find.byType(Scrollable)).first,
+        const Offset(0, 400));
+    await settleScroll(tester);
+
+    final parked = threadPosition(tester).pixels;
+    expect(parked, lessThan(threadPosition(tester).maxScrollExtent - 32),
+        reason: 'the drag has to leave us clear of the anchor slack');
+
+    vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'brain_delta',
+      json: {'delta': 'well '},
+    ));
+    await tester.pump();
+    await streamAnswer(tester, vc);
+
+    expect(threadPosition(tester).pixels, moreOrLessEquals(parked, epsilon: 0.5),
+        reason: 'reading back is a deliberate act; new content must not undo it');
+  });
+
+  testWidgets('scrolling back to the bottom re-arms the anchor', (tester) async {
+    phone(tester);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await fillThread(tester, vc);
+
+    final scroller = find
+        .descendant(of: find.byType(Thread), matching: find.byType(Scrollable))
+        .first;
+    await tester.drag(scroller, const Offset(0, 400));
+    await settleScroll(tester);
+    // Big enough to bottom out whatever momentum the first drag left behind —
+    // `tester.drag` moves in one step, so it can register as a fling.
+    await tester.drag(scroller, const Offset(0, -4000));
+    await settleScroll(tester);
+    final pos0 = threadPosition(tester);
+    expect(pos0.pixels, moreOrLessEquals(pos0.maxScrollExtent, epsilon: 0.5),
+        reason: 'the second drag has to actually land us back at the bottom');
+
+    vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'brain_delta',
+      json: {'delta': 'well '},
+    ));
+    await tester.pump();
+    await streamAnswer(tester, vc);
+
+    final pos = threadPosition(tester);
+    expect(pos.pixels, moreOrLessEquals(pos.maxScrollExtent, epsilon: 0.5),
+        reason: 'coming back to the bottom opts back in to following along');
+  });
 }
