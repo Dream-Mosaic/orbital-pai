@@ -251,6 +251,26 @@ void main() {
     expect(vc.caption, '');
   });
 
+  test('a partial that never finalises is cleared at end of turn', () {
+    // `transcript` clears the caption, but not every partial reaches one — a
+    // barge-in, or an endpoint the server resolves another way, strands it.
+    // It used to be invisible; the orb's line is taller now and the caption box
+    // overlaps it during `thinking`, so stale words sit under the wave.
+    vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
+    expect(vc.caption, 'what is th');
+    vc.debugHandleMessage(msg('listening', const {}));
+    expect(vc.caption, '');
+  });
+
+  test('ending a turn while wake-locked leaves the prompt, not a blank', () {
+    // Locked is not a turn state. Blanking here would strand a locked device
+    // with no on-screen clue about the words that unlock it.
+    vc.debugHandleMessage(msg('locked', const {'locked': true}));
+    vc.debugHandleMessage(msg('partial', const {'text': 'stray words'}));
+    vc.debugHandleMessage(msg('listening', const {}));
+    expect(vc.caption, 'Say “Wake up ${VoiceController.assistantName}”');
+  });
+
   test('clearThread() empties the log and its turn handles', () {
     vc.debugHandleMessage(msg('transcript', const {'text': 'hi'}));
     vc.debugHandleMessage(msg('brain_delta', const {'delta': 'hello'}));

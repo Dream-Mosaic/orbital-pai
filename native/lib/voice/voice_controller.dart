@@ -482,7 +482,20 @@ class VoiceController extends ChangeNotifier {
     _dropUnresolvedToolChips();
     _brainIndex = null;
     _metricsIndex = null;
+    // A `partial` that never reached `transcript` — a barge-in, an endpoint the
+    // server resolved another way — would otherwise leave your half-finished
+    // words on screen for the whole of the next turn. Harmless until the orb's
+    // line got taller: the caption box and the line now overlap geometrically
+    // during `thinking`, so stale text sits UNDER the wave.
+    _caption = _restingCaption;
   }
+
+  /// What the caption reads when nobody is mid-utterance: the wake prompt on a
+  /// locked device, nothing otherwise. Locked is not a turn state — clearing it
+  /// at end of turn would strand a locked device with no way to know the words
+  /// that unlock it.
+  String get _restingCaption =>
+      _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
 
   /// Drop the local transcript. NOTE: the web's trash button fires the LiveView's
   /// `clear_conversation` handler, which also clears server-side memory — the
@@ -890,7 +903,7 @@ class VoiceController extends ChangeNotifier {
         _applyTurnEvent(m.event);
       case 'locked':
         _applyWakeLocked((p['locked'] as bool?) ?? false);
-        _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
+        _caption = _restingCaption;
         _log('locked: $_wakeLocked');
         _syncOrb();
       case 'bound':
@@ -916,7 +929,7 @@ class VoiceController extends ChangeNotifier {
         // this client already knows, exactly like `phase` below \u2014 so this
         // reads from the gate's current state, not a hardcoded default.
         _applyBound((p['bound'] as bool?) ?? _bound);
-        _caption = _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
+        _caption = _restingCaption;
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
         // An ABSENT phase must not clobber what we already know.
