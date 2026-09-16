@@ -136,6 +136,27 @@ const double kPunchGlow = 0.9;
 const double kLinePresenceSeconds = 0.22;
 
 // ---------------------------------------------------------------------------
+// The line's shape.
+// ---------------------------------------------------------------------------
+
+/// Amplitude with no audio at all, as a fraction of full scale.
+///
+/// `thinking` has no audio — a purely level-driven line would be flat and dead
+/// exactly when the line is meant to be present. This is the line breathing on
+/// its own.
+const double kLineRestAmp = 0.16;
+
+/// How many visible cycles the line carries at rest and at full level.
+/// Growing the COUNT as well as the amplitude is what turns the calm line into
+/// the busy one rather than merely a taller version of the same shape.
+const double kLineCyclesRest = 1.2;
+const double kLineCyclesLoud = 5.5;
+
+/// Phase speed at rest and at full level, in radians per second.
+const double kLineSpeedRest = 0.9;
+const double kLineSpeedLoud = 2.6;
+
+// ---------------------------------------------------------------------------
 // Glass (shader only).
 // ---------------------------------------------------------------------------
 //
