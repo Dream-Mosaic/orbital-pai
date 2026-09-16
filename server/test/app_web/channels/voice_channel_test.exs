@@ -66,6 +66,26 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "state", %{phase: "listening", locked: false}
   end
 
+  test "the state snapshot carries the user's stored voice defaults", %{bob: bob} do
+    # The web reads these at mount and stamps them into the page; the native client has no
+    # such channel and only ever saw them on the Settings topic, which is joined ONLY while
+    # that drawer is open — so at launch it could not know them and the prefs looked like
+    # they never persisted. This snapshot is the one push every client gets on join.
+    {:ok, _bob} = Users.update_prefs(bob, %{default_abi: true, default_ptt: true})
+
+    {:ok, _reply, _socket} = join_voice(bob)
+    assert_push "state", %{default_abi: true, default_ptt: true}
+  end
+
+  test "the state snapshot carries defaults that are OFF as false, not as absence", %{
+    alice: _alice
+  } do
+    # Absence means "don't touch what you already know" on every client, so a stored `false`
+    # has to arrive as an explicit false or a client that has PTT on can never be told to
+    # turn it off at launch. Alice's setup leaves both at their schema default.
+    assert_push "state", %{default_abi: false, default_ptt: false}
+  end
+
   test "join backfills recent turns oldest-first, capped 12, iso8601 at", %{bob: bob} do
     # The setup block's own join (alice, who has no turns) already queued an empty history
     # push into this test process's mailbox — drain it first so it can't shadow bob's below.

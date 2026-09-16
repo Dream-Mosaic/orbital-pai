@@ -1060,6 +1060,152 @@ void main() {
         reason: 'a controller that reports a live mic with no subscription is '
             'the "silently deaf" failure this whole phase is about');
   });
+
+  // ---- the stored voice defaults (default_ptt / default_abi) ----
+  //
+  // They live on the user row and the web stamps them into the page at mount;
+  // the native client only ever saw them through the Settings channel, which is
+  // joined ONLY while that drawer is on screen — so at launch it had no idea
+  // what they were and they looked like they never persisted. VoiceChannel now
+  // merges them into the `state` snapshot, the one push every client already
+  // gets behind its join reply.
+
+  /// The event-named JSON pushes this client sent, decoded, in order. Unlike
+  /// [FakeSocket.sentEvents] this keeps the payload, which is what tells a
+  /// `ptt: true` push apart from a `ptt: false` one.
+  List<Map<String, dynamic>> pushesOf(FakeSocket fake, String event) => fake.sent
+      .whereType<String>()
+      .map((f) => jsonDecode(f) as List<dynamic>)
+      .where((p) => p[3] == event)
+      .map((p) => (p[4] as Map).cast<String, dynamic>())
+      .toList();
+
+  const defaultsOn = '[null,null,"voice:henry","state",'
+      '{"phase":"listening","locked":false,"bound":true,'
+      '"default_ptt":true,"default_abi":true}]';
+  const defaultsOff = '[null,null,"voice:henry","state",'
+      '{"phase":"listening","locked":false,"bound":true,'
+      '"default_ptt":false,"default_abi":false}]';
+
+  test('the stored defaults in the join snapshot go through the real mode switch',
+      () async {
+    // The `ptt` PUSH is the load-bearing part, not the bool: Ink-2 uses two
+    // different endpoints, and only `set_ptt` -> `restart_stt` on the server
+    // moves the socket onto the manual-finalize one. (voice_channel_test's
+    // "PTT events flow through the channel" is the other half of this seam —
+    // it asserts that this exact push produces {:fake_stt_started, :manual}.)
+    final fake = FakeSocket(joinPushes: const [defaultsOn]);
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.pttEnabled, isTrue);
+    expect(b.vc.abiEnabled, isTrue);
+    expect(pushesOf(fake, 'ptt').last['enabled'], isTrue,
+        reason: 'a bool set without this push leaves the STT socket in auto '
+            'mode, and nothing says so until someone tries to talk');
+    expect(pushesOf(fake, 'allow_interruptions').last['enabled'], isTrue);
+  });
+
+  test('applying a stored PTT default does not start the microphone', () async {
+    // index.js:179 makes the same call, for the same reason: the default is
+    // applied at load, and a permission prompt at launch is not what "remember
+    // my PTT setting" asked for. The power button still respects PTT mode.
+    final mic = FakeMic();
+    final fake = FakeSocket(joinPushes: const [defaultsOn]);
+    final b = build(connector: () async => fake.socket, mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.pttEnabled, isTrue);
+    expect(mic.startCalls, 0, reason: 'no unprompted permission dialog at launch');
+    expect(b.vc.micOn, isFalse);
+  });
+
+  test('a reconnect\'s snapshot does not stomp an in-session toggle', () async {
+    // The snapshot is re-sent on EVERY (re)bind — a wifi blip, a redeploy,
+    // another device claiming and handing back. Re-applying the stored default
+    // there would silently undo whatever the user had switched to, every time
+    // the socket came back.
+    final sockets = <FakeSocket>[];
+    final b = build(
+      connector: () async {
+        final s = FakeSocket(joinPushes: const [defaultsOff]);
+        sockets.add(s);
+        return s.socket;
+      },
+      backoff: const [Duration(milliseconds: 10)],
+    );
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(b.vc.pttEnabled, isFalse, reason: 'the stored default is off');
+
+    b.vc.setPtt(true);
+    b.vc.setAllowInterruptions(true);
+    await settle();
+
+    await sockets.first.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(sockets, hasLength(2), reason: 'the reconnect has to have happened');
+    expect(b.vc.pttEnabled, isTrue,
+        reason: 'the user chose PTT this session; the snapshot may not undo it');
+    expect(b.vc.abiEnabled, isTrue);
+    expect(pushesOf(sockets.last, 'ptt').last['enabled'], isTrue,
+        reason: 'and the rejoin must re-announce the CHOSEN mode to the server');
+  });
+
+  test('a user toggle made before the first snapshot outranks the default',
+      () async {
+    // The defaults land behind the join reply, so a fast finger can beat them.
+    // A choice already made closes the question.
+    final fake = FakeSocket(joinPushes: const [defaultsOn]);
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    b.vc.setPtt(false);
+    b.vc.setAllowInterruptions(false);
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.pttEnabled, isFalse);
+    expect(b.vc.abiEnabled, isFalse);
+  });
+
+  test('a snapshot carrying neither default leaves the question open', () async {
+    // An older server sends no defaults. Treating that as "settled" would mean
+    // a client that reconnects to an upgraded server never applies them.
+    final b = build(connector: noSocket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'state',
+      json: {'phase': 'listening', 'locked': false},
+    ));
+    expect(b.vc.pttEnabled, isFalse);
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'state',
+      json: {'phase': 'listening', 'locked': false, 'default_ptt': true},
+    ));
+    expect(b.vc.pttEnabled, isTrue,
+        reason: 'the first snapshot said nothing, so it settled nothing');
+  });
 }
 
 /// A recorder whose stream has already been listened to — the exact shape of

@@ -254,6 +254,12 @@ class VoiceController extends ChangeNotifier {
   bool _pttEnabled = false;
   bool _abiEnabled = false;
 
+  /// Whether the PTT/ABI question is closed for this session — either the
+  /// stored defaults have been applied, or the user has made their own choice,
+  /// whichever came first. Once true, no `state` snapshot may re-apply a
+  /// default over it. See [_applyStoredDefaults].
+  bool _prefsSettled = false;
+
   // ---- Meridian orb state ----
   bool _talking = false;
   bool _wakeLocked = false;
@@ -550,7 +556,27 @@ class VoiceController extends ChangeNotifier {
     }
   }
 
+  /// The user flipped the PTT switch. Their choice settles the question for
+  /// this session — a later `state` snapshot must not undo it.
   void setPtt(bool enabled) {
+    _prefsSettled = true;
+    _applyPtt(enabled, startMicIfOff: true);
+  }
+
+  /// The one path into PTT mode, user-driven or default-driven.
+  ///
+  /// PTT is NOT a flag: the `ptt` push is what makes the server tear the
+  /// Cartesia Ink-2 socket down and bring it back up on the manual-finalize
+  /// endpoint (`set_ptt` -> `restart_stt`). Setting `_pttEnabled` without it
+  /// leaves the socket auto-endpointing and nothing says so until someone
+  /// tries to talk.
+  ///
+  /// [startMicIfOff] is the ONE thing a stored default does differently, and
+  /// index.js:179 made the same call for the same reason: applying a default
+  /// at launch must not throw a microphone-permission prompt at someone who
+  /// has not touched anything yet. The user powers on with the power button,
+  /// which already respects PTT mode.
+  void _applyPtt(bool enabled, {required bool startMicIfOff}) {
     _pttEnabled = enabled;
     // The gate has to know about the MODE, not only about the button: in PTT
     // mode an unlocked conversation must not hold it open on its own.
@@ -562,7 +588,9 @@ class VoiceController extends ChangeNotifier {
     _live?.push('ptt', {'enabled': enabled});
     _safeNotify();
     // index.js:396 — enabling PTT mode while powered off starts the mic.
-    if (enabled && !_micState.on && !_micState.wanted) unawaited(startMic());
+    if (startMicIfOff && enabled && !_micState.on && !_micState.wanted) {
+      unawaited(startMic());
+    }
   }
 
   void pttPress() {
@@ -583,10 +611,38 @@ class VoiceController extends ChangeNotifier {
     _syncOrb();
   }
 
+  /// The user flipped the allow-barge-in switch; same settling rule as [setPtt].
   void setAllowInterruptions(bool enabled) {
+    _prefsSettled = true;
+    _applyAllowInterruptions(enabled);
+  }
+
+  void _applyAllowInterruptions(bool enabled) {
     _abiEnabled = enabled;
     _live?.push('allow_interruptions', {'enabled': enabled});
     _safeNotify();
+  }
+
+  /// Apply the user's STORED voice defaults, which ride the `state` snapshot.
+  ///
+  /// Once, and never over a choice the user has already made. The snapshot is
+  /// re-sent on every (re)bind — a wifi blip, a redeploy, another device
+  /// claiming and handing back — so an unguarded apply would silently undo a
+  /// mid-session PTT toggle every time the socket came back. This is the same
+  /// hazard the snapshot's absent-key rule guards against, one level up: there
+  /// the server's silence must not clobber the client, here the server's
+  /// *defaults* must not clobber the user.
+  void _applyStoredDefaults(Map<String, dynamic> p) {
+    if (_prefsSettled) return;
+    final abi = p['default_abi'] as bool?;
+    final ptt = p['default_ptt'] as bool?;
+    // An old server sends neither. Stay unsettled so the first snapshot from a
+    // server that DOES carry them still lands.
+    if (abi == null && ptt == null) return;
+    _prefsSettled = true;
+    if (abi != null && abi != _abiEnabled) _applyAllowInterruptions(abi);
+    // Through the real mode switch — see [_applyPtt] — minus the mic auto-start.
+    if (ptt != null && ptt != _pttEnabled) _applyPtt(ptt, startMicIfOff: false);
   }
 
   // ---- transport seam (the connection owns the socket; we own one topic) ----
@@ -952,6 +1008,11 @@ class VoiceController extends ChangeNotifier {
         // this client already knows, exactly like `phase` below \u2014 so this
         // reads from the gate's current state, not a hardcoded default.
         _applyBound((p['bound'] as bool?) ?? _bound);
+        // The stored per-user voice defaults ride this snapshot (VoiceChannel
+        // merges them in) — it is the one push every client gets on join, and
+        // the Settings channel the app used to learn them from is joined only
+        // while that drawer is open, so at launch nothing knew them.
+        _applyStoredDefaults(p);
         _caption = _restingCaption;
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.

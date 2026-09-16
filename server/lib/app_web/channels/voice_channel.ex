@@ -36,7 +36,13 @@ defmodule AppWeb.VoiceChannel do
         Process.monitor(pid)
         send(self(), :after_join)
         send(self(), {:track_presence, payload["kiosk"] == true})
-        {:ok, assign(socket, session_id: session_id, conversation: pid)}
+
+        {:ok,
+         assign(socket,
+           session_id: session_id,
+           conversation: pid,
+           voice_defaults: voice_defaults(socket.assigns.user_id)
+         )}
 
       {:error, reason} ->
         {:error, %{reason: inspect(reason)}}
@@ -255,8 +261,15 @@ defmodule AppWeb.VoiceChannel do
 
   # W3: server state snapshot on every (re)bind (and initial start) — the hook resets
   # thinking/caption/orb from it so a reconnect can't leave a stale UI.
+  #
+  # The snapshot also carries the user's stored voice defaults. The web stamps these into the
+  # page (`data-default-ptt`/`data-default-abi`) and applies them at load; the native client has
+  # no such channel and only ever learned them from the Settings drawer, which is joined ONLY
+  # while that drawer is on screen — so at launch it had no idea what the defaults were and the
+  # prefs looked like they never persisted. This is the one push every client already receives
+  # on join, so it costs no extra round trip.
   def handle_info({:to_client, {:state, snapshot}}, socket) do
-    push(socket, "state", snapshot)
+    push(socket, "state", Map.merge(snapshot, socket.assigns.voice_defaults))
     {:noreply, socket}
   end
 
@@ -316,6 +329,26 @@ defmodule AppWeb.VoiceChannel do
     end
 
     :ok
+  end
+
+  # Read ONCE, in join/3, and carried in assigns — never per push. The `state` snapshot goes
+  # out on every (re)bind, so resolving it in the push path put a DB round trip on a hot path
+  # that had none, on a device that rejoins after every wifi blip.
+  #
+  # join/3 rather than the :after_join path, even though that path already loads this user:
+  # the snapshot can be AHEAD of it in the mailbox, and on a cold start always is. The FSM
+  # sends it from `Sessions.start`'s `init/1` (conversation.ex:257) — which runs inside
+  # `resolve_session`, before join/3 gets as far as `send(self(), :after_join)` — and on the
+  # warm path from the `{:join, …}` cast, which is issued two lines earlier still.
+  #
+  # Absent keys rather than false ones when the row is gone: every client treats a MISSING
+  # snapshot key as "don't touch what I already know" (see `bound`/`phase`), and a vanished
+  # user must not read as "both defaults off".
+  defp voice_defaults(user_id) do
+    case App.Users.get(user_id) do
+      nil -> %{}
+      user -> %{default_abi: user.default_abi, default_ptt: user.default_ptt}
+    end
   end
 
   defp to_int(n) when is_integer(n), do: n
