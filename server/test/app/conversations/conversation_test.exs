@@ -723,7 +723,17 @@ defmodule App.Conversations.ConversationTest do
     # released by :flush_brain, joined — the client appends, so one send of the
     # concatenation renders identically to N sends.
     Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer."])
-    on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
+    # Hold the `done` back so the brain is unambiguously STILL STREAMING when the reflex opens
+    # the gate — that is the case this test is about. A brain that has already finished takes
+    # the held-answer path instead (its own test, below), and without this the fake's 0ms done
+    # raced the reflex and decided which path ran.
+    Application.put_env(:app, :fake_brain_done_ms, 300)
+
+    on_exit(fn ->
+      Application.delete_env(:app, :fake_brain_text_deltas)
+      Application.put_env(:app, :fake_brain_done_ms, 0)
+    end)
+
     stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
 
     pid = start_conv()
@@ -736,18 +746,79 @@ defmodule App.Conversations.ConversationTest do
     assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
   end
 
+  test "a brain that finishes before the reflex is spoken sends its answer ONCE, after the reflex" do
+    # The prod bug (2026-09-16): when the reflex is slower than the whole brain round,
+    # {:brain_done, _} pushed {:speak_start, :brain, text} immediately — ahead of the filler —
+    # and :flush_brain then re-sent the SAME text as the joined caption delta. Two messages, one
+    # answer: the client rendered the answer, then the reflex, then the answer AGAIN. Both halves
+    # are asserted here: the ordering and the single copy.
+    Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer."])
+    on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
+
+    # a reflex slower than the (instant) fake brain — the prod shape, deterministically
+    stub(App.TextModelMock, :generate, fn _t, _c, _o ->
+      Process.sleep(300)
+      {:ok, "huh"}
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+
+    msgs = drain_to_client(600)
+    reflex_at = Enum.find_index(msgs, &match?({:speak_start, :reflex, "huh"}, &1))
+    answer_at = Enum.find_index(msgs, &match?({:speak_start, :brain, "the answer"}, &1))
+
+    assert reflex_at, "the reflex was never spoken: #{inspect(msgs)}"
+    assert answer_at, "the answer never reached the client: #{inspect(msgs)}"
+
+    assert reflex_at < answer_at,
+           "the answer jumped ahead of the reflex: #{inspect(msgs)}"
+
+    answer_bearing =
+      Enum.filter(msgs, &(match?({:speak_start, :brain, _}, &1) or match?({:brain_delta, _}, &1)))
+
+    assert length(answer_bearing) == 1,
+           "the answer was sent #{length(answer_bearing)} times: #{inspect(answer_bearing)}"
+  end
+
+  # Collect the outbound client messages IN ORDER. assert_receive matches by pattern rather than
+  # by position, so it cannot see that one message preceded another of a different shape — and
+  # the ordering is half of what the test above is proving. Returns once the client has been
+  # quiet for `quiet_ms`.
+  defp drain_to_client(quiet_ms) do
+    receive do
+      {:to_client, msg} -> [msg | drain_to_client(quiet_ms)]
+    after
+      quiet_ms -> []
+    end
+  end
+
   test "a brain delta that lands AFTER the reflex is passed straight through" do
     # The gate must not become a permanent buffer: once the reflex has been
     # spoken the caption is live again, one delta at a time. Without this the
     # fix for the ordering bug would silently cost the live caption its whole
     # reason for existing.
     Application.put_env(:app, :fake_brain_text_deltas, [])
-    on_exit(fn -> Application.delete_env(:app, :fake_brain_text_deltas) end)
+    # Keep the brain GENERATING: a delta "after the reflex" only means anything while the answer
+    # is still being produced, and a brain that has already finished holds its final text instead
+    # (see the held-answer test above). With the fake's 0ms done this test was passing on the
+    # buffer-then-flush path, not the passthrough one it names.
+    Application.put_env(:app, :fake_brain_done_ms, 5_000)
+
+    on_exit(fn ->
+      Application.delete_env(:app, :fake_brain_text_deltas)
+      Application.put_env(:app, :fake_brain_done_ms, 0)
+    end)
+
     stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
 
     pid = start_conv()
     Conversation.endpoint(pid, "q")
     assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+    # The reflex speak_start is NOT the gate — its AUDIO is: push_audio_chunk runs immediately
+    # before feed(:reflex_sent, …) in the same handler, so a message sent after we see the audio
+    # is guaranteed to be processed with reflex_sent already true.
+    assert_receive {:to_client, {:audio, :reflex, _}}, 1000
 
     send(pid, {:brain_text, "late "})
     assert_receive {:to_client, {:brain_delta, "late "}}, 1000

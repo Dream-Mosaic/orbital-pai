@@ -172,6 +172,13 @@ defmodule App.Conversations.Conversation do
       # filler — you would read the answer, then see the filler, then hear the
       # filler, then hear the answer. Same rule for both streams now.
       caption_buffer: [],
+      # The FINAL answer, held for the same reason and released by the same :flush_brain,
+      # when the brain finishes generating before the reflex has been spoken. Pushing it
+      # at {:brain_done, _} time (as we used to) put the answer on screen ahead of the
+      # filler AND duplicated it: the held caption deltas were flushed right after, so the
+      # client rendered the same answer twice — once from the speak_start, once from the
+      # delta. nil = nothing held (the ordinary case, where the reflex spoke first).
+      pending_answer: nil,
       # a brain pre-warmed at speech onset (turn.start while listening), before any transcript
       # exists: {pid, ref} | nil. Adopted (BrainStream.begin/3) by the next :start_brain effect,
       # or killed by the :prewarm_ttl timer if the turn never materializes.
@@ -712,7 +719,7 @@ defmodule App.Conversations.Conversation do
       {:keep_state, spawn_canned_brain(@brain_blank, %{clear_brain(data) | brain_fallback: true})}
     else
       Logger.info("[turn] brain: #{inspect(text)}")
-      send(data.client, {:to_client, {:speak_start, :brain, text}})
+      data = push_or_hold_answer(text, data)
       feed(:brain_done, clear_brain(%{data | brain_text: text}))
     end
   end
@@ -720,7 +727,7 @@ defmodule App.Conversations.Conversation do
   def handle_event(:info, {:brain_done, text}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
     Logger.info("[turn] brain: #{inspect(text)}")
-    send(data.client, {:to_client, {:speak_start, :brain, text}})
+    data = push_or_hold_answer(text, data)
     feed(:brain_done, clear_brain(%{data | brain_text: text}))
   end
 
@@ -1045,6 +1052,26 @@ defmodule App.Conversations.Conversation do
   end
 
   defp blank?(text), do: not is_binary(text) or String.trim(text) == ""
+
+  # The final answer is gated on `reflex_sent` exactly like the live caption and the brain
+  # audio are. Before the gate, a brain that finished generating before the reflex had been
+  # SPOKEN pushed its answer straight to the client: the answer appeared ahead of the filler,
+  # and then :flush_brain released the held caption deltas — the same text a second time, which
+  # the client renders as a second thread line. Hold it instead; :flush_brain sends it (and
+  # drops the now-redundant deltas) the moment the reflex opens the gate.
+  #
+  # Only the CLIENT PUSH is deferred. `feed(:brain_done, …)` still runs immediately, so the FSM
+  # records brain_done and `:reflex_sent` still arms the drain. Every terminal outcome of the
+  # reflex reaches either `feed(:reflex_sent, …)` (TTS ok/error/DOWN, reached from every
+  # reflex-model outcome via :speak_reflex) or a turn abort (barge-in/watchdog), and the abort
+  # path clears the hold in run_effect(:cancel_brain, _) — so a held answer is always released
+  # or discarded, never stranded.
+  defp push_or_hold_answer(text, %{policy: %{reflex_sent: true}} = data) do
+    send(data.client, {:to_client, {:speak_start, :brain, text}})
+    data
+  end
+
+  defp push_or_hold_answer(text, data), do: %{data | pending_answer: text}
 
   # Live captions + wake handling. Clause order is load-bearing:
   #   1) voice-activation, mid-playback: the SAFETY STOP ("Henry stop") always wins —
@@ -1773,13 +1800,21 @@ defmodule App.Conversations.Conversation do
   defp run_effect(:flush_brain, {data, acts}) do
     # Caption first, then audio: the text should be on screen by the time the
     # sound for it starts, which is the ordering the live caption exists for.
-    # Joined into ONE delta — the client appends deltas, so N sends and one send
-    # of the concatenation render identically, and one is cheaper.
-    case data.caption_buffer do
-      [] ->
+    #
+    # A held FINAL answer wins: the brain finished generating before the reflex was spoken, so
+    # the held deltas are a partial copy of text we already have complete. Send the answer ONCE,
+    # as the speak_start the client finalizes on, and drop them — sending both is what put the
+    # answer in the thread twice. Otherwise the brain is still streaming, so release the held
+    # deltas joined into ONE delta: the client appends deltas, so N sends and one send of the
+    # concatenation render identically, and one is cheaper.
+    case {data.pending_answer, data.caption_buffer} do
+      {answer, _deltas} when is_binary(answer) ->
+        send(data.client, {:to_client, {:speak_start, :brain, answer}})
+
+      {nil, []} ->
         :ok
 
-      deltas ->
+      {nil, deltas} ->
         send(data.client, {:to_client, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()}})
     end
 
@@ -1788,7 +1823,7 @@ defmodule App.Conversations.Conversation do
       |> Enum.reverse()
       |> Enum.reduce(data, fn pcm, d -> push_audio_chunk(:brain, pcm, d) end)
 
-    {%{data | brain_buffer: [], caption_buffer: []}, acts}
+    {%{data | brain_buffer: [], caption_buffer: [], pending_answer: nil}, acts}
   end
 
   defp run_effect(:arm_drain, {data, acts}) do
@@ -1820,6 +1855,11 @@ defmodule App.Conversations.Conversation do
     {%{
        data
        | brain_buffer: [],
+         # An aborted turn's held text is dead: nothing will ever speak it, and :flush_brain
+         # is not reached again this turn. Drop it with the audio, or the next turn's flush
+         # would render the barged turn's caption/answer against the new utterance.
+         caption_buffer: [],
+         pending_answer: nil,
          agenda_turn: nil,
          speculative_reflex: nil,
          commit_speculative?: false,
@@ -2236,6 +2276,8 @@ defmodule App.Conversations.Conversation do
     do: %{
       data
       | brain_buffer: [],
+        caption_buffer: [],
+        pending_answer: nil,
         audio_until: nil,
         brain_fallback: false,
         ttfa: nil,
