@@ -3,10 +3,10 @@ import 'package:flutter/foundation.dart';
 import '../audio/audio_track_player.dart';
 import '../audio/keyword_spotter.dart';
 import '../audio/mic_capture.dart';
+import '../audio/playback_levels.dart';
 import '../audio/wake_gate.dart';
 import '../auth/device_id.dart';
 import '../connection/app_connection.dart';
-import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
@@ -260,6 +260,7 @@ class VoiceController extends ChangeNotifier {
   bool _bound = true;
   TurnState _turnState = TurnState.idle;
   final OrbFrame orbFrame = OrbFrame();
+  final PlaybackLevels _levels = PlaybackLevels();
 
   String get caption => _caption;
   List<String> get transcript => List.unmodifiable(_transcript);
@@ -300,6 +301,7 @@ class VoiceController extends ChangeNotifier {
     // cancel/stop can resolve after orbFrame.dispose() has already run.
     if (_disposed) return;
     orbFrame.state = orbState;
+    _syncLevelPoll();
     _safeNotify();
   }
 
@@ -953,20 +955,76 @@ class VoiceController extends ChangeNotifier {
 
   // ---- audio seams ----
   void _handleAudio(Uint8List pcm) {
-    // dispose() closes the socket fire-and-forget, so frames already in flight can
-    // land after orbFrame.dispose(); the waveform setter notifies, which would throw.
+    // dispose() closes the socket fire-and-forget, so frames already in flight
+    // can land after orbFrame.dispose().
     if (_disposed) return;
     if (_playerReady) _player.write(pcm);
-    // Target only; advance() smooths per frame (see the mic listener).
-    if (orbFrame.state == OrbState.speaking) {
-      orbFrame.audioTarget = rmsFromPcm16(pcm);
-      orbFrame.feedPcm(pcm, sampleRate: 24000); // TTS rate
+    // INDEXED, not applied. Audio arrives far faster than it plays, so the
+    // chunk in hand is not the chunk being heard; _pollPlaybackLevel asks the
+    // player which frame is actually leaving the speaker and looks up this
+    // chunk's loudness when it gets there.
+    _levels.add(pcm);
+  }
+
+  @visibleForTesting
+  void debugHandleAudio(Uint8List pcm) => _handleAudio(pcm);
+
+  /// Returns the underlying lookup's Future so a test can `await` past the
+  /// platform-channel round trip (`_player.playedFrames()` is genuinely
+  /// async — even a fake's `async =>` returns a Future that only resolves on
+  /// a later microtask, never inline) instead of racing it. The periodic
+  /// timer below ignores the return value; nothing production-side awaits it.
+  @visibleForTesting
+  Future<void> debugPollPlaybackLevel() => _pollPlaybackLevel();
+
+  @visibleForTesting
+  void debugResetPlaybackLevels() => _levels.reset();
+
+  /// How often the orb's level is refreshed from the real playback position.
+  /// 20Hz: syllables move on a ~100ms scale, so 50ms granularity is ample, and
+  /// unlike the cursor this drove before, a late value here is invisible — it
+  /// shapes a synthetic line rather than indexing a timeline.
+  static const Duration _levelPollPeriod = Duration(milliseconds: 50);
+
+  Timer? _levelTimer;
+
+  Future<void> _pollPlaybackLevel() {
+    // Not gated on `_playerReady` here: that gate decides whether the
+    // periodic timer should be running at all (`_syncLevelPoll`, below), not
+    // whether one lookup is safe. In production the timer never fires while
+    // the player isn't ready, so this only runs early via the debug seam
+    // (tests that never join a channel, and so never flip `_playerReady`); a
+    // genuinely unready platform channel is caught below regardless.
+    if (_disposed) return Future.value();
+    return _player.playedFrames().then((f) {
+      if (_disposed) return;
+      orbFrame.audioTarget = _levels.levelAt(f);
+    }).catchError((_) {
+      // A platform-channel hiccup must not take the orb down; the level holds
+      // and decays through its own release.
+    });
+  }
+
+  /// Runs only while Henry is speaking, and only with a live player.
+  ///
+  /// `flutter_test` fails a test that leaves a Timer pending and checks BEFORE
+  /// tearDown disposal (see the note on [deviceIdReady]), so a timer outliving
+  /// its reason breaks the suite rather than merely being untidy.
+  void _syncLevelPoll() {
+    final wanted = _playerReady && orbFrame.state == OrbState.speaking;
+    if (!wanted) {
+      _levelTimer?.cancel();
+      _levelTimer = null;
+      return;
     }
+    _levelTimer ??=
+        Timer.periodic(_levelPollPeriod, (_) => _pollPlaybackLevel());
   }
 
   void _handleStopPlayback() async {
     if (!_playerReady) return;
     final ms = await _player.stopAndFlush();
+    _levels.reset();
     _live?.push('played', {'ms': ms});
     _log('stop_playback → played ${ms}ms');
     _safeNotify();
@@ -1186,19 +1244,8 @@ class VoiceController extends ChangeNotifier {
         // Same race as _handleAudio: cancelling the subscription is async, so a
         // chunk can still arrive after orbFrame.dispose() ran synchronously.
         if (_disposed) return;
-        // Orb feedback runs for EVERY chunk, gated or not — a locked device
-        // that never updates its level looks dead rather than gated. Set the
-        // TARGET only — OrbFrame.advance() smooths it once per frame, so the
-        // orb's responsiveness never depends on the device's audio buffer size.
-        //
-        // The TARGET only, and deliberately no feedPcm: the orb draws a
-        // waveform for HENRY'S voice, not the user's. A trace of your own
-        // speech competes with the live transcript, which is the thing you
-        // actually read while talking. The level still moves, so the halos
-        // pulse and the orb visibly hears you.
-        if (orbFrame.state == OrbState.listening) {
-          orbFrame.audioTarget = rmsFromPcm16(chunk);
-        }
+        // No orb feedback here any more: the orb's level is playback-side now
+        // (see _pollPlaybackLevel), and a mic-driven target would fight it.
         // Fail-open lives HERE, not in whether the gate ever learns about a
         // lock (see `_applyWakeLocked`): while the spotter has not finished
         // loading (or failed to), there is no way to ever detect a wake word
@@ -1421,6 +1468,8 @@ class VoiceController extends ChangeNotifier {
       _player.dispose();
       _playerReady = false;
     }
+    _levelTimer?.cancel();
+    _levelTimer = null;
     orbFrame.dispose();
     super.dispose();
   }

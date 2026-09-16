@@ -193,6 +193,11 @@ class OrbFrame extends ChangeNotifier {
   @visibleForTesting
   void debugSetLevel(double v) => _smoother.debugSet(v);
 
+  /// Test seam: the raw target, before per-frame smoothing. `level` alone
+  /// cannot distinguish "fed the wrong value" from "has not smoothed yet".
+  @visibleForTesting
+  double get debugAudioTarget => _audioTarget;
+
   /// Same reasoning as [debugSetLevel]: the auto-gain is a function of the audio
   /// history, so pinning it is what keeps `paint` a pure function of
   /// (state, t, level, punch, waveform, waveGain, size) — and therefore what
