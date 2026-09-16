@@ -13,7 +13,73 @@ Uint8List tone(int frames, double amplitude) {
   return b.buffer.asUint8List();
 }
 
+/// PCM16 mono of [frames] samples that steps from [a] to [b] at the halfway
+/// point — one chunk whose loudness genuinely varies across it.
+Uint8List ramped(int frames, double a, double b) {
+  final out = Uint8List(frames * 2);
+  final half = frames ~/ 2;
+  out.setAll(0, tone(half, a));
+  out.setAll(half * 2, tone(frames - half, b));
+  return out;
+}
+
 void main() {
+  test('one long chunk is indexed at the LINE\'s resolution, not the server\'s',
+      () {
+    // S1, the reflex bug. `spawn_reflex_tts` is a BATCH synthesize() call, so
+    // the whole filler arrives as ONE binary and `push_audio_chunk` sends it
+    // unsplit. One RMS per add() made that entire clip a single span: the line
+    // held one constant for its whole duration and could not move. The brain
+    // path only animated because Cartesia happens to stream it in ~100ms
+    // pieces — i.e. the line's time resolution was the server's chunking.
+    final l = PlaybackLevels();
+    l.add(ramped(kLevelSpanFrames * 4, 0.05, 0.25));
+
+    expect(l.debugEntryCount, greaterThan(1),
+        reason: 'a chunk longer than one sub-span must be subdivided');
+    expect(l.levelAt(kLevelSpanFrames * 3), greaterThan(l.levelAt(0)),
+        reason: 'the loud half of a single chunk must read louder than its '
+            'quiet half — otherwise the reflex is a flat line');
+  });
+
+  test('sub-splitting does not change writtenFrames', () {
+    // The drain condition in the poll is `playedFrame >= writtenFrames`, and
+    // the argument that one reading settles it rests on this being the exact
+    // total handed to AudioTrack. Sub-spans change how a range is DIVIDED,
+    // never the total.
+    final l = PlaybackLevels();
+    l.add(tone(kLevelSpanFrames * 3 + 7, 0.5));
+    expect(l.writtenFrames, kLevelSpanFrames * 3 + 7);
+    l.add(tone(10, 0.5));
+    expect(l.writtenFrames, kLevelSpanFrames * 3 + 17);
+  });
+
+  test('spans stay contiguous, non-overlapping and ascending', () {
+    // levelAt's scan and both of its edge branches assume it.
+    final l = PlaybackLevels();
+    l.add(ramped(kLevelSpanFrames * 2 + 100, 0.05, 0.25)); // trailing partial
+    l.add(tone(50, 0.4)); // shorter than one sub-span
+    l.add(tone(kLevelSpanFrames, 0.6)); // exactly one
+
+    final ranges = l.debugSpanRanges;
+    expect(ranges.first.$1, 0);
+    expect(ranges.last.$2, l.writtenFrames);
+    for (var i = 0; i < ranges.length; i++) {
+      expect(ranges[i].$2, greaterThan(ranges[i].$1), reason: 'empty span');
+      if (i > 0) {
+        expect(ranges[i].$1, ranges[i - 1].$2,
+            reason: 'a gap or an overlap at span $i');
+      }
+    }
+  });
+
+  test('a chunk shorter than one sub-span stays a single span', () {
+    final l = PlaybackLevels();
+    l.add(tone(kLevelSpanFrames - 1, 0.5));
+    expect(l.debugEntryCount, 1);
+    expect(l.debugSpanRanges.single, (0, kLevelSpanFrames - 1));
+  });
+
   test('an empty index reads as silence, not as garbage', () {
     expect(PlaybackLevels().levelAt(0), 0.0);
     expect(PlaybackLevels().levelAt(99999), 0.0);
