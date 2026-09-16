@@ -22,13 +22,22 @@ const List<double> _kPhaseSpeed = [1.0, 1.37, 0.71];
 /// some version of that question. This needs one number — how loud he is now —
 /// where being a hundred milliseconds late is invisible.
 ///
-/// [level] shapes it, [presence] decides whether it is there at all, and [t]
-/// keeps it alive when the level is steady.
+/// Three inputs, and the split between the first two is load-bearing:
+/// [level] is the fast VU level and sets the line's HEIGHT, [shapeLevel] is a
+/// much slower follower of the same loudness and sets how many CYCLES it
+/// carries, and [phase] is an integrated clock that keeps it alive when the
+/// level is steady. [presence] decides whether it is there at all.
+///
+/// [phase] is a PHASE, already integrated by `OrbFrame`. Do not pass a clock
+/// and multiply it by a speed here: that makes the rendered phase a product of
+/// elapsed time and the current level, and a level move then rotates the whole
+/// line by (elapsed x delta-level) radians. See `OrbFrame.linePhase`.
 void drawOrbLine(
   Canvas canvas, {
   required double level,
+  required double shapeLevel,
   required double presence,
-  required double t,
+  required double phase,
   required Color color,
   required double cx,
   required double cy,
@@ -42,8 +51,12 @@ void drawOrbLine(
   // audio, and a purely level-driven line would be flat and dead exactly when
   // it is meant to be present.
   final a = (kLineRestAmp + (1.0 - kLineRestAmp) * lv) * presence * amp;
-  final cycles = kLineCyclesRest + (kLineCyclesLoud - kLineCyclesRest) * lv;
-  final speed = kLineSpeedRest + (kLineSpeedLoud - kLineSpeedRest) * lv;
+  // The CYCLE COUNT rides the slow follower, never `lv`. At VU speed a cycle
+  // count moves ~0.3 cycles per frame, which swings the third partial's
+  // argument by several radians at the ends of the line: the waveform redraws
+  // itself under the amplitude it is supposed to be showing.
+  final cycles = kLineCyclesRest +
+      (kLineCyclesLoud - kLineCyclesRest) * shapeLevel.clamp(0.0, 1.0);
 
   final top = <Offset>[];
   final bottom = <Offset>[];
@@ -51,11 +64,17 @@ void drawOrbLine(
     final f = i / (_kPoints - 1);
     final x = cx - halfW + f * 2 * halfW;
     final taper = math.sin(f * math.pi); // flat at both ends
+    // `f - 0.5`, not `f`: the spatial term is anchored at the MIDDLE of the
+    // line rather than its left end. Anchored at the end, a change in `cycles`
+    // left the left end pinned and swung the right end through the full
+    // 2*pi*f_h*delta-cycles — an asymmetric accordion. Centred, the same
+    // change fans out symmetrically from the middle at half the magnitude.
+    // The taper stays `sin(f * pi)`; it is about the ENDS and is correct.
     var sum = 0.0;
     for (var h = 0; h < _kFreq.length; h++) {
       sum += _kWeight[h] *
-          math.sin(2 * math.pi * _kFreq[h] * cycles * f +
-              t * speed * _kPhaseSpeed[h]);
+          math.sin(2 * math.pi * _kFreq[h] * cycles * (f - 0.5) +
+              phase * _kPhaseSpeed[h]);
     }
     final dy = sum * taper * a;
     top.add(Offset(x, cy - dy));

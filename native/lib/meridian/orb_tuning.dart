@@ -26,6 +26,29 @@ const double kLevelAttack60 = 0.45;
 /// merely animated; keep release well below attack.
 const double kLevelRelease60 = 0.12;
 
+/// The raw level treated as "full" by everything that SHAPES the orb — the
+/// line's cycle count and phase speed, and the rings' level boost.
+///
+/// **Deliberate deviation from the spec, which asked for a scalar AGC.** The
+/// `AutoGain` this replaced tracked a decaying peak to normalise a *mic*
+/// signal of unknown gain. The level no longer comes from a mic: it is the RMS
+/// of TTS playback, whose loudness is consistent turn to turn, so a normaliser
+/// here would spend its time amplifying quiet passages into looking loud —
+/// destroying exactly the dynamic range the line exists to show. A fixed
+/// anchor keeps the relationship between a mumble and a shout.
+///
+/// The number: speech RMS on normalised PCM runs ~0.05-0.25, and
+/// `rmsFromPcm16` applies a x3 gain, so the smoothed level lives around
+/// 0.15-0.6 and essentially never reaches 1.0. Anchoring the shaping terms at
+/// 1.0 (as they were) meant the line topped out near 3-4 of its 5.5 cycles and
+/// read calmer than it was drawn to.
+///
+/// **This is the first knob to reach for on device**: if the line reads too
+/// calm, lower it; too frantic, raise it. AMPLITUDE deliberately does NOT go
+/// through it — a genuinely loud passage should still be able to reach full
+/// height rather than saturating early.
+const double kLevelLoudAnchor = 0.6;
+
 // ---------------------------------------------------------------------------
 // Line render.
 // ---------------------------------------------------------------------------
@@ -112,8 +135,27 @@ const double kLineCyclesRest = 1.2;
 const double kLineCyclesLoud = 5.5;
 
 /// Phase speed at rest and at full level, in radians per second.
+///
+/// A SPEED, integrated once per frame into `OrbFrame.linePhase`. It is never
+/// multiplied onto an already-accumulated clock at render time: doing that
+/// makes the rendered phase a product of elapsed time and the current level,
+/// so every level move rotates the whole line by (elapsed x delta-level)
+/// radians — tens of radians per frame after a few minutes of uptime, i.e.
+/// spatial static during every syllable, invisible in a fresh-launch demo.
 const double kLineSpeedRest = 0.9;
 const double kLineSpeedLoud = 2.6;
+
+/// Seconds for the line's SHAPE — its cycle count — to follow a step in
+/// loudness, to 95%, matching [kLinePresenceSeconds]' convention. Two seconds
+/// is an exponential time constant of ~0.68s.
+///
+/// Deliberately far slower than the VU ballistics that drive AMPLITUDE, and
+/// the two must never be collapsed into one number. A syllable has to make the
+/// line taller on the frame it lands; it must not also re-draw the waveform
+/// underneath itself, because a cycle count moving at VU speed shifts the
+/// ends of the line by radians per frame and reads as noise rather than as
+/// speech. Tall now, busy slowly.
+const double kLineShapeSeconds = 2.0;
 
 // ---------------------------------------------------------------------------
 // Glass (shader only).
@@ -158,4 +200,12 @@ const double kRingSpeedLevelBoost = 0.80;
 /// read Dart constants, and this one is geometry rather than a shared motion
 /// value worth a uniform slot of its own. Change one, change the other, or the
 /// fallback painter stops looking like the shader.
-const double kRingDrift = 0.045;
+///
+/// 0.12, not the 0.045 this shipped with. The rings are drawn as Gaussians of
+/// `kHaloSigma` = 0.055 (in the same units), and 0.045 puts the largest
+/// possible displacement, `kRingDrift * sqrt(2)` = 0.064, at 1.16 sigma — an
+/// orbit smaller than the blur that draws it, which is to say not an orbit you
+/// can see. 0.12 puts it at 0.170, or 3.09 sigma. The shader's early-out bound
+/// is written as `1.9 + kRingDriftMax` precisely so it tracks this number;
+/// see the derivation in `shaders/orb.frag`.
+const double kRingDrift = 0.12;

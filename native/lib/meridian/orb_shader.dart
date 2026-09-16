@@ -132,8 +132,9 @@ class OrbShaderPainter extends CustomPainter {
     drawOrbLine(
       canvas,
       level: frame.level,
+      shapeLevel: frame.shapeLevel,
       presence: frame.presence,
-      t: frame.t,
+      phase: frame.linePhase,
       color: paletteFor(frame.state).wave,
       cx: cx,
       cy: cy + r * 0.06,

@@ -28,6 +28,17 @@ double rmsFromPcm16(Uint8List pcm) {
   return math.min(1.0, math.sqrt(sum / n) * 3.0);
 }
 
+/// Re-anchor a raw level so [kLevelLoudAnchor] reads as "full", for the terms
+/// that SHAPE the orb (the line's cycle count and phase speed, the rings'
+/// level boost).
+///
+/// There is no AGC here and deliberately so — see [kLevelLoudAnchor]. Kept out
+/// of the shaping call sites themselves so there is exactly one place the
+/// mapping can be changed, and so amplitude's use of the RAW level is a
+/// visible omission rather than an oversight.
+double anchoredLevel(double level) =>
+    (level / kLevelLoudAnchor).clamp(0.0, 1.0);
+
 /// Re-express a per-frame-at-60Hz smoothing coefficient for an actual frame
 /// duration.
 ///

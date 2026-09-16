@@ -80,7 +80,15 @@ const float kGlowGain = 1.10; // (0.5 + kGlow*0.5) with kGlow = 1.2
 // as kBreathe and kHalos are with orb_painter.dart: the fallback painter draws
 // the same orbit from the Dart copy, and a change to one side that is not
 // mirrored on the other makes the two renderers disagree.
-const float kRingDrift = 0.045;
+//
+// 0.12, not the 0.045 this shipped with. The rings ARE Gaussians of
+// kHaloSigma = 0.055 in these same units, and 0.045 puts the largest possible
+// displacement (kRingDriftMax, below) at 0.0636 = 1.16*kHaloSigma: an orbit
+// smaller than the blur drawing it, so the effect could not be judged on a
+// device at all. 0.12 puts it at 0.1697 = 3.09*kHaloSigma. The early-out bound
+// in main() is written in terms of kRingDriftMax so it follows this number
+// rather than having to be re-derived by hand.
+const float kRingDrift = 0.12;
 // The most a drifted centre can sit from the sphere's centre. NOT kRingDrift:
 // the drift's two components carry independent phases, so sin and cos can both
 // peak at once and |drift| reaches kRingDrift*sqrt(2). Rounded UP from
@@ -169,13 +177,16 @@ void main() {
   //
   // That derivation is measured from the SPHERE's centre, and the rings no
   // longer sit on it: each orbits by up to kRingDriftMax (= kRingDrift*sqrt(2)
-  // ~= 0.0636). A fragment's distance from a DRIFTED centre is at least
-  // rn - kRingDriftMax, so a fragment as far out as rn ~= 1.6025 + 0.0636
-  // ~= 1.6661 can still land on a ring's peak. Raising the cut by exactly
-  // kRingDriftMax restores the clearance the paragraph above established --
-  // 1.9636 - 1.6661 = 0.2975 = 5.4*kHaloSigma, the same 4e-7 of peak as
-  // before -- rather than eroding it by an amount nothing would have noticed
-  // until a ring's outer edge started getting clipped square at full level.
+  // ~= 0.1697 at kRingDrift = 0.12). A fragment's distance from a DRIFTED
+  // centre is at least rn - kRingDriftMax, so a fragment as far out as
+  // rn ~= 1.6025 + 0.1697 ~= 1.7722 can still land on a ring's peak. Raising
+  // the cut by exactly kRingDriftMax restores the clearance the paragraph
+  // above established -- 2.0697 - 1.7722 = 0.2975 = 5.4*kHaloSigma, the same
+  // 4e-7 of peak as before -- rather than eroding it by an amount nothing
+  // would have noticed until a ring's outer edge started getting clipped
+  // square at full level. The `+ kRingDriftMax` form is what makes that true
+  // for ANY kRingDrift: the clearance is independent of it by construction, so
+  // re-tuning the orbit cannot silently start clipping the rings.
   if (rn > 1.9 + kRingDriftMax) {
     fragColor = vec4(0.0);
     return;

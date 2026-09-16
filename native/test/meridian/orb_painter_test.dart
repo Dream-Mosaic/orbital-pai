@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/audio_levels.dart';
@@ -236,6 +238,139 @@ void main() {
     expect(f.punch, greaterThan(0.0));
     expect(f.presence, lessThan(0.05),
         reason: 'reacting is not drawing — listening keeps the line off');
+    f.dispose();
+  });
+
+  group('line phase', () {
+    double phaseAfterASecond(double target) {
+      final f = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = target;
+      for (var i = 0; i < 60; i++) {
+        f.advance(1 / 60);
+      }
+      final p = f.linePhase;
+      f.dispose();
+      return p;
+    }
+
+    test('it is INTEGRATED — loud accumulates faster than quiet', () {
+      // The line's speed is level-dependent, so the only correct place for it
+      // is inside the integral. Multiplying an accumulated clock by the
+      // current speed at render time instead is what turned the line to static
+      // during speech; `linePhase` exists so there is nothing left to multiply.
+      expect(phaseAfterASecond(0.9), greaterThan(phaseAfterASecond(0.05)));
+      // And it really is the speed range, not merely "bigger": a second of
+      // silence is kLineSpeedRest and nothing else.
+      expect(phaseAfterASecond(0.0), closeTo(kLineSpeedRest, 1e-9));
+    });
+
+    test('it is frame-rate independent', () {
+      final at60 = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 0.7;
+      for (var i = 0; i < 60; i++) {
+        at60.advance(1 / 60);
+      }
+      final at120 = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 0.7;
+      for (var i = 0; i < 120; i++) {
+        at120.advance(1 / 120);
+      }
+      // Not 1e-6, unlike the presence and level tests: those integrate a
+      // closed-form decay, this is a Riemann sum over a level that is itself
+      // still ramping, so the two step sizes APPROXIMATE the same integral
+      // rather than computing it. 1e-2 rad is 0.4% of the ~2.58 accumulated
+      // here and orders below anything visible, while the failure this guards
+      // — a coefficient applied per FRAME rather than per second — is out by a
+      // factor of two, i.e. by ~1.3 rad.
+      expect(at120.linePhase, closeTo(at60.linePhase, 1e-2));
+      at60.dispose();
+      at120.dispose();
+    });
+
+    test('powering off resets it — the state setter', () {
+      // The setter is the path production actually takes: the ticker stops the
+      // instant we go off, so there is no next tick to finish the job. A wake
+      // must not inherit the phase, the shape or the clock of whatever was
+      // being said when we powered down.
+      final f = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 0.8;
+      for (var i = 0; i < 60; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.linePhase, greaterThan(1.0), reason: 'sanity: it accumulated');
+      expect(f.shapeLevel, greaterThan(0.1), reason: 'sanity: shape is up');
+      expect(f.t, greaterThan(0.5), reason: 'sanity: the clock ran');
+
+      f.state = OrbState.off;
+      expect(f.linePhase, 0.0);
+      expect(f.shapeLevel, 0.0);
+      expect(f.t, 0.0);
+      f.dispose();
+    });
+
+    test('powering off resets it — advance\'s own off branch', () {
+      // The other path. Unreachable without a seam precisely because the
+      // setter above already cleared everything, which is also why it is worth
+      // asserting: it is the branch a stray tick after power-down takes, and a
+      // silent divergence between the two resets is how a stale phase would
+      // survive a wake.
+      final f = OrbFrame()..state = OrbState.off;
+      f.debugLinePhase = 4.0;
+      f.debugT = 9.0;
+      f.debugSetLevel(0.8);
+      expect(f.shapeLevel, greaterThan(0.1), reason: 'sanity: shape is up');
+
+      f.advance(1 / 60);
+      expect(f.linePhase, 0.0);
+      expect(f.shapeLevel, 0.0);
+      expect(f.t, 0.0);
+      expect(f.level, 0.0);
+      f.dispose();
+    });
+
+    test('the SHAPE follower lags the level by a lot, deliberately', () {
+      // Amplitude is VU-fast and the cycle count is ~0.68s, and the whole
+      // point is that these are different numbers. One frame of attack has the
+      // level most of the way up and the shape barely moved.
+      final f = OrbFrame()
+        ..state = OrbState.speaking
+        ..audioTarget = 0.9;
+      f.advance(1 / 60);
+      expect(f.level, greaterThan(0.3));
+      expect(f.shapeLevel, lessThan(0.1));
+      // And it does get there, so this is a lag rather than a cap.
+      for (var i = 0; i < 60 * 3; i++) {
+        f.advance(1 / 60);
+      }
+      expect(f.shapeLevel, greaterThan(0.95));
+      f.dispose();
+    });
+  });
+
+  test('the free-running clocks wrap at an invisible period', () {
+    // FM4: t, ringPhase and linePhase are 24/7 clocks on a wall device and
+    // ship to the shader as float32. kPhaseWrap is an exact common period of
+    // every consumer of all three, so wrapping cannot be seen — assert the
+    // wrap happens AND that it lands on the same rendered position.
+    final f = OrbFrame()..state = OrbState.speaking;
+    for (var i = 0; i < 60 * 700; i++) {
+      f.advance(1 / 60);
+    }
+    expect(f.t, lessThan(kPhaseWrap));
+    expect(f.ringPhase, lessThan(kPhaseWrap));
+    expect(f.linePhase, lessThan(kPhaseWrap));
+    expect(f.t, greaterThan(0.0), reason: 'wrapped, not zeroed');
+    // 200*pi is 160 whole turns of the breathe and 100/83/130 of the ring
+    // terms: sin and cos of the wrapped value equal those of the unwrapped.
+    expect(math.sin(kPhaseWrap * 1.6), closeTo(0.0, 1e-9));
+    expect(math.sin(kPhaseWrap * 0.83), closeTo(0.0, 1e-9));
+    expect(math.sin(kPhaseWrap * 1.3), closeTo(0.0, 1e-9));
+    expect(math.sin(kPhaseWrap * 1.37), closeTo(0.0, 1e-9));
+    expect(math.sin(kPhaseWrap * 0.71), closeTo(0.0, 1e-9));
     f.dispose();
   });
 

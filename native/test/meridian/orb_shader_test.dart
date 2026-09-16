@@ -76,8 +76,10 @@ void main() {
       (tester) async {
     await OrbShaderProgram.load();
 
-    // Pure function of (state, t, ringPhase, level, presence, size): pinning
-    // everything except t isolates exactly the term this test is about.
+    // Pure function of (state, t, ringPhase, linePhase, level, shapeLevel,
+    // presence, size): pinning everything except t isolates exactly the term
+    // this test is about — and the WIDTH assertion below is insensitive to the
+    // phases anyway, which is why it survives them.
     Rect fillBounds(double t) {
       // SPEAKING: the line is Henry's half of the conversation, and listening
       // draws none at all — a listening frame here would assert against an

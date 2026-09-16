@@ -30,6 +30,13 @@ class PlaybackLevels {
   /// overtaken ~15s into a k=3 answer and every later lookup fell off the
   /// front of the index. A span is three numbers; five minutes of 100ms chunks
   /// is well under 100KB, against the 64KB PCM ring this design replaced.
+  ///
+  /// FRAMES, and the default is written `24000 * 300` because 24000 is the
+  /// server's `tts_sample_rate` (`server/lib/app/config.ex`), the same number
+  /// `VoiceController._initPlayer` hands to `AudioTrack`. Nothing here can
+  /// detect a change to it: a server that moved to 48kHz would leave this
+  /// window meaning two and a half minutes rather than five, quietly, while
+  /// the symptom showed up as the orb going flat late in long answers.
   final int retainFrames;
 
   final Queue<_Span> _spans = Queue<_Span>();

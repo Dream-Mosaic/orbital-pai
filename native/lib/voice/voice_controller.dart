@@ -719,6 +719,14 @@ class VoiceController extends ChangeNotifier {
   /// AudioTrack still has a usable session (mic + captions), so a failure here
   /// is logged and dropped — it must never reach the reconnect machine, which
   /// is why the join listener calls this unawaited.
+  ///
+  /// **24000 is the SERVER's `tts_sample_rate`** (`server/lib/app/config.ex`),
+  /// not a client preference — the socket carries raw PCM16 with no rate in
+  /// band, so this number has to be the server's or everything Henry says
+  /// plays at the wrong pitch. It is also the unit `PlaybackLevels.retainFrames`
+  /// is expressed in (its default is written as `24000 * 300`, i.e. five
+  /// minutes), so a server-side rate change silently mis-scales the retention
+  /// window as well as the pitch. Change all three together.
   Future<void> _initPlayer() async {
     if (_disposed || _playerReady) return;
     try {

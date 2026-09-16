@@ -4,11 +4,13 @@ import 'package:orbital_pai/meridian/orb_painter.dart';
 import 'package:orbital_pai/meridian/orb_state.dart';
 
 /// A 2x gradient bug shipped in A1 precisely because no test could see pixels.
-/// `paint` is pure in (state, t, ringPhase, level, presence, size), so pinning
-/// t and level makes a golden the exact guard that would have caught it — the
-/// framing that "the orb is animated, therefore goldens are impossible" does
-/// not hold. (ringPhase has no seam; the fixed run of fixed-dt advances below
-/// pins it just as exactly, at kRingSpeedSpeaking * 0.5.)
+/// `paint` is pure in (state, t, ringPhase, linePhase, level, shapeLevel,
+/// presence, size), so pinning t and level makes a golden the exact guard that
+/// would have caught it — the framing that "the orb is animated, therefore
+/// goldens are impossible" does not hold. (ringPhase and linePhase have no
+/// seam; the fixed run of fixed-dt advances below pins them just as exactly,
+/// at kRingSpeedSpeaking * 0.5 and kLineSpeedRest * 0.5. debugSetLevel pins
+/// shapeLevel alongside the level.)
 ///
 /// Regenerate deliberately (never to silence a failure you have not explained):
 ///   flutter test --update-goldens test/meridian/orb_golden_test.dart

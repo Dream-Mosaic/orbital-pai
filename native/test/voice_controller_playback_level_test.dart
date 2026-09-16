@@ -160,7 +160,7 @@ void main() {
       player.playedFramesValue = f;
       await poll();
       expect(target(), greaterThan(0.0),
-          reason: 'a normal utterance must never trip the drain timeout');
+          reason: 'a normal utterance must never read as drained');
     }
 
     // The head reaches the end of everything written. That is conclusive on
@@ -173,7 +173,10 @@ void main() {
         reason: 'a drained queue must settle the orb on the very next poll, '
             'not hold the last syllable for the length of a tool round');
 
-    // Audio resuming picks it straight back up — the timeout is not sticky.
+    // Audio resuming picks it straight back up — a drain is not sticky, it is
+    // just what the current poll reads.
+    // (No timeout, and no counters: 52a54f0 deleted the five-flat-polls rule
+    // this file used to describe. `f >= writtenFrames` is the whole test.)
     c.debugHandleAudio(tone(1000, 0.9));
     player.playedFramesValue = 1200;
     await poll();
@@ -260,10 +263,10 @@ void main() {
   testWidgets('a barge-in flush leaves nothing for the next poll to read',
       (tester) async {
     // The other half of H1's reasoning, asserted rather than assumed: the
-    // drain counters now survive a turn boundary, so the flush path must not
-    // depend on them. It does not — `_handleStopPlayback` resets `_levels`, so
-    // `levelAt` has no span to return whatever the counters hold, and
-    // AudioTrack's flush takes the head back to 0 in step with it.
+    // flush path must settle the orb on its own, without relying on the
+    // drain reading. It does — `_handleStopPlayback` resets `_levels`, which
+    // takes `writtenFrames` to 0, and AudioTrack's flush takes the head back
+    // to 0 in step with it, so the very next poll reads drained.
     final player = FakePlayer();
     final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
     c.debugSetPlayerReady();
@@ -271,7 +274,7 @@ void main() {
     c.debugApplyEvent('speaking');
     c.debugHandleAudio(tone(1000, 0.9));
 
-    player.playedFramesValue = 400; // mid-utterance: NOT drained, counters 0
+    player.playedFramesValue = 400; // mid-utterance: NOT drained
     await tester.pump(const Duration(milliseconds: 50));
     expect(c.orbFrame.debugAudioTarget, greaterThan(0.0));
 
@@ -281,7 +284,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(c.orbFrame.debugAudioTarget, 0.0,
         reason: 'a barge-in must not leave the abandoned turn audible in the '
-            'orb, counters or no counters');
+            'orb');
     c.dispose();
   });
 

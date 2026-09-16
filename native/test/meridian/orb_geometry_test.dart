@@ -14,10 +14,10 @@ class Rec {
 }
 
 /// A Canvas that records draw calls instead of rasterising them. `paint` is a
-/// pure function of (state, t, ringPhase, level, presence, size), so pinning
-/// t + level (and advancing a fixed number of fixed-dt frames for ringPhase)
-/// makes every radius and rect below exactly predictable from orb.js's
-/// formulas.
+/// pure function of (state, t, ringPhase, linePhase, level, shapeLevel,
+/// presence, size), so pinning t + level (and advancing a fixed number of
+/// fixed-dt frames for the two phases) makes every radius and rect below
+/// exactly predictable from orb.js's formulas.
 class RecordingCanvas implements Canvas {
   final List<Rec> calls = <Rec>[];
 
@@ -50,7 +50,7 @@ void main() {
   /// [advance] is seconds of frames to run BEFORE pinning t and level — the
   /// line is gated on `presence`, which only exists after the frame has been
   /// advanced. Pinning happens last so `paint` stays a pure function of
-  /// (state, t, ringPhase, level, presence, size).
+  /// (state, t, ringPhase, linePhase, level, shapeLevel, presence, size).
   RecordingCanvas paintAt(OrbState state,
       {double t = 0.0, double level = 0.0, double advance = 0.0}) {
     final frame = OrbFrame();

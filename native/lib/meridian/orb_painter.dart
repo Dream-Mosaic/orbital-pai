@@ -19,6 +19,29 @@ const double kClarity = 0.25;
 /// Canvas 2D `shadowBlur = b` is approximately a Gaussian with `sigma = b / 2`.
 double _sigma(double shadowBlur) => shadowBlur / 2.0;
 
+/// The period every free-running clock on the orb is wrapped to, in the units
+/// each of them counts (seconds for [OrbFrame.t], radians for the two phases).
+///
+/// 200*pi, and not an arbitrary large number: it is an exact common period of
+/// every consumer any of the three has, so a wrap lands on a bit-identical
+/// rendered position and cannot be seen.
+///
+///   * `t` feeds only `sin(t * 1.6)` (the breathe, in both painters and in
+///     orb.frag): 200*pi * 1.6 = 160 full turns.
+///   * `ringPhase` feeds `sin(p)`, `cos(p * 0.83)` and `sin(p * 1.3)`:
+///     100, 83 and 130 full turns.
+///   * `linePhase` feeds `sin(p * s)` for s in {1.0, 1.37, 0.71}:
+///     100, 137 and 71 full turns.
+///
+/// It exists because these are 24/7 clocks on a wall device and they ship to
+/// the shader as float32: unwrapped, a day of `idle` puts `t` at 86400, where
+/// a float32 quantum is ~8ms and the breathe visibly steps. Adding a consumer
+/// at a frequency that is not a rational multiple of these means changing this
+/// number, which is why they are enumerated rather than summarised.
+const double kPhaseWrap = 200 * math.pi;
+
+double _wrapPhase(double v) => v >= kPhaseWrap ? v % kPhaseWrap : v;
+
 /// Mutable orb frame state. Acts as the `CustomPainter.repaint` listenable so the
 /// orb repaints without rebuilding the widget tree.
 class OrbFrame extends ChangeNotifier {
@@ -30,6 +53,8 @@ class OrbFrame extends ChangeNotifier {
 
   double _presence = 0.0;
   double _ringPhase = 0.0;
+  double _linePhase = 0.0;
+  double _shapeLevel = 0.0;
 
   /// The halo rings' own clock, in radians, advanced per frame at the state's
   /// cadence ([_ringSpeed]) rather than at [t]'s.
@@ -37,9 +62,37 @@ class OrbFrame extends ChangeNotifier {
   /// Separate from [t] because the rings are the orb's ambient loop and want
   /// their own pace: calm at idle, quicker while Henry is thinking, quickest
   /// while he is speaking. Monotonic by construction — it is a phase, never
-  /// wound back except by powering off — so a cadence change is a change of
-  /// SPEED, never a jump in position.
+  /// wound back except by powering off and by [kPhaseWrap], which is chosen so
+  /// the wrap is invisible — so a cadence change is a change of SPEED, never a
+  /// jump in position.
   double get ringPhase => _ringPhase;
+
+  /// The LINE's own clock, in radians, advanced per frame at a speed that
+  /// interpolates [kLineSpeedRest] -> [kLineSpeedLoud] on the (anchored)
+  /// smoothed level.
+  ///
+  /// **Integrated here, exactly as [ringPhase] is, and for the same reason.**
+  /// The line used to be handed `t` and multiply it by a level-dependent speed
+  /// at render time. That is not a phase: it is (elapsed time x current
+  /// speed), so d(phase)/d(level) = t * (kLineSpeedLoud - kLineSpeedRest).
+  /// `t` never resets and advances all day in `idle`, so ten minutes in, a
+  /// single frame's level move of 0.03 — well inside [kLevelRelease60]
+  /// ballistics — rotated the whole line by ~30 radians. The line turned to
+  /// spatial static during every attack and release, i.e. precisely while
+  /// Henry talks, and a fresh-launch demo looked perfect. Do not reintroduce a
+  /// level factor at the point of use.
+  double get linePhase => _linePhase;
+
+  /// The slow follower that drives the line's SHAPE — its cycle count — as
+  /// distinct from [level], which drives its amplitude.
+  ///
+  /// Two time constants on purpose: a syllable must make the line taller on
+  /// the frame it lands ([level], VU ballistics), and must not simultaneously
+  /// re-draw the waveform underneath itself ([shapeLevel], ~0.68s). Collapsing
+  /// them back into one number is the defect this exists to prevent. Already
+  /// anchored through [anchoredLevel], so it is 0..1 shaping units, not raw
+  /// loudness.
+  double get shapeLevel => _shapeLevel;
 
   /// How much of the line is on screen, 0..1.
   ///
@@ -58,6 +111,10 @@ class OrbFrame extends ChangeNotifier {
   static final double _presenceAlpha60 =
       1.0 - math.pow(0.05, 1.0 / (kLinePresenceSeconds * 60.0)).toDouble();
 
+  /// [kLineShapeSeconds] as a 60Hz coefficient, by the same 95%-in-T rule.
+  static final double _shapeAlpha60 =
+      1.0 - math.pow(0.05, 1.0 / (kLineShapeSeconds * 60.0)).toDouble();
+
   OrbState get state => _state;
   set state(OrbState v) {
     if (v == _state) return;
@@ -74,6 +131,9 @@ class OrbFrame extends ChangeNotifier {
       // the loudness of whatever was being said when we powered down.
       _presence = 0.0;
       _ringPhase = 0.0;
+      _linePhase = 0.0;
+      _shapeLevel = 0.0;
+      _t = 0.0;
     }
     notifyListeners();
   }
@@ -102,8 +162,11 @@ class OrbFrame extends ChangeNotifier {
         OrbState.idle => kRingSpeedIdle,
         OrbState.listening => kRingSpeedListening,
         OrbState.thinking => kRingSpeedThinking,
-        OrbState.speaking =>
-          kRingSpeedSpeaking + _smoother.value * kRingSpeedLevelBoost,
+        // Through [anchoredLevel], not the raw level: the boost is a SHAPING
+        // term and was anchored at a loudness TTS playback never reaches, so
+        // most of it was unreachable. See kLevelLoudAnchor.
+        OrbState.speaking => kRingSpeedSpeaking +
+            anchoredLevel(_smoother.value) * kRingSpeedLevelBoost,
       };
 
   /// Raw loudness in (0..1). Set from the playback-clock poll — the only
@@ -128,15 +191,32 @@ class OrbFrame extends ChangeNotifier {
 
   /// Test seams: pin the clock and the smoothed level so OrbPainter.paint
   /// becomes an explicitly pure function of
-  /// (state, t, ringPhase, level, presence, size) — which is what makes a
-  /// golden possible. Neither notifies. `ringPhase` and `presence` have no
-  /// seam of their own: both are pure accumulations of [advance], so a fixed
-  /// number of fixed-dt frames pins them exactly.
+  /// (state, t, ringPhase, linePhase, level, shapeLevel, presence, size) —
+  /// which is what makes a golden possible. None of them notify. `ringPhase`,
+  /// `linePhase` and `presence` have no seam for normal use: all three are
+  /// pure accumulations of [advance], so a fixed number of fixed-dt frames
+  /// pins them exactly. `shapeLevel` has no seam of its own either — it rides
+  /// [debugSetLevel], which pins both followers together.
   @visibleForTesting
   set debugT(double v) => _t = v;
 
+  /// Test seam for the ONE branch that is otherwise unreachable: `advance`'s
+  /// own `off` reset. The state setter zeroes every accumulator on the way
+  /// into `off`, so by the time a tick could take that branch there is nothing
+  /// left to observe — and it is the branch that runs if a tick ever does land
+  /// after power-down, which is exactly why it exists.
   @visibleForTesting
-  void debugSetLevel(double v) => _smoother.debugSet(v);
+  set debugLinePhase(double v) => _linePhase = v;
+
+  /// Pins BOTH followers: a steady level is one the slow shape follower has
+  /// long since converged on, so setting only the fast one would pin the orb
+  /// in a state it can never actually be in (tall but drawn at rest cycles)
+  /// and quietly make the golden a picture of nothing real.
+  @visibleForTesting
+  void debugSetLevel(double v) {
+    _smoother.debugSet(v);
+    _shapeLevel = anchoredLevel(v);
+  }
 
   /// Test seam: the raw target, before per-frame smoothing. `level` alone
   /// cannot distinguish "fed the wrong value" from "has not smoothed yet".
@@ -160,6 +240,9 @@ class OrbFrame extends ChangeNotifier {
       _audioTarget = 0.0;
       _presence = 0.0;
       _ringPhase = 0.0;
+      _linePhase = 0.0;
+      _shapeLevel = 0.0;
+      _t = 0.0;
       return;
     }
     final reactive = _reactive;
@@ -171,8 +254,22 @@ class OrbFrame extends ChangeNotifier {
     final speed = _state == OrbState.thinking
         ? 1.4
         : 1.0 + (reactive ? _smoother.value * 1.4 : 0.0);
-    _t += dt * speed;
-    _ringPhase += dt * _ringSpeed;
+    final shaping = anchoredLevel(_smoother.value);
+    _t = _wrapPhase(_t + dt * speed);
+    _ringPhase = _wrapPhase(_ringPhase + dt * _ringSpeed);
+    _linePhase = _wrapPhase(_linePhase +
+        dt * (kLineSpeedRest + (kLineSpeedLoud - kLineSpeedRest) * shaping));
+    _shapeLevel += (shaping - _shapeLevel) * alphaForDt(_shapeAlpha60, dt);
+    // Presence fades on the STATE, and the state's timing is the server's: it
+    // arms `listening` at `audio_until + jitter_buffer_ms` (150ms,
+    // `server/lib/app/config.ex`), a budget that has to absorb network transit,
+    // AudioTrack startup AND the output route's own latency. On a Bluetooth
+    // sink (~200-300ms) `listening` therefore arrives while tail audio is
+    // still audible and the line starts leaving while Henry is still being
+    // heard. Deliberately NOT changed: on the speaker, which is what the wall
+    // device uses, the budget holds, and gating the fade on the drain
+    // condition instead would be a different design. Written down because the
+    // coupling is invisible from either end.
     _presence += ((_lineWanted ? 1.0 : 0.0) - _presence) *
         alphaForDt(_presenceAlpha60, dt);
     notifyListeners();
@@ -275,7 +372,8 @@ class OrbPainter extends CustomPainter {
           // crisp shape on top — BlurStyle.solid ("solid inside, fuzzy outside")
           // is the matching semantic. BlurStyle.normal would replace the crisp
           // stroke with the blur, crushing a thin stroke's peak alpha to near zero.
-          ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(10 + 14 * kGlow));
+          ..maskFilter =
+              MaskFilter.blur(BlurStyle.solid, _sigma(10 + 14 * kGlow));
         canvas.drawCircle(center + drift, rr, paint);
       }
     }
@@ -285,14 +383,15 @@ class OrbPainter extends CustomPainter {
       final paint = Paint()
         ..style = PaintingStyle.fill
         ..color = pal.glow.withValues(alpha: 0.06)
-        ..maskFilter = MaskFilter.blur(BlurStyle.solid,
-            _sigma(30 * kGlow * (0.6 + level + punch * 0.5)));
+        ..maskFilter = MaskFilter.blur(
+            BlurStyle.solid, _sigma(30 * kGlow * (0.6 + level + punch * 0.5)));
       canvas.drawCircle(center, r, paint);
     }
 
     // --- 3. glass core (clipped): spherical shading + depth shadow ---
     canvas.save();
-    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: r)));
+    canvas
+        .clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: r)));
 
     final coreRect = Rect.fromCircle(center: center, radius: r);
     final base = RadialGradient(
@@ -345,8 +444,9 @@ class OrbPainter extends CustomPainter {
       drawOrbLine(
         canvas,
         level: frame.level,
+        shapeLevel: frame.shapeLevel,
         presence: frame.presence,
-        t: frame.t,
+        phase: frame.linePhase,
         color: pal.wave,
         cx: cx,
         cy: cy + r * 0.06,
