@@ -169,7 +169,12 @@ class OrbFrame extends ChangeNotifier {
             anchoredLevel(_smoother.value) * kRingSpeedLevelBoost,
       };
 
-  /// Raw loudness in (0..1). Set from the playback-clock poll — the only
+  /// Loudness in (0..1), on the PERCEPTUAL curve — `curvedLevel` is applied by
+  /// the poll, once, so that everything reading it (amplitude here, the
+  /// [anchoredLevel] shaping terms, the transient detector, the halos, the
+  /// ring boost) agrees on what "loud" means. Not raw RMS; see kLevelCurve.
+  ///
+  /// Set from the playback-clock poll — the only
   /// source of a non-zero value here — which looks it up by the frame actually
   /// leaving the speaker, not by chunk arrival (TTS audio arrives far faster than it plays). The
   /// mic listener no longer writes this at all, and the poll zeroes it when it

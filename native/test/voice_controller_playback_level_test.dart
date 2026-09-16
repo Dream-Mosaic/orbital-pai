@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
+import 'package:orbital_pai/meridian/audio_levels.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
 
 import 'support/fakes.dart';
@@ -47,6 +48,48 @@ void main() {
     expect(late, greaterThan(early),
         reason:
             'the level must track where playback IS, not what arrived last');
+    c.dispose();
+  });
+
+  test('the poll hands the orb PERCEPTUAL loudness, not raw RMS', () async {
+    // S2. The poll is the one place the raw playback RMS becomes the orb's
+    // input, so the response curve belongs here: amplitude, the shaping
+    // anchor, the transient detector, the halos and the ring boost then
+    // cannot disagree about what "loud" means. Without it, soft phonemes sit
+    // near the floor and the line reads as reacting to hard consonants rather
+    // than to speech.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+
+    // A square wave at 0.1 full scale is rms 0.1, which rmsFromPcm16's x3 gain
+    // makes 0.30 — a soft-but-real speech level.
+    c.debugHandleAudio(tone(2000, 0.1));
+    player.playedFramesValue = 1000;
+    await c.debugPollPlaybackLevel();
+
+    expect(c.orbFrame.debugAudioTarget, closeTo(curvedLevel(0.30), 0.005));
+    expect(c.orbFrame.debugAudioTarget, greaterThan(0.30 * 1.3),
+        reason: 'a soft level must be visibly lifted, not passed through');
+    c.dispose();
+  });
+
+  test('a drained queue is still exactly zero, curve or no curve', () async {
+    // The curve must not put a floor under silence: `f >= writtenFrames` is
+    // the drain condition, and curvedLevel(0) has to be 0 or the orb would
+    // never settle between turns.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+    c.debugHandleAudio(tone(1000, 0.9));
+
+    player.playedFramesValue = 1000;
+    await c.debugPollPlaybackLevel();
+    expect(c.orbFrame.debugAudioTarget, 0.0);
     c.dispose();
   });
 

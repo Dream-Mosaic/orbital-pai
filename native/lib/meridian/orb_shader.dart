@@ -126,9 +126,11 @@ class OrbShaderPainter extends CustomPainter {
     final cx = rect.center.dx;
     final cy = rect.center.dy;
     // The fallback painter clips this to the sphere; deliberately omitted
-    // here — the line's own reach (~0.4r plus blur) stays well inside
-    // the silhouette at the current amplitude, so there is nothing to clip.
-    // Don't "fix" this as a forgotten clipPath without re-checking that.
+    // here — the line's own reach stays well inside the silhouette: 0.48r
+    // below centre at the middle (0.06r offset + kWaveAmp), and 0.72r at the
+    // ends, where the taper is zero and kWaveAmp does not enter at all. Plus
+    // the 4px blur. Don't "fix" this as a forgotten clipPath without
+    // re-checking that.
     drawOrbLine(
       canvas,
       level: frame.level,

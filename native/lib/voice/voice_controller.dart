@@ -7,6 +7,7 @@ import '../audio/playback_levels.dart';
 import '../audio/wake_gate.dart';
 import '../auth/device_id.dart';
 import '../connection/app_connection.dart';
+import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
@@ -1044,8 +1045,16 @@ class VoiceController extends ChangeNotifier {
       // so the count never completed and the next turn's first poll fell
       // through to the stale hold. One reading is enough; the hardware cannot
       // lie in the unsafe direction.
+      //
+      // `curvedLevel` HERE, at the one place the raw RMS becomes the orb's
+      // input, rather than at each place it is consumed: amplitude, the
+      // shaping anchor, the transient detector, the halos and the ring boost
+      // must all agree on what "loud" means, and applying it once is how they
+      // cannot drift. See kLevelCurve — without it, soft syllables sit near
+      // the floor and the line reads as reacting to hard consonants rather
+      // than to speech.
       orbFrame.audioTarget =
-          f >= _levels.writtenFrames ? 0.0 : _levels.levelAt(f);
+          f >= _levels.writtenFrames ? 0.0 : curvedLevel(_levels.levelAt(f));
       _levelPollFailed = false;
     }, onError: (Object e) {
       // A platform-channel hiccup must not take the orb down; the level holds

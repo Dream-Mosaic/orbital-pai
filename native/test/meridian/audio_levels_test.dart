@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/audio_levels.dart';
+import 'package:orbital_pai/meridian/orb_tuning.dart';
 
 /// Build PCM16LE mono bytes from int16 samples.
 Uint8List pcm(List<int> samples) {
@@ -30,6 +31,59 @@ void main() {
     // constant amplitude 0.1 full-scale -> rms 0.1 -> *3 = 0.3
     final s = List.filled(256, (0.1 * 32768).round());
     expect(rmsFromPcm16(pcm(s)), closeTo(0.3, 0.01));
+  });
+
+  group('curvedLevel', () {
+    test('the endpoints are fixed — silence is silence, full scale is full', () {
+      expect(curvedLevel(0.0), 0.0);
+      expect(curvedLevel(1.0), closeTo(1.0, 1e-12));
+    });
+
+    test('it LIFTS quiet detail — the whole of S2', () {
+      // Raw RMS is linear power and speech is enormously dynamic, so soft
+      // phonemes sit near the floor and never move the line. The reported
+      // symptom is a line that spikes on hard consonants while softer words
+      // barely register.
+      expect(curvedLevel(0.10), closeTo(0.1995, 0.001));
+      expect(curvedLevel(0.15), closeTo(0.2650, 0.001));
+    });
+
+    test('a loud passage is lifted much LESS than a quiet one', () {
+      // If it lifted everything equally the line would just be uniformly
+      // busy, which is a different failure and just as wrong.
+      final quietGain = curvedLevel(0.10) / 0.10;
+      final loudGain = curvedLevel(0.60) / 0.60;
+      expect(quietGain, greaterThan(loudGain * 1.5));
+    });
+
+    test('loud is still louder — order is preserved', () {
+      var prev = -1.0;
+      for (var x = 0.0; x <= 1.0; x += 0.05) {
+        final v = curvedLevel(x);
+        expect(v, greaterThan(prev));
+        prev = v;
+      }
+    });
+
+    test('it stays inside 0..1 whatever it is handed', () {
+      // drawOrbLine treats `amp` as a hard ceiling; a level above 1.0 paints
+      // the line outside the sphere.
+      expect(curvedLevel(1.5), 1.0);
+      expect(curvedLevel(-0.3), 0.0);
+    });
+
+    test('the anchor still means what it says once the curve is in front of it',
+        () {
+      // kLevelCurve and kLevelLoudAnchor overlap: both exist because playback
+      // RMS never reaches 1.0. Stacking the curve on the OLD 0.6 anchor would
+      // have saturated the shaping terms at raw 0.482 — a merely-loud 0.40
+      // reading 0.877 of full — so the anchor moved to 0.6^0.7 with it. This
+      // pins that relationship: whoever re-tunes one must re-derive the other.
+      expect(anchoredLevel(curvedLevel(0.60)), closeTo(1.0, 0.005),
+          reason: 'raw 0.6 is what the anchor calls full');
+      expect(anchoredLevel(curvedLevel(0.55)), lessThan(0.97),
+          reason: 'and it must not have saturated before it');
+    });
   });
 
   group('alphaForDt', () {
@@ -94,6 +148,35 @@ void main() {
       final s = LevelSmoother()..debugSet(0.8);
       s.reset();
       expect(s.value, 0.0);
+    });
+
+    test('a soft syllable 150ms after a loud one rises clear of its tail', () {
+      // S3. At kLevelRelease60 = 0.12 the time constant was 130ms against
+      // syllables arriving every 150-250ms, so a soft syllable landed on the
+      // decaying tail of the loud one before it and never rose above it — it
+      // was invisible, which is the reported "reacts more at the start of
+      // words". Both levels go through curvedLevel because that is what the
+      // poll feeds the smoother.
+      final loud = curvedLevel(0.40);
+      final soft = curvedLevel(0.15);
+      final s = LevelSmoother()..debugSet(loud);
+      for (var i = 0; i < 9; i++) {
+        s.update(0.0, 1 / 60); // 150ms of gap
+      }
+      final tail = s.value;
+      expect(tail, lessThan(soft * 0.5),
+          reason: 'the tail must be well clear, not merely under — a soft '
+              'syllable has to READ as a rise, not as a nudge');
+
+      s.update(soft, 1 / 60);
+      expect(s.value, greaterThan(tail),
+          reason: 'and the very next frame must already be rising');
+    });
+
+    test('release is still clearly slower than attack', () {
+      // The asymmetry is most of what makes a meter feel alive rather than
+      // merely animated; S3 raised the release and must not have collapsed it.
+      expect(kLevelRelease60, lessThan(kLevelAttack60 * 0.6));
     });
   });
 

@@ -1,8 +1,11 @@
 /// Every knob that decides how the orb *feels*, in one file.
 ///
 /// This exists so tuning is a one-file edit rather than a hunt through the DSP
-/// and the painter. Change a number here, rebuild, look at it. Nothing in this
-/// file is derived from anything else — they are all taste.
+/// and the painter. Change a number here, rebuild, look at it. Almost nothing
+/// here is derived from anything else — they are mostly taste. The one
+/// exception is [kLevelLoudAnchor], which is a raw loudness carried through
+/// [kLevelCurve]: re-tune the curve and that number must be re-derived, not
+/// re-guessed. `audio_levels_test.dart` pins the relationship.
 ///
 /// **These are deliberately NOT the orb.js values.** The web orb was the
 /// reference implementation until 2026-09-05; it is a monitor now, and the
@@ -24,10 +27,48 @@ const double kLevelAttack60 = 0.45;
 /// Lower = a longer, smoother tail after a syllable. The asymmetry between this
 /// and [kLevelAttack60] is most of what makes a meter feel alive rather than
 /// merely animated; keep release well below attack.
-const double kLevelRelease60 = 0.12;
+///
+/// 0.20, not the 0.12 this shipped with. 0.12 is a 130ms time constant, and
+/// syllables arrive every 150-250ms: a soft syllable landing on the tail of a
+/// loud one never rose above it, so it was invisible. That IS the reported
+/// "reacts more at the start of words". The arithmetic — 0.40 loud, 0.15 soft,
+/// 150ms apart, through [kLevelCurve]: the tail at 130ms is 0.527 x 0.316 =
+/// 0.167, versus a soft peak of 0.265, barely a tenth of range clear. At 0.20
+/// (75ms) the tail is 0.527 x 0.134 = 0.071 and the soft syllable stands 0.19
+/// above it.
+///
+/// Not higher. The level poll is 50ms, so 75ms is 1.5 poll periods and the
+/// release still averages across polls; 0.25 (58ms) is 1.17 of one and starts
+/// TRACING the 20Hz staircase instead of smoothing it. It also keeps the
+/// asymmetry real: 75ms against [kLevelAttack60]'s 28ms is 2.7x, where 0.25
+/// would leave 2.1x.
+///
+/// Since the phase-integration fix this changes only how the HEIGHT tracks;
+/// the line's shape follows [kLineShapeSeconds] and no longer moves with it.
+const double kLevelRelease60 = 0.20;
 
-/// The raw level treated as "full" by everything that SHAPES the orb — the
-/// line's cycle count and phase speed, and the rings' level boost.
+/// Exponent of the compressive response curve applied to the raw playback RMS
+/// before anything downstream sees it — `curvedLevel`, called once in the
+/// level poll, so amplitude, shaping, punch, halos and the ring boost all see
+/// perceptual loudness rather than linear power.
+///
+/// Below 1.0 this LIFTS quiet detail: 0.10 becomes 0.20, 0.15 becomes 0.27.
+/// RMS is linear and speech is enormously dynamic, so soft phonemes sit near
+/// the floor and simply do not register — "each noise he makes would make it
+/// react, with more noise being more reactive, softer would just be softer
+/// reactive" is a request for a perceptual curve. The sampled envelope this
+/// line replaced carried one (`kWaveCurve`); the synthetic line shipped
+/// without an equivalent, which is the whole of S2.
+///
+/// 0.70 is the exponent that old doc's worked example itself used ("a 0.3
+/// becomes 0.43"). It roughly doubles the bottom of the range while leaving the loud
+/// end clearly loudest — see the mapping on [kLevelLoudAnchor], which had to
+/// move with it.
+const double kLevelCurve = 0.70;
+
+/// The level treated as "full" by everything that SHAPES the orb — the line's
+/// cycle count and phase speed, and the rings' level boost. In CURVED units:
+/// what reaches `anchoredLevel` has already been through [kLevelCurve].
 ///
 /// **Deliberate deviation from the spec, which asked for a scalar AGC.** The
 /// `AutoGain` this replaced tracked a decaying peak to normalise a *mic*
@@ -38,16 +79,28 @@ const double kLevelRelease60 = 0.12;
 /// anchor keeps the relationship between a mumble and a shout.
 ///
 /// The number: speech RMS on normalised PCM runs ~0.05-0.25, and
-/// `rmsFromPcm16` applies a x3 gain, so the smoothed level lives around
-/// 0.15-0.6 and essentially never reaches 1.0. Anchoring the shaping terms at
-/// 1.0 (as they were) meant the line topped out near 3-4 of its 5.5 cycles and
-/// read calmer than it was drawn to.
+/// `rmsFromPcm16` applies a x3 gain, so the RAW level lives around 0.15-0.6
+/// and essentially never reaches 1.0. Anchoring the shaping terms at 1.0 (as
+/// they were) meant the line topped out near 3-4 of its 5.5 cycles and read
+/// calmer than it was drawn to.
 ///
 /// **This is the first knob to reach for on device**: if the line reads too
 /// calm, lower it; too frantic, raise it. AMPLITUDE deliberately does NOT go
 /// through it — a genuinely loud passage should still be able to reach full
 /// height rather than saturating early.
-const double kLevelLoudAnchor = 0.6;
+///
+/// 0.70, not the 0.6 this shipped with, and the change is bookkeeping rather
+/// than taste: the level reaching `anchoredLevel` is now CURVED, and 0.6 raw
+/// through [kLevelCurve] is 0.6^0.7 = 0.699. Anchoring at 0.70 therefore
+/// leaves this constant meaning exactly what it always meant — raw 0.6 reads
+/// as full — with saturation still landing at raw 0.601.
+///
+/// Stacking the curve on the OLD 0.6 would have been the trap: shaping would
+/// have saturated at raw 0.482, putting a merely-loud 0.40 at 0.877 of full
+/// and 4.97 of 5.5 cycles. The line would have been near-maximally busy for
+/// most of every sentence — a different failure from the one S2 fixes, and
+/// just as wrong.
+const double kLevelLoudAnchor = 0.70;
 
 // ---------------------------------------------------------------------------
 // Line render.
@@ -55,7 +108,15 @@ const double kLevelLoudAnchor = 0.6;
 
 /// Half-height of the line at full scale, as a fraction of the sphere radius.
 /// The line is mirrored about its centre, so the drawn band is twice this.
-const double kWaveAmp = 0.34;
+///
+/// 0.42, not the 0.34 this shipped with — "more dramatic when he's talking".
+/// Raising it cannot push the line out of the glass: the line's farthest point
+/// from the sphere's centre is at its ENDS, where the `sin(f * pi)` taper is
+/// zero and the distance is `sqrt(0.72^2 + 0.06^2) = 0.72r` whatever this is
+/// set to. The centre excursion, which this does scale, reaches 0.06r + 0.42r
+/// = 0.48r — well inside both the fallback painter's clip and the shader's
+/// silhouette.
+const double kWaveAmp = 0.42;
 
 /// Fill opacity of the line's body at its widest.
 const double kWaveFillAlpha = 0.34;

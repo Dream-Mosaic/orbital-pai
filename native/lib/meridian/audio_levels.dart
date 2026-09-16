@@ -39,6 +39,30 @@ double rmsFromPcm16(Uint8List pcm) {
 double anchoredLevel(double level) =>
     (level / kLevelLoudAnchor).clamp(0.0, 1.0);
 
+/// Perceptual response curve on the RAW playback RMS, applied once — in the
+/// level poll, on its way into `OrbFrame.audioTarget` — so that everything
+/// downstream (amplitude, the shaping anchor, the transient detector, the
+/// halos, the ring boost) sees loudness as it is heard rather than as it is
+/// measured.
+///
+/// RMS is linear power; hearing is not, and speech spans a huge range, so soft
+/// phonemes sit near the floor and never move the line. [kLevelCurve] < 1
+/// lifts them: 0.10 becomes 0.20, 0.15 becomes 0.27, while 0.60 becomes only
+/// 0.70 — quiet detail rises much further than loud detail does, which is what
+/// "softer would just be softer reactive" asks for without flattening the
+/// difference between a mumble and a shout.
+///
+/// Distinct from [anchoredLevel] and composed with it, not instead of it: this
+/// reshapes the RANGE, the anchor rescales it for the terms that shape the orb.
+/// Both exist because playback RMS never reaches 1.0, so they were re-derived
+/// together — see [kLevelLoudAnchor].
+///
+/// The clamp is load-bearing. `drawOrbLine` treats `amp` as a hard ceiling and
+/// `orb_line_test.dart` asserts the line never exceeds it; a level above 1.0
+/// would paint outside the sphere.
+double curvedLevel(double level) =>
+    math.pow(level.clamp(0.0, 1.0), kLevelCurve).toDouble();
+
 /// Re-express a per-frame-at-60Hz smoothing coefficient for an actual frame
 /// duration.
 ///

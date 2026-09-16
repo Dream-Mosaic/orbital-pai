@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/meridian/orb_line.dart';
+import 'package:orbital_pai/meridian/orb_tuning.dart';
 
 class RecordingCanvas implements Canvas {
   final List<String> ops = <String>[];
@@ -117,5 +118,40 @@ void main() {
   test('never exceeds amp', () {
     // amp is a hard half-height; overshoot paints outside the sphere.
     expect(height(draw(level: 1.0, amp: 30)), lessThanOrEqualTo(60.01));
+  });
+
+  test('at the REAL kWaveAmp the line stays inside the sphere', () {
+    // S4 raised kWaveAmp from 0.34 to 0.42 for "more dramatic when he's
+    // talking". The shader painter draws the line UNCLIPPED on the argument
+    // that its reach stays inside the silhouette, so that argument has to be
+    // checked against the constant rather than asserted in a comment. Both
+    // painters pass exactly these arguments (cy + r*0.06, halfW r*0.72,
+    // amp r*kWaveAmp), so this is the production geometry.
+    const r = 90.0;
+    const cx = 150.0, cy = 150.0;
+    final c = RecordingCanvas();
+    drawOrbLine(c,
+        level: 1.0,
+        shapeLevel: 1.0,
+        presence: 1.0,
+        phase: 0.0,
+        color: const Color(0xFF6EE7B7),
+        cx: cx,
+        cy: cy + r * 0.06,
+        halfW: r * 0.72,
+        amp: r * kWaveAmp);
+
+    // The stroke is 2px wide and blurred by 4, so leave the silhouette that
+    // much room; the point is that the PATH is nowhere near the edge.
+    const margin = 2.0 / 2 + 4.0;
+    final metric = c.paths.first.computeMetrics().first;
+    var worst = 0.0;
+    for (var i = 0; i <= 400; i++) {
+      final p = metric.getTangentForOffset(metric.length * i / 400)!.position;
+      final d = (p - const Offset(cx, cy)).distance;
+      if (d > worst) worst = d;
+    }
+    expect(worst, lessThanOrEqualTo(r - margin),
+        reason: 'the line paints outside the glass');
   });
 }
