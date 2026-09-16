@@ -78,6 +78,22 @@ const double kPunchGlow = 0.9;
 /// than a cut, because the state can flip several times in a turn.
 const double kLinePresenceSeconds = 0.22;
 
+/// Below this, the line is not drawn at all.
+///
+/// Presence decays GEOMETRICALLY, so it asymptotes and never actually reaches
+/// zero except on `off` (which assigns it). A `presence > 0` gate therefore
+/// never closes: in idle/ambient/listening the Ticker is still running — it
+/// stops only for `off` — so both painters would go on allocating 192 offsets,
+/// building a ~190-segment path and stroking a blurred gradient every frame,
+/// forever, at an alpha that rounds to invisible. On a 24/7 wall device that is
+/// exactly the waste the stopped ticker exists to avoid.
+///
+/// This does NOT clip the fade-IN, which is the reason the gate is on presence
+/// rather than on the state: one frame of fade-in already puts presence at
+/// ~0.203, two orders of magnitude above this. Fading OUT, half a second (the
+/// full fade plus margin) lands at ~0.0011, comfortably under it.
+const double kLinePresenceEpsilon = 0.002;
+
 // ---------------------------------------------------------------------------
 // The line's shape.
 // ---------------------------------------------------------------------------

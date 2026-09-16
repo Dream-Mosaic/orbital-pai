@@ -167,7 +167,7 @@ const Alignment kSpecularGradientCenter = Alignment(-0.0144, -0.2394);
 /// its job is to look like the app on a device where something has already
 /// gone wrong. Do not tune it, and do not extend it: changes belong in
 /// `shaders/orb.frag`. It keeps the orb's only golden
-/// (`test/meridian/goldens/orb_listening.png`), because a golden over
+/// (`test/meridian/goldens/orb_speaking.png`), because a golden over
 /// shader-painted content hangs the test harness — see the spec's spike table.
 ///
 /// The line is NOT frozen: it comes from the shared `drawOrbLine`, so both
@@ -284,8 +284,10 @@ class OrbPainter extends CustomPainter {
     // --- 4. the living line (inside the clip) ---
     // Gated on PRESENCE, not on the state: presence already IS the state rule
     // (thinking + speaking, faded), and gating on the state as well would cut
-    // the fade off at its first frame so it would never be seen.
-    if (frame.presence > 0) {
+    // the fade off at its first frame so it would never be seen. The epsilon
+    // is what CLOSES the gate — presence asymptotes and never reaches zero, so
+    // `> 0` would keep building a path forever. See kLinePresenceEpsilon.
+    if (frame.presence > kLinePresenceEpsilon) {
       drawOrbLine(
         canvas,
         level: frame.level,

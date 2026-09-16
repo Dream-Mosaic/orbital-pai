@@ -257,7 +257,14 @@ void main() {
 
         f.state = s;
         run(f, 0.5);
-        expect(f.presence, lessThan(0.05), reason: '$s must hide the line');
+        // Not merely "approaches zero" — it must clear the painters' GATE.
+        // Presence decays geometrically and so never reaches zero on its own
+        // (only `off` assigns it); if a realistic fade-out does not get under
+        // kLinePresenceEpsilon, both painters keep building a ~190-segment
+        // path every frame, invisibly, for as long as the Ticker runs.
+        expect(f.presence, lessThanOrEqualTo(kLinePresenceEpsilon),
+            reason: '$s must hide the line, and close the gate that stops it '
+                'being drawn at all');
         f.dispose();
       }
     });

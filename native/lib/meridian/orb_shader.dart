@@ -109,8 +109,10 @@ class OrbShaderPainter extends CustomPainter {
     // painter uses so the two cannot diverge.
     // Gated on PRESENCE, not on the state: presence already IS the state rule
     // (thinking + speaking, faded), and gating on the state as well would cut
-    // the fade off at its first frame so it would never be seen.
-    if (frame.presence <= 0) return;
+    // the fade off at its first frame so it would never be seen. The epsilon
+    // is what CLOSES the gate — presence asymptotes and never reaches zero, so
+    // `> 0` would keep building a path forever. See kLinePresenceEpsilon.
+    if (frame.presence <= kLinePresenceEpsilon) return;
 
     // Must match orb.frag's `breathe` and orb_painter.dart's `r` EXACTLY: the
     // wave sits on the sphere's surface, so a wave computed against the

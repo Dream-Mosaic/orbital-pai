@@ -95,6 +95,19 @@ void main() {
     expect(a == b, isFalse);
   });
 
+  test('a silent line still has height — kLineRestAmp', () {
+    // `thinking` has no audio at all, and a mid-utterance tool round drops the
+    // level to nothing while Henry is still legitimately speaking. A purely
+    // level-driven line would be flat and dead in exactly those moments, which
+    // is the whole reason for the rest floor. Without this assertion
+    // kLineRestAmp can be set to 0 and the entire file still passes: every
+    // other test here either draws at a nonzero level or only counts paths,
+    // and a perfectly flat line is still two drawPath calls.
+    expect(height(draw(level: 0.0)), greaterThan(0.0),
+        reason: 'kLineRestAmp — thinking has no audio and must still show a '
+            'living line');
+  });
+
   test('never exceeds amp', () {
     // amp is a hard half-height; overshoot paints outside the sphere.
     expect(height(draw(level: 1.0, amp: 30)), lessThanOrEqualTo(60.01));
