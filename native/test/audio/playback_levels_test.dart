@@ -64,6 +64,13 @@ void main() {
     expect(l.levelAt(50), 0.0);
   });
 
+  test('the retained window is five minutes by default', () {
+    // Every other test here passes its own `retainFrames`, so a revert of the
+    // DEFAULT alone would go unnoticed — and the default is the whole of C1's
+    // second half. Thirty seconds was overtaken ~15s into a k=3 answer.
+    expect(PlaybackLevels().retainFrames, 24000 * 300);
+  });
+
   test('eviction does not outrun the playback head on a long answer', () {
     // C1. Eviction is measured back from ARRIVAL; lookups come from the
     // PLAYBACK HEAD, which trails it by however much faster than realtime the

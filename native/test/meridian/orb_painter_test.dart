@@ -220,8 +220,8 @@ void main() {
   /// halos without drawing a line.
   ///
   /// It drives `audioTarget` BY HAND because nothing does so in production:
-  /// the playback poll is the field's only writer, it runs only while
-  /// `speaking`, and it zeroes the target on the way out. So this asserts the
+  /// the playback poll is the field's only source of a non-zero value, it runs
+  /// only while `speaking`, and it zeroes the target on the way out. So this asserts the
   /// mechanism is present and reachable, NOT a behaviour you can see on a
   /// device today — where the level decays to zero through `listening`.
   test('listening is REACTIVE IN SHAPE — a level fed here moves the halos',

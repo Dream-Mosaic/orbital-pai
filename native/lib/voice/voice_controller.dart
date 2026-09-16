@@ -1004,7 +1004,11 @@ class VoiceController extends ChangeNotifier {
   /// The frame the previous poll read, and how many polls in a row have read
   /// that same frame with nothing left unplayed. See [_pollPlaybackLevel].
   /// `-1` is "no previous poll" — a real head position is never negative, so
-  /// the first poll of a run can never look like a stalled one.
+  /// the very first poll of the process can never look like a stalled one.
+  ///
+  /// Both SURVIVE the end of an utterance on purpose; see the note in
+  /// [_syncLevelPoll]. They describe the player, which does not reset at a
+  /// turn boundary, not the turn.
   int _lastPolledFrame = -1;
   int _drainedPolls = 0;
 
@@ -1063,16 +1067,27 @@ class VoiceController extends ChangeNotifier {
     if (!wanted) {
       _levelTimer?.cancel();
       _levelTimer = null;
-      // The poll is now the ONLY writer of `audioTarget` — the mic listener
-      // stopped feeding it when the level moved playback-side. `_reactive`
-      // still includes `listening`, so `advance()` keeps targeting whatever
-      // was left here: without this line the smoother parks on Henry's last
-      // playback loudness for the whole time the user is talking (halos
-      // flared, glow wide, sphere swollen), and a barge-in straight to
-      // `listening` inherits the abandoned turn's level.
+      // The poll is now the only source of a NON-ZERO `audioTarget` — the mic
+      // listener stopped feeding it when the level moved playback-side, and
+      // the mic-teardown paths only ever zero it. `_reactive` still includes
+      // `listening`, so `advance()` keeps targeting whatever was left here:
+      // without this line the smoother parks on Henry's last playback loudness
+      // for the whole time the user is talking (halos flared, glow wide,
+      // sphere swollen), and a barge-in straight to `listening` inherits the
+      // abandoned turn's level.
+      //
+      // The drain accounting is deliberately NOT reset here. `_levels` is not
+      // reset across a normal turn boundary (only `_handleStopPlayback` resets
+      // it) and the head stays parked at the end of the last answer, so at the
+      // next `speak_start` the queue genuinely still IS drained — carrying the
+      // count is the true reading. Resetting it made the new run's first poll
+      // take the not-drained path and write `levelAt(head)`, i.e. the PREVIOUS
+      // answer's last-syllable RMS: a full halo flare and a punch (the
+      // transient is fed the raw target) the moment he started answering,
+      // worst on the wake-ack path where `speak_start` precedes the audio by
+      // several hundred ms. Held at 0, the next run lifts off zero only when
+      // real audio arrives and grows `writtenFrames`.
       orbFrame.audioTarget = 0.0;
-      _lastPolledFrame = -1;
-      _drainedPolls = 0;
       return;
     }
     _levelTimer ??=

@@ -85,9 +85,10 @@ class OrbFrame extends ChangeNotifier {
   /// level would plug straight in and pulse the halos without ever drawing a
   /// line (the live transcript is what you are reading while you talk).
   ///
-  /// But today nothing feeds it there. [audioTarget]'s only writer is the
-  /// playback-clock poll, which runs only while `speaking` and zeroes the
-  /// target when it stops — so in production the level simply DECAYS TO ZERO
+  /// But today nothing feeds it there. The only source of a NON-ZERO
+  /// [audioTarget] is the playback-clock poll, which runs only while
+  /// `speaking` and zeroes the target when it stops (the mic-teardown paths
+  /// write it too, but only ever zero) — so in production the level simply DECAYS TO ZERO
   /// through `listening`, and that is the intended behaviour, not a gap. Keep
   /// this wide anyway: narrowing it to `speaking` would delete the seam a
   /// mic-driven source needs.
@@ -105,9 +106,9 @@ class OrbFrame extends ChangeNotifier {
           kRingSpeedSpeaking + _smoother.value * kRingSpeedLevelBoost,
       };
 
-  /// Raw loudness in (0..1). Set from the playback-clock poll — its ONLY
-  /// writer — which looks this up by the frame actually leaving the speaker,
-  /// not by chunk arrival (TTS audio arrives far faster than it plays). The
+  /// Raw loudness in (0..1). Set from the playback-clock poll — the only
+  /// source of a non-zero value here — which looks it up by the frame actually
+  /// leaving the speaker, not by chunk arrival (TTS audio arrives far faster than it plays). The
   /// mic listener no longer writes this at all, and the poll zeroes it when it
   /// stops, so every non-`speaking` state decays from 0 rather than parking on
   /// the last thing heard. Smoothed per FRAME by [advance] so the response is

@@ -106,8 +106,9 @@ void main() {
 
     // Leaving speaking does TWO things, and both matter.
     //
-    // It zeroes the target: the poll is the only writer of `audioTarget` and
-    // `OrbFrame._reactive` still includes `listening`, so a target left behind
+    // It zeroes the target: the poll is the only source of a non-zero
+    // `audioTarget` and `OrbFrame._reactive` still includes `listening`, so a
+    // target left behind
     // would park the smoother on Henry's last playback loudness for the whole
     // time the user is talking.
     //
@@ -185,6 +186,89 @@ void main() {
     player.playedFramesValue = 1200;
     await poll();
     expect(target(), greaterThan(0.0));
+    c.dispose();
+  });
+
+  testWidgets('a new answer does not flare on the last one\'s loudness',
+      (tester) async {
+    // H1, introduced by the C2 fix rather than pre-existing. `_levels` is NOT
+    // reset at a normal turn boundary — only `_handleStopPlayback` resets it —
+    // and `playbackHeadPosition` stays parked at the end of the last answer.
+    // So the first poll of the NEXT answer looks up `levelAt(head)` and gets
+    // the previous answer's last-syllable RMS. Before C2 the target was
+    // already sitting at that value and the write was a no-op; now the level
+    // correctly rests at 0 through `listening`, so the same write is a jump
+    // from 0 to near-full — a halo flare and, since `_transient` is fed the
+    // RAW target, a punch with it. Worst on the wake-ack path, where
+    // `speak_start` arrives several hundred ms before any audio.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+
+    Future<void> poll() => tester.pump(const Duration(milliseconds: 50));
+    double target() => c.orbFrame.debugAudioTarget;
+
+    // Turn one, played to the end and left to drain.
+    c.debugApplyEvent('speaking');
+    c.debugHandleAudio(tone(1000, 0.9));
+    player.playedFramesValue = 1000;
+    for (var i = 0; i < 6; i++) {
+      await poll();
+    }
+    expect(target(), 0.0, reason: 'sanity: turn one drained');
+
+    // Back to the user, then turn two begins. NO flush: this is an ordinary
+    // turn boundary, so the index still holds turn one's spans and the head
+    // is still parked at 1000.
+    c.debugApplyEvent('listening');
+    c.debugApplyEvent('speaking');
+    await poll();
+    expect(target(), 0.0,
+        reason: 'the first poll of a new answer must not resurrect the '
+            'previous answer\'s last-syllable loudness');
+
+    // Four more polls with still no audio — the whole window in which the
+    // reset version kept writing the stale value while its counter climbed.
+    for (var i = 0; i < 4; i++) {
+      await poll();
+      expect(target(), 0.0);
+    }
+
+    // And the real audio of turn two lifts it, immediately: the new span
+    // starts exactly at the parked head, so `levelAt(head)` is turn two's own
+    // loudness, not turn one's.
+    c.debugHandleAudio(tone(1000, 0.4));
+    await poll();
+    expect(target(), greaterThan(0.0));
+    c.dispose();
+  });
+
+  testWidgets('a barge-in flush leaves nothing for the next poll to read',
+      (tester) async {
+    // The other half of H1's reasoning, asserted rather than assumed: the
+    // drain counters now survive a turn boundary, so the flush path must not
+    // depend on them. It does not — `_handleStopPlayback` resets `_levels`, so
+    // `levelAt` has no span to return whatever the counters hold, and
+    // AudioTrack's flush takes the head back to 0 in step with it.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+    c.debugHandleAudio(tone(1000, 0.9));
+
+    player.playedFramesValue = 400; // mid-utterance: NOT drained, counters 0
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(c.orbFrame.debugAudioTarget, greaterThan(0.0));
+
+    c.debugHandleMessage(
+        const DecodedMessage(topic: 'voice:henry', event: 'stop_playback'));
+    player.playedFramesValue = 0; // AudioTrack.flush() resets the head
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(c.orbFrame.debugAudioTarget, 0.0,
+        reason: 'a barge-in must not leave the abandoned turn audible in the '
+            'orb, counters or no counters');
     c.dispose();
   });
 
