@@ -138,7 +138,8 @@ void main() {
     // the orb would sit at the last syllable's loudness, then jump when audio
     // resumes. The hold cannot expire itself — `playbackHeadPosition` settles
     // AT the written frame count rather than running past it, so no frame-delta
-    // inside that pure, clockless class can ever grow. The poll times it out.
+    // inside that pure, clockless class can ever grow. The poll short-circuits
+    // it instead, on the one reading that settles the question.
     //
     // `testWidgets`, so the 50ms periodic poll is driven by the fake clock:
     // one tick per pump, exactly, instead of racing wall-clock delays against
@@ -162,24 +163,15 @@ void main() {
           reason: 'a normal utterance must never trip the drain timeout');
     }
 
-    // The head reaches the end of everything written and stops there. For the
-    // first few polls the hold is still correct — this is exactly the skew
-    // window it was written for — so the level must NOT drop yet.
+    // The head reaches the end of everything written. That is conclusive on
+    // the FIRST poll — no grace period: `writtenFrames` is an upper bound the
+    // head cannot pass, so equality means the track and the Kotlin queue are
+    // both empty and nothing is being heard.
     player.playedFramesValue = 1000;
-    await poll(); // first sighting at 1000: the frame still MOVED this tick
-    for (var i = 0; i < 3; i++) {
-      await poll();
-      expect(target(), greaterThan(0.0),
-          reason: 'the hold must survive the poll/arrival skew it exists for');
-    }
-
-    // Past ~250ms of a stalled head with nothing left unplayed, it is not skew:
-    // the queue has drained and nothing is being heard.
-    await poll();
     await poll();
     expect(target(), 0.0,
-        reason: 'a drained queue must settle the orb, not hold the last '
-            'syllable for the length of a tool round');
+        reason: 'a drained queue must settle the orb on the very next poll, '
+            'not hold the last syllable for the length of a tool round');
 
     // Audio resuming picks it straight back up — the timeout is not sticky.
     c.debugHandleAudio(tone(1000, 0.9));
@@ -191,16 +183,22 @@ void main() {
 
   testWidgets('a new answer does not flare on the last one\'s loudness',
       (tester) async {
-    // H1, introduced by the C2 fix rather than pre-existing. `_levels` is NOT
-    // reset at a normal turn boundary — only `_handleStopPlayback` resets it —
-    // and `playbackHeadPosition` stays parked at the end of the last answer.
-    // So the first poll of the NEXT answer looks up `levelAt(head)` and gets
-    // the previous answer's last-syllable RMS. Before C2 the target was
-    // already sitting at that value and the write was a no-op; now the level
-    // correctly rests at 0 through `listening`, so the same write is a jump
-    // from 0 to near-full — a halo flare and, since `_transient` is fed the
-    // RAW target, a punch with it. Worst on the wake-ack path, where
-    // `speak_start` arrives several hundred ms before any audio.
+    // H1/H-F. `_levels` is NOT reset at a normal turn boundary — only
+    // `_handleStopPlayback` resets it — and `playbackHeadPosition` stays parked
+    // at the end of the last answer. So the first poll of the NEXT answer looks
+    // up `levelAt(head)`, lands in the hold-past-end branch, and gets the
+    // previous answer's last-syllable RMS. The transient is fed the RAW target,
+    // so that is a near-full halo flare AND a punch the moment he starts
+    // answering — worst on the wake-ack path, where `speak_start` precedes the
+    // audio by several hundred ms.
+    //
+    // Turn one ends here the way PRODUCTION ends it: the head reaches
+    // `writtenFrames` and the server pushes `listening` right behind it. An
+    // earlier version of this test manufactured six flat polls first, which
+    // the real system does not provide — the server arms `:drained` at
+    // `audio_until + jitter_buffer_ms` and `jitter_buffer_ms` is 150ms, so
+    // barely three 50ms polls fit before the state leaves `speaking`. Polling
+    // ONCE after re-entry is the honest precondition.
     final player = FakePlayer();
     final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
     c.debugSetPlayerReady();
@@ -209,18 +207,15 @@ void main() {
     Future<void> poll() => tester.pump(const Duration(milliseconds: 50));
     double target() => c.orbFrame.debugAudioTarget;
 
-    // Turn one, played to the end and left to drain.
+    // Turn one, played to its end.
     c.debugApplyEvent('speaking');
     c.debugHandleAudio(tone(1000, 0.9));
     player.playedFramesValue = 1000;
-    for (var i = 0; i < 6; i++) {
-      await poll();
-    }
-    expect(target(), 0.0, reason: 'sanity: turn one drained');
+    await poll();
 
-    // Back to the user, then turn two begins. NO flush: this is an ordinary
-    // turn boundary, so the index still holds turn one's spans and the head
-    // is still parked at 1000.
+    // Straight back to the user, then turn two begins. NO flush: an ordinary
+    // turn boundary, so the index still holds turn one's spans and the head is
+    // still parked at 1000.
     c.debugApplyEvent('listening');
     c.debugApplyEvent('speaking');
     await poll();
@@ -228,19 +223,37 @@ void main() {
         reason: 'the first poll of a new answer must not resurrect the '
             'previous answer\'s last-syllable loudness');
 
-    // Four more polls with still no audio — the whole window in which the
-    // reset version kept writing the stale value while its counter climbed.
-    for (var i = 0; i < 4; i++) {
-      await poll();
-      expect(target(), 0.0);
-    }
-
-    // And the real audio of turn two lifts it, immediately: the new span
-    // starts exactly at the parked head, so `levelAt(head)` is turn two's own
+    // And turn two's real audio lifts it immediately: the new span starts
+    // exactly at the parked head, so `levelAt(head)` is turn two's own
     // loudness, not turn one's.
     c.debugHandleAudio(tone(1000, 0.4));
     await poll();
     expect(target(), greaterThan(0.0));
+    c.dispose();
+  });
+
+  testWidgets('a stalled socket mid-utterance does not blank the line',
+      (tester) async {
+    // The other side of H-F. Dropping the repetition check means one reading
+    // decides it, so that reading has to be the RIGHT one: "nothing left to
+    // hear", never "nothing arrived lately". Audio that has been written but
+    // not yet played is still audio — a stalled socket, a slow tool round
+    // mid-stream, a Kotlin writer thread behind its queue — and the head being
+    // flat through all of it must not blank the line.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+    c.debugHandleAudio(tone(4000, 0.9)); // a good buffer still unplayed
+
+    player.playedFramesValue = 1000; // head well short of writtenFrames
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(c.orbFrame.debugAudioTarget, greaterThan(0.0),
+          reason: 'poll ${i + 1}: the head is flat but 3000 frames are still '
+              'queued — the orb must keep showing what is being heard');
+    }
     c.dispose();
   });
 

@@ -1001,23 +1001,6 @@ class VoiceController extends ChangeNotifier {
   /// success, so a later, separate failure run logs again.
   bool _levelPollFailed = false;
 
-  /// The frame the previous poll read, and how many polls in a row have read
-  /// that same frame with nothing left unplayed. See [_pollPlaybackLevel].
-  /// `-1` is "no previous poll" — a real head position is never negative, so
-  /// the very first poll of the process can never look like a stalled one.
-  ///
-  /// Both SURVIVE the end of an utterance on purpose; see the note in
-  /// [_syncLevelPoll]. They describe the player, which does not reset at a
-  /// turn boundary, not the turn.
-  int _lastPolledFrame = -1;
-  int _drainedPolls = 0;
-
-  /// How long the head must sit still at the end of everything written before
-  /// the level is called silence: 5 polls x 50ms = 250ms. Long enough that the
-  /// ordinary 50-200ms of poll/arrival skew never trips it, short enough that
-  /// a tool round does not leave the orb holding the last syllable.
-  static const int _drainedPollsToSilence = 5;
-
   /// playedFrames(), never playedMs(): playedMs re-anchors per run and this
   /// consumer does not.
   Future<void> _pollPlaybackLevel() {
@@ -1030,22 +1013,31 @@ class VoiceController extends ChangeNotifier {
     // from `playedFrames()` itself.
     return _player.playedFrames().then((f) {
       if (_disposed) return;
-      // Has the queue genuinely DRAINED? Two things must hold together: the
-      // head has not moved since the last poll, and there is nothing left
-      // unplayed for it to move onto. `PlaybackLevels.levelAt` holds the last
-      // chunk's loudness past the end of the index — right for the poll/
-      // arrival skew it was written for, wrong for a tool round, where the
-      // queue empties for seconds and the orb would otherwise sit at the last
-      // syllable's loudness and then jump when audio resumes. The hold cannot
-      // expire itself: `playbackHeadPosition` SETTLES at the written frame
-      // count rather than running past it, so no frame-delta inside that pure
-      // class can ever grow. The poll has a clock; the timeout lives here.
-      final drained = f == _lastPolledFrame && f >= _levels.writtenFrames;
-      _drainedPolls = drained ? _drainedPolls + 1 : 0;
-      _lastPolledFrame = f;
-      orbFrame.audioTarget = _drainedPolls >= _drainedPollsToSilence
-          ? 0.0
-          : _levels.levelAt(f);
+      // Nothing left to hear? Then the level is zero, immediately — no grace
+      // period, no repetition check.
+      //
+      // `f >= writtenFrames` is CONCLUSIVE on its own. `_levels.add(pcm)` and
+      // `_player.write(pcm)` run together under one `_playerReady` gate, and
+      // `write` only enqueues — the Kotlin writer thread feeds AudioTrack from
+      // that queue afterwards. So `writtenFrames` is an upper bound the head
+      // can never pass, and equality means the track AND the queue are empty.
+      //
+      // This replaces `PlaybackLevels.levelAt`'s hold-past-end for this
+      // caller. That hold is right as a pure function — playback and arrival
+      // are independent, and a lookup a little past the index should not
+      // flicker — but wrong as the orb's behaviour across a tool round, where
+      // the queue empties for seconds and the orb would sit at the last
+      // syllable and then jump when audio resumes.
+      //
+      // An earlier version required the head to ALSO be unmoved for five
+      // consecutive polls (250ms). That silently coupled the orb to the
+      // server's `jitter_buffer_ms` (150ms, `app/config.ex`): `listening`
+      // arrives and cancels the poll before five flat polls can accumulate,
+      // so the count never completed and the next turn's first poll fell
+      // through to the stale hold. One reading is enough; the hardware cannot
+      // lie in the unsafe direction.
+      orbFrame.audioTarget =
+          f >= _levels.writtenFrames ? 0.0 : _levels.levelAt(f);
       _levelPollFailed = false;
     }, onError: (Object e) {
       // A platform-channel hiccup must not take the orb down; the level holds
@@ -1075,18 +1067,6 @@ class VoiceController extends ChangeNotifier {
       // for the whole time the user is talking (halos flared, glow wide,
       // sphere swollen), and a barge-in straight to `listening` inherits the
       // abandoned turn's level.
-      //
-      // The drain accounting is deliberately NOT reset here. `_levels` is not
-      // reset across a normal turn boundary (only `_handleStopPlayback` resets
-      // it) and the head stays parked at the end of the last answer, so at the
-      // next `speak_start` the queue genuinely still IS drained — carrying the
-      // count is the true reading. Resetting it made the new run's first poll
-      // take the not-drained path and write `levelAt(head)`, i.e. the PREVIOUS
-      // answer's last-syllable RMS: a full halo flare and a punch (the
-      // transient is fed the raw target) the moment he started answering,
-      // worst on the wake-ack path where `speak_start` precedes the audio by
-      // several hundred ms. Held at 0, the next run lifts off zero only when
-      // real audio arrives and grows `writtenFrames`.
       orbFrame.audioTarget = 0.0;
       return;
     }
