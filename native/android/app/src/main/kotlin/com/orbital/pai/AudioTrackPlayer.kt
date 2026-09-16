@@ -22,8 +22,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 /// position relative to the current run's start. A run ends on stopAndFlush()
 /// (barge-in) or when the queue drains and the head catches up (natural end).
 ///
-/// Note: AudioTrack.playbackHeadPosition wraps at 2^31 frames (~24.8 h at
-/// 24 kHz) — fine for a spike; documented here rather than guarded.
+/// Note: AudioTrack.playbackHeadPosition is a SIGNED Int and wraps at 2^31
+/// frames (~24.8 h at 24 kHz) — documented here rather than guarded.
+///
+/// What a wrap would do, so whoever meets it is not left guessing. The head
+/// goes NEGATIVE, and both of the orb's uses of playedFrames() fail quietly in
+/// the same direction: the Dart poll's drain test `f >= writtenFrames` is
+/// false forever, and `PlaybackLevels.levelAt(f)` returns 0 through its
+/// before-first branch. The orb's line therefore parks at its rest amplitude
+/// and stops tracking speech — no error, no log line, just a line that never
+/// moves again. (playedMs() is unaffected: it is run-relative and clamped.)
+///
+/// Why it stays a known cliff rather than a bug. The counter measures
+/// CUMULATIVE PLAYED AUDIO since the last flush(), not uptime, and every
+/// barge-in calls stopAndFlush() — which resets it. 24.8 h of Henry actually
+/// talking, uninterrupted by a single barge-in, is months of real use. If it
+/// is ever worth guarding, the fix is to detect the wrap here (a head that
+/// went backwards without a flush) rather than to widen the Dart type: the
+/// Int is the platform's.
 class AudioTrackPlayer(messenger: BinaryMessenger, private val context: Context) :
     MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, "henry/audio_track")

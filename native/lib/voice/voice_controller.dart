@@ -1089,6 +1089,15 @@ class VoiceController extends ChangeNotifier {
       // cannot drift. See kLevelCurve — without it, soft syllables sit near
       // the floor and the line reads as reacting to hard consonants rather
       // than to speech.
+      // `f` is Android's playbackHeadPosition, a SIGNED Int that wraps at
+      // 2^31 frames — ~24.8 h of CUMULATIVE PLAYED AUDIO since the last
+      // flush(), not of uptime. Past a wrap it goes negative and both branches
+      // here fail silently in the same direction: `f >= writtenFrames` is
+      // false forever, and `levelAt(f)` returns 0 via its before-first branch,
+      // so the orb's line parks at its rest amplitude and never tracks speech
+      // again. Deliberately NOT guarded: any barge-in flushes and resets the
+      // counter, and 24.8 h of uninterrupted speaking is months of real use.
+      // A known cliff, not a live bug — see the note in AudioTrackPlayer.kt.
       orbFrame.audioTarget =
           f >= _levels.writtenFrames ? 0.0 : curvedLevel(_levels.levelAt(f));
       _levelPollFailed = false;
