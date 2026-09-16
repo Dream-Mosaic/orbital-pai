@@ -304,4 +304,64 @@ void main() {
     vc.setAllowInterruptions(true);
     expect(vc.abiEnabled, isTrue);
   });
+
+  test('a brain that finishes before the reflex is spoken renders its answer ONCE', () {
+    // The prod sequence (conversation.ex + policy.ex), reconstructed:
+    //
+    //   endpoint            -> phase :awaiting_reflex, reflex + brain start together
+    //   {:brain_text, _}    -> HELD in caption_buffer (reflex_sent == false), nothing pushed
+    //   {:brain_done, text} -> conversation.ex:723 pushes speak_start(brain) RIGHT NOW, because
+    //                          its only guard is `phase != :listening`; Policy (policy.ex:82)
+    //                          just records brain_done and leaves the phase alone
+    //   {:reflex_ready, _}  -> speak_reflex -> speak_start(reflex)  << the LATE reflex
+    //   reflex first audio  -> metrics(ttfa), then feed(:reflex_sent) -> :draining
+    //   :flush_brain        -> pushes the WHOLE held caption_buffer as one brain_delta
+    //                          -> the same answer a second time
+    //   brain first audio   -> metrics(ttfa, ttb), updated in place
+    //
+    // ttfa == ttb in the report's screenshot precisely because the brain audio is flushed in
+    // the same breath as the reflex's first chunk.
+    const answer =
+        "Appreciate the thought. Systems are humming along fine, so I'm good to go whenever you are.";
+
+    vc.debugHandleMessage(msg('transcript', const {'text': 'hope you are doing well'}));
+    // brain_done beats the reflex: the final answer is pushed before the filler.
+    vc.debugHandleMessage(msg('speak_start', const {'source': 'brain', 'text': answer}));
+    vc.debugHandleMessage(
+        msg('speak_start', const {'source': 'reflex', 'text': '...Touching.'}));
+    vc.debugHandleMessage(msg('metrics', const {'ttfa': 4100, 'ttb': null}));
+    // :flush_brain releases the held caption — the identical text, a second time.
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': answer}));
+    vc.debugHandleMessage(msg('metrics', const {'ttfa': 4100, 'ttb': 4100}));
+
+    final brainLines = vc.thread
+        .whereType<ThreadLine>()
+        .where((l) => l.kind == LineKind.brain)
+        .toList();
+    expect(brainLines, hasLength(1),
+        reason: 'the answer is posted twice: once by speak_start, once by the flushed caption');
+    expect(brainLines.single.text, answer);
+  });
+
+  test('a delta after the answer is finalized is ignored; the next turn still streams', () {
+    // Idempotency in its own right, not tolerance: a finalized brain line is the turn's last
+    // word, so a delta arriving after it must neither extend that line nor open another —
+    // whichever order the two messages happen to arrive in.
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'it is '}));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'sunny'}));
+    vc.debugHandleMessage(
+        msg('speak_start', const {'source': 'brain', 'text': 'It is **sunny**.'}));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'it is sunny'}));
+
+    final line = vc.thread.whereType<ThreadLine>().single;
+    expect(line.text, 'It is **sunny**.', reason: 'the finalized text is not appended to');
+    expect(line.markdown, isTrue);
+
+    // The guard is turn-scoped: end the turn and the live caption works as it always did.
+    vc.debugHandleMessage(msg('listening', const {}));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'next turn'}));
+    final lines = vc.thread.whereType<ThreadLine>().toList();
+    expect(lines, hasLength(2));
+    expect(lines.last.text, 'next turn');
+  });
 }

@@ -242,6 +242,10 @@ class VoiceController extends ChangeNotifier {
   // Turn-scoped handles, all reset on `listening`/`state` exactly as index.js
   // resets brainEl / metricsEl / toolChips / thinkingEl.
   int? _brainIndex;
+  // The line `_brainIndex` points at holds the turn's FINAL answer (a speak_start landed on
+  // it), so nothing more may be appended to it and no second brain line may be opened for
+  // this turn. Cleared with `_brainIndex`, on exactly the same events.
+  bool _brainFinalized = false;
   int? _metricsIndex;
   int? _thinkingIndex;
   final List<int> _toolChipIndexes = <int>[];
@@ -481,6 +485,7 @@ class VoiceController extends ChangeNotifier {
     _clearThinking();
     _dropUnresolvedToolChips();
     _brainIndex = null;
+    _brainFinalized = false;
     _metricsIndex = null;
     // A `partial` that never reached `transcript` — a barge-in, an endpoint the
     // server resolved another way — would otherwise leave your half-finished
@@ -505,6 +510,7 @@ class VoiceController extends ChangeNotifier {
   void clearThread() {
     _thread.clear();
     _brainIndex = null;
+    _brainFinalized = false;
     _metricsIndex = null;
     _thinkingIndex = null;
     _toolChipIndexes.clear();
@@ -791,6 +797,7 @@ class VoiceController extends ChangeNotifier {
           // way, rebuild from the server's copy instead of appending to what's here.
           _thread.clear();
           _brainIndex = null;
+          _brainFinalized = false;
           _metricsIndex = null;
           _thinkingIndex = null;
           _toolChipIndexes.clear();
@@ -836,12 +843,27 @@ class VoiceController extends ChangeNotifier {
           if (i != null && i < _thread.length && _thread[i] is ThreadLine) {
             // Snap the streamed plaintext to the full markdown render.
             _thread[i] = (_thread[i] as ThreadLine).copyWith(text: text, markdown: true);
-            _brainIndex = null;
+            _brainFinalized = true;
             break;
           }
+          // No streamed line to snap: the whole answer arrived at once. Remember WHICH line
+          // it landed on and that it is final, rather than forgetting this turn had a brain
+          // line at all — `_brainIndex = null` is what let a later delta open a second one.
+          _addLine(source, text);
+          if (_thread.isNotEmpty && _thread.last is ThreadLine) {
+            _brainIndex = _thread.length - 1;
+            _brainFinalized = true;
+          }
+          break;
         }
         _addLine(source, text);
       case 'brain_delta':
+        // This turn's answer is already final — the server sent the complete text as a
+        // speak_start, so a delta after it can only be a copy of what is on screen.
+        // Appending would double the line; the old `_brainIndex == null` fall-through
+        // opened a whole second line, which is how the server's duplicate push showed up
+        // as two answers in the thread.
+        if (_brainFinalized) break;
         final delta = (p['delta'] as String?) ?? '';
         var i = _brainIndex;
         if (i == null) {
@@ -917,6 +939,7 @@ class VoiceController extends ChangeNotifier {
         _log('state snapshot: phase=${p['phase']} locked=${p['locked']} bound=${p['bound']}');
         _clearThinking();
         _brainIndex = null;
+        _brainFinalized = false;
         // The reconnect path: after a socket drop the server re-sends its
         // current lock state INSIDE the snapshot rather than as a `locked`
         // event, so this write must drive the gate exactly like the one
