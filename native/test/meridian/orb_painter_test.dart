@@ -214,11 +214,18 @@ void main() {
     });
   });
 
-  /// Ported out of the deleted `the trace is Henry only` group. The line is
-  /// gone for listening (see the presence group below), but the LEVEL is not:
-  /// `_reactive` is deliberately wider than the line's own rule, and the only
-  /// ambient signal that the mic is live would go with it.
-  test('listening still REACTS — the halos must show it is hearing you', () {
+  /// Ported out of the deleted `the trace is Henry only` group. This pins
+  /// `_reactive` being WIDER than the line's own rule — that `listening` is
+  /// wired to react at all, so a mic-driven level would plug in and pulse the
+  /// halos without drawing a line.
+  ///
+  /// It drives `audioTarget` BY HAND because nothing does so in production:
+  /// the playback poll is the field's only writer, it runs only while
+  /// `speaking`, and it zeroes the target on the way out. So this asserts the
+  /// mechanism is present and reachable, NOT a behaviour you can see on a
+  /// device today — where the level decays to zero through `listening`.
+  test('listening is REACTIVE IN SHAPE — a level fed here moves the halos',
+      () {
     final f = OrbFrame()
       ..state = OrbState.listening
       ..audioTarget = 1.0;

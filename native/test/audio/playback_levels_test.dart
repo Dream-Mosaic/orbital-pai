@@ -64,6 +64,27 @@ void main() {
     expect(l.levelAt(50), 0.0);
   });
 
+  test('eviction does not outrun the playback head on a long answer', () {
+    // C1. Eviction is measured back from ARRIVAL; lookups come from the
+    // PLAYBACK HEAD, which trails it by however much faster than realtime the
+    // synthesis runs. Once that lead exceeds the retained window the played
+    // frame falls off the front of the index — and returning 0.0 there dropped
+    // the line to its rest floor and darkened the halos for the entire rest of
+    // the utterance, mid-sentence, which is the exact symptom this file exists
+    // to prevent.
+    final l = PlaybackLevels(retainFrames: 24000 * 10); // 10s retained
+    for (var i = 0; i < 600; i++) {
+      l.add(tone(2400, 0.8)); // 100ms chunks, 60s of audio arrived
+    }
+    // 5s in: long evicted, but unambiguously still being heard.
+    expect(l.levelAt(24000 * 5), greaterThan(0.0),
+        reason: 'an evicted-but-playing frame must read the oldest level we '
+            'still have, never silence');
+    // And the genuine before-the-stream case is still silence.
+    final fresh = PlaybackLevels()..add(tone(100, 0.8));
+    expect(fresh.levelAt(-1), 0.0);
+  });
+
   test('old entries are evicted, so a long session cannot grow without bound',
       () {
     final l = PlaybackLevels(retainFrames: 1000);

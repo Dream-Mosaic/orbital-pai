@@ -81,9 +81,16 @@ class OrbFrame extends ChangeNotifier {
   /// Whether the orb reacts to audio at all — level, punch, halo flare.
   ///
   /// Deliberately WIDER than the line's own rule ([presence], which is
-  /// thinking + speaking): `listening` reacts so the halos pulse and the orb
-  /// visibly hears you, but draws no line, because the live transcript is what
-  /// you are actually reading while you talk.
+  /// thinking + speaking): `listening` is reactive IN SHAPE, so a mic-driven
+  /// level would plug straight in and pulse the halos without ever drawing a
+  /// line (the live transcript is what you are reading while you talk).
+  ///
+  /// But today nothing feeds it there. [audioTarget]'s only writer is the
+  /// playback-clock poll, which runs only while `speaking` and zeroes the
+  /// target when it stops — so in production the level simply DECAYS TO ZERO
+  /// through `listening`, and that is the intended behaviour, not a gap. Keep
+  /// this wide anyway: narrowing it to `speaking` would delete the seam a
+  /// mic-driven source needs.
   bool get _reactive =>
       _state == OrbState.listening || _state == OrbState.speaking;
 
@@ -98,10 +105,12 @@ class OrbFrame extends ChangeNotifier {
           kRingSpeedSpeaking + _smoother.value * kRingSpeedLevelBoost,
       };
 
-  /// Raw loudness in (0..1). Set from the playback-clock poll (looked up by
-  /// the frame actually leaving the speaker, not by chunk arrival — TTS
-  /// audio arrives far faster than it plays); the mic listener no longer
-  /// writes this at all. Smoothed per FRAME by [advance] so the response is
+  /// Raw loudness in (0..1). Set from the playback-clock poll — its ONLY
+  /// writer — which looks this up by the frame actually leaving the speaker,
+  /// not by chunk arrival (TTS audio arrives far faster than it plays). The
+  /// mic listener no longer writes this at all, and the poll zeroes it when it
+  /// stops, so every non-`speaking` state decays from 0 rather than parking on
+  /// the last thing heard. Smoothed per FRAME by [advance] so the response is
   /// frame-locked and device-independent (orb.js smooths once per
   /// requestAnimationFrame, not once per audio buffer). Deliberately does NOT
   /// notify — [advance] drives the repaint.
@@ -136,8 +145,8 @@ class OrbFrame extends ChangeNotifier {
   /// Advance one frame. Ported from orb.js's frame():
   ///   * `level` is smoothed toward the target ONCE PER FRAME (not per audio
   ///     chunk) so the response is frame-locked and device-independent;
-  ///   * only `listening` (mic) and `speaking` (playback) track audio — every
-  ///     other state targets 0, so the level decays instead of sticking;
+  ///   * only the reactive states (see [_reactive]) track the audio target —
+  ///     every other state targets 0, so the level decays instead of sticking;
   ///   * reactive states quicken with loudness, `thinking` keeps a steady
   ///     confident cadence, `off` is frozen.
   void advance(double dt) {

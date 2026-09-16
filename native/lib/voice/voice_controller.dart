@@ -305,26 +305,6 @@ class VoiceController extends ChangeNotifier {
     _safeNotify();
   }
 
-  /// There is no playback-clock poll, and that is deliberate.
-  ///
-  /// An earlier version corrected the orb's cursor against
-  /// `AudioTrackPlayer.playedMs()` every 250ms, to shed the jitter-buffer lead
-  /// and to follow an underrun. It shipped unsmoked and was wrong:
-  /// **`playedMs` is relative to the PLAYER's run, and the player's run is not
-  /// the orb's run.** Kotlin re-anchors whenever its queue drains and the head
-  /// catches up; the orb re-anchors when its trace has drawn everything that
-  /// arrived and faded. A gap between the reflex's audio and the brain's is
-  /// enough to desynchronise them — the player restarts near zero while the
-  /// cursor is seconds in, the correction sees a huge error and snaps, and the
-  /// trace jumps back to the start. On a 250ms timer that reads exactly as it
-  /// was reported: the waveform "keeps resetting".
-  ///
-  /// Making it correct would need the two runs to share an identity, i.e. a
-  /// Kotlin change reporting absolute frames or a run id. Not worth it for what
-  /// it buys: the cursor free-runs at real time from the start of its run and
-  /// playback consumes the same audio at the same rate from the same anchor, so
-  /// they track by construction. The residual is a constant jitter-buffer lead
-  /// of well under a fifth of a second on a 0.6s window.
   /// The single place `_wakeLocked` is assigned. Reached from BOTH paths the
   /// server uses to tell us it locked — the `locked` event and the `state`
   /// reconnect snapshot — so the gate can never see one without the other.
@@ -1008,6 +988,11 @@ class VoiceController extends ChangeNotifier {
 
   Timer? _levelTimer;
 
+  /// Test seam: whether the 20Hz poll is running. A timer that outlives its
+  /// reason is invisible from the level alone.
+  @visibleForTesting
+  bool get debugLevelTimerActive => _levelTimer?.isActive ?? false;
+
   /// Whether the CURRENT run of poll failures has already been logged. A
   /// persistently failing `playedFrames()` ticks at 20Hz; without this, that
   /// either floods the event log with one line per tick or (worse, if never
@@ -1016,6 +1001,21 @@ class VoiceController extends ChangeNotifier {
   /// success, so a later, separate failure run logs again.
   bool _levelPollFailed = false;
 
+  /// The frame the previous poll read, and how many polls in a row have read
+  /// that same frame with nothing left unplayed. See [_pollPlaybackLevel].
+  /// `-1` is "no previous poll" — a real head position is never negative, so
+  /// the first poll of a run can never look like a stalled one.
+  int _lastPolledFrame = -1;
+  int _drainedPolls = 0;
+
+  /// How long the head must sit still at the end of everything written before
+  /// the level is called silence: 5 polls x 50ms = 250ms. Long enough that the
+  /// ordinary 50-200ms of poll/arrival skew never trips it, short enough that
+  /// a tool round does not leave the orb holding the last syllable.
+  static const int _drainedPollsToSilence = 5;
+
+  /// playedFrames(), never playedMs(): playedMs re-anchors per run and this
+  /// consumer does not.
   Future<void> _pollPlaybackLevel() {
     if (_disposed || !_playerReady) return Future.value();
     // Two-argument `then(onValue, onError:)`, not `.then().catchError()`: the
@@ -1026,7 +1026,22 @@ class VoiceController extends ChangeNotifier {
     // from `playedFrames()` itself.
     return _player.playedFrames().then((f) {
       if (_disposed) return;
-      orbFrame.audioTarget = _levels.levelAt(f);
+      // Has the queue genuinely DRAINED? Two things must hold together: the
+      // head has not moved since the last poll, and there is nothing left
+      // unplayed for it to move onto. `PlaybackLevels.levelAt` holds the last
+      // chunk's loudness past the end of the index — right for the poll/
+      // arrival skew it was written for, wrong for a tool round, where the
+      // queue empties for seconds and the orb would otherwise sit at the last
+      // syllable's loudness and then jump when audio resumes. The hold cannot
+      // expire itself: `playbackHeadPosition` SETTLES at the written frame
+      // count rather than running past it, so no frame-delta inside that pure
+      // class can ever grow. The poll has a clock; the timeout lives here.
+      final drained = f == _lastPolledFrame && f >= _levels.writtenFrames;
+      _drainedPolls = drained ? _drainedPolls + 1 : 0;
+      _lastPolledFrame = f;
+      orbFrame.audioTarget = _drainedPolls >= _drainedPollsToSilence
+          ? 0.0
+          : _levels.levelAt(f);
       _levelPollFailed = false;
     }, onError: (Object e) {
       // A platform-channel hiccup must not take the orb down; the level holds
@@ -1048,6 +1063,16 @@ class VoiceController extends ChangeNotifier {
     if (!wanted) {
       _levelTimer?.cancel();
       _levelTimer = null;
+      // The poll is now the ONLY writer of `audioTarget` — the mic listener
+      // stopped feeding it when the level moved playback-side. `_reactive`
+      // still includes `listening`, so `advance()` keeps targeting whatever
+      // was left here: without this line the smoother parks on Henry's last
+      // playback loudness for the whole time the user is talking (halos
+      // flared, glow wide, sphere swollen), and a barge-in straight to
+      // `listening` inherits the abandoned turn's level.
+      orbFrame.audioTarget = 0.0;
+      _lastPolledFrame = -1;
+      _drainedPolls = 0;
       return;
     }
     _levelTimer ??=

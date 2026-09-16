@@ -104,16 +104,148 @@ void main() {
     final whileSpeaking = c.orbFrame.debugAudioTarget;
     expect(whileSpeaking, greaterThan(0.0));
 
-    // Leaving speaking stops the timer: a later played-frame position is no
-    // longer picked up, so the target holds rather than following it.
+    // Leaving speaking does TWO things, and both matter.
+    //
+    // It zeroes the target: the poll is the only writer of `audioTarget` and
+    // `OrbFrame._reactive` still includes `listening`, so a target left behind
+    // would park the smoother on Henry's last playback loudness for the whole
+    // time the user is talking.
+    //
+    // And it stops the poll: a later played-frame position must no longer be
+    // picked up at all, which is what the second delay proves — 1900 is a real
+    // position inside the indexed audio, so a still-running poll would put a
+    // NONZERO level back.
     c.debugApplyEvent('listening');
+    expect(c.orbFrame.debugAudioTarget, 0.0,
+        reason: 'leaving speaking must zero the target, not leave it stuck');
     player.playedFramesValue = 1900;
     await Future<void>.delayed(const Duration(milliseconds: 120));
-    expect(c.orbFrame.debugAudioTarget, whileSpeaking,
-        reason: 'leaving speaking must stop the poll, not just decay it');
+    expect(c.orbFrame.debugAudioTarget, 0.0,
+        reason: 'leaving speaking must stop the poll; nothing may write the '
+            'target again');
 
     // No Timer may survive the test — flutter_test checks this itself, but
     // dispose() is exercised explicitly rather than left to tearDown.
     c.dispose();
+  });
+
+  testWidgets('the hold past the last chunk expires when the queue drains',
+      (tester) async {
+    // I3. `PlaybackLevels.levelAt` holds the last chunk's loudness past the end
+    // of the index, which is right for the 50-200ms of poll/arrival skew it was
+    // written for and wrong for a tool round: the queue empties for seconds and
+    // the orb would sit at the last syllable's loudness, then jump when audio
+    // resumes. The hold cannot expire itself — `playbackHeadPosition` settles
+    // AT the written frame count rather than running past it, so no frame-delta
+    // inside that pure, clockless class can ever grow. The poll times it out.
+    //
+    // `testWidgets`, so the 50ms periodic poll is driven by the fake clock:
+    // one tick per pump, exactly, instead of racing wall-clock delays against
+    // the count of polls this test is about.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+    c.debugHandleAudio(tone(1000, 0.9));
+
+    Future<void> poll() => tester.pump(const Duration(milliseconds: 50));
+    double target() => c.orbFrame.debugAudioTarget;
+
+    // Mid-utterance: the head is inside the audio and moving. Nothing here may
+    // ever be mistaken for a drain, however long the answer runs.
+    for (var f = 100; f <= 900; f += 100) {
+      player.playedFramesValue = f;
+      await poll();
+      expect(target(), greaterThan(0.0),
+          reason: 'a normal utterance must never trip the drain timeout');
+    }
+
+    // The head reaches the end of everything written and stops there. For the
+    // first few polls the hold is still correct — this is exactly the skew
+    // window it was written for — so the level must NOT drop yet.
+    player.playedFramesValue = 1000;
+    await poll(); // first sighting at 1000: the frame still MOVED this tick
+    for (var i = 0; i < 3; i++) {
+      await poll();
+      expect(target(), greaterThan(0.0),
+          reason: 'the hold must survive the poll/arrival skew it exists for');
+    }
+
+    // Past ~250ms of a stalled head with nothing left unplayed, it is not skew:
+    // the queue has drained and nothing is being heard.
+    await poll();
+    await poll();
+    expect(target(), 0.0,
+        reason: 'a drained queue must settle the orb, not hold the last '
+            'syllable for the length of a tool round');
+
+    // Audio resuming picks it straight back up — the timeout is not sticky.
+    c.debugHandleAudio(tone(1000, 0.9));
+    player.playedFramesValue = 1200;
+    await poll();
+    expect(target(), greaterThan(0.0));
+    c.dispose();
+  });
+
+  test('a throwing player does not propagate, and logs once per run', () async {
+    // The spec requires this and nothing covered it: `FakePlayer.playedFrames`
+    // could not fail, so neither the `onError:` branch nor its once-per-run
+    // logging was reachable. The poll runs at 20Hz off a periodic timer with
+    // nothing awaiting it, so an unguarded throw is an unhandled async error
+    // twenty times a second.
+    //
+    // Deliberately NOT in `speaking`: the periodic timer would then interleave
+    // its own failing polls with these, and the count of log lines is the
+    // assertion. `_pollPlaybackLevel` itself only requires a live player.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugHandleAudio(tone(1000, 0.9));
+
+    player.playedFramesValue = 500;
+    await c.debugPollPlaybackLevel();
+    final before = c.orbFrame.debugAudioTarget;
+    expect(before, greaterThan(0.0));
+
+    player.throwPlayedFrames = true;
+    await c.debugPollPlaybackLevel(); // must not throw
+    expect(c.orbFrame.debugAudioTarget, before,
+        reason: 'a failed poll leaves the level alone; it decays on its own');
+
+    int failures() => c.eventLog
+        .where((l) => l.startsWith('playback level poll failed'))
+        .length;
+    expect(failures(), 1);
+
+    await c.debugPollPlaybackLevel();
+    await c.debugPollPlaybackLevel();
+    expect(failures(), 1,
+        reason: 'one line per failure RUN — 20Hz of them would bury the log');
+
+    // Recovering re-arms it, so a later, separate failure run is still visible.
+    player.throwPlayedFrames = false;
+    await c.debugPollPlaybackLevel();
+    player.throwPlayedFrames = true;
+    await c.debugPollPlaybackLevel();
+    expect(failures(), 2);
+    c.dispose();
+  });
+
+  testWidgets('dispose cancels the level timer', (tester) async {
+    // `testWidgets`, not `test`: only this harness runs the pending-timer
+    // check, and the ordering comment in dispose() (cancel BEFORE the player
+    // goes away) is otherwise unguarded — the three tests above use plain
+    // `test()` and would not notice a surviving 20Hz timer.
+    final player = FakePlayer();
+    final c = VoiceController(connection: conn, mic: FakeMic(), player: player);
+    c.debugSetPlayerReady();
+    c.debugSetTalking(true);
+    c.debugApplyEvent('speaking');
+    expect(c.debugLevelTimerActive, isTrue, reason: 'sanity: it is running');
+
+    c.dispose();
+    expect(c.debugLevelTimerActive, isFalse);
+    await tester.pump(const Duration(milliseconds: 200));
   });
 }

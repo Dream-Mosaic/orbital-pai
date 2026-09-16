@@ -176,9 +176,11 @@ void main() {
         hasLength(2), reason: 'thinking has no audio but still has a line');
     // LISTENING is in this list deliberately. The line is Henry's half of the
     // conversation; a line over the user's own speech competes with the live
-    // transcript, which is what they are actually reading while they talk. The
-    // orb still REACTS while listening (halos, glow, breathe) — it just draws
-    // no line.
+    // transcript, which is what they are actually reading while they talk.
+    // `listening` remains audio-REACTIVE in shape (halos, glow, breathe), but
+    // nothing feeds that target in production today — the playback poll is its
+    // only writer and it stops at the end of `speaking` — so on a device the
+    // level decays to zero here rather than pulsing.
     for (final s in [
       OrbState.idle,
       OrbState.ambient,

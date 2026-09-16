@@ -139,7 +139,14 @@ const double kLineSpeedLoud = 2.6;
 const double kRingSpeedIdle = 0.35;
 const double kRingSpeedListening = 0.60;
 const double kRingSpeedThinking = 1.10;
-const double kRingSpeedSpeaking = 1.00;
+
+/// Speaking's BASE must already beat thinking's — 1.30, not the 1.00 this
+/// shipped with. At 1.00 speaking only overtook thinking once `level > 0.125`,
+/// so the rings visibly SLOWED DOWN on the thinking to speaking transition:
+/// at the start of every answer, with presence still fading in and the level
+/// still rising, and again in every inter-word gap. The level boost then
+/// carries it to 2.10 at full loudness.
+const double kRingSpeedSpeaking = 1.30;
 
 /// Extra speed at full level while speaking.
 const double kRingSpeedLevelBoost = 0.80;

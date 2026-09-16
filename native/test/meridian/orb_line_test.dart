@@ -97,7 +97,9 @@ void main() {
 
   test('a silent line still has height — kLineRestAmp', () {
     // `thinking` has no audio at all, and a mid-utterance tool round drops the
-    // level to nothing while Henry is still legitimately speaking. A purely
+    // level to nothing while Henry is still legitimately speaking — genuinely
+    // to nothing, since the poll times out its hold ~250ms after the queue
+    // drains; before that it held the last syllable's loudness instead. A purely
     // level-driven line would be flat and dead in exactly those moments, which
     // is the whole reason for the rest floor. Without this assertion
     // kLineRestAmp can be set to 0 and the entire file still passes: every

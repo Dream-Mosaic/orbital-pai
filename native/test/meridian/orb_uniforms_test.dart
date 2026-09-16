@@ -115,6 +115,15 @@ void main() {
         greaterThan(phaseAfterASecond(OrbState.idle)));
     expect(phaseAfterASecond(OrbState.thinking),
         greaterThan(phaseAfterASecond(OrbState.listening)));
+    // The chain used to stop at thinking, which is how a speaking base SLOWER
+    // than thinking got through review. Speaking is the fastest state, and it
+    // must be so at level 0 — the level boost is on top, not what gets it
+    // there: `phaseAfterASecond` never sets an audio target, so this is
+    // speaking's base against thinking's.
+    expect(phaseAfterASecond(OrbState.speaking),
+        greaterThan(phaseAfterASecond(OrbState.thinking)),
+        reason: 'spec decision 7: speaking is fastest, and must not visibly '
+            'slow down on the thinking to speaking transition');
   });
 
   test('ring phase is packed for the shader', () {

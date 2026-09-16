@@ -365,8 +365,17 @@ class FakePlayer implements AudioTrackPlayer {
   /// orb's level lookup to a chosen position on the timeline.
   int playedFramesValue = 0;
 
+  /// Make `playedFrames()` fail the way a platform-channel hiccup does. The
+  /// poll's `onError:` branch and its once-per-run logging are otherwise
+  /// unreachable from any test, and that handler is all that stands between a
+  /// channel failure and an unhandled async error at 20Hz.
+  bool throwPlayedFrames = false;
+
   @override
-  Future<int> playedFrames() async => playedFramesValue;
+  Future<int> playedFrames() async {
+    if (throwPlayedFrames) throw StateError('platform channel gone');
+    return playedFramesValue;
+  }
 
   @override
   Future<void> setVolume(double v) async {}

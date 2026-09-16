@@ -4,7 +4,10 @@ import 'dart:typed_data';
 import 'orb_tuning.dart';
 
 /// Smoothed loudness for the orb, computed straight from the PCM16LE mono
-/// buffers we already handle (mic capture and TTS playback).
+/// buffers of TTS playback. `rmsFromPcm16` has exactly one caller —
+/// `PlaybackLevels.add`, which scores each arriving chunk on its way into the
+/// index; the mic path stopped measuring loudness when the orb's level moved
+/// playback-side.
 ///
 /// `rmsFromPcm16`'s `* 3` gain and its clamp are inherited from the web orb.
 ///
