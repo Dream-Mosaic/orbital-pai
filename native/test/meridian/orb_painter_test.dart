@@ -364,13 +364,18 @@ void main() {
     expect(f.ringPhase, lessThan(kPhaseWrap));
     expect(f.linePhase, lessThan(kPhaseWrap));
     expect(f.t, greaterThan(0.0), reason: 'wrapped, not zeroed');
-    // 200*pi is 160 whole turns of the breathe and 100/83/130 of the ring
-    // terms: sin and cos of the wrapped value equal those of the unwrapped.
-    expect(math.sin(kPhaseWrap * 1.6), closeTo(0.0, 1e-9));
-    expect(math.sin(kPhaseWrap * 0.83), closeTo(0.0, 1e-9));
-    expect(math.sin(kPhaseWrap * 1.3), closeTo(0.0, 1e-9));
-    expect(math.sin(kPhaseWrap * 1.37), closeTo(0.0, 1e-9));
-    expect(math.sin(kPhaseWrap * 0.71), closeTo(0.0, 1e-9));
+    // Every consumer's frequency must complete a WHOLE number of turns over
+    // kPhaseWrap. Asserting sin(kPhaseWrap * f) == 0 is not enough: that only
+    // proves a multiple of pi, and a frequency landing on an ODD multiple
+    // would flip the sign of every cos (the frag's `cos(p * 0.83)`) and of
+    // each sin's slope — a visible pop at every wrap, roughly every ten
+    // minutes. Dividing by 2*pi is what pins the EVEN multiple.
+    for (final freq in const [1.6, 0.83, 1.3, 1.37, 0.71]) {
+      final turns = kPhaseWrap * freq / (2 * math.pi);
+      expect(turns, closeTo(turns.roundToDouble(), 1e-9),
+          reason: '$freq completes $turns turns over kPhaseWrap — not whole, '
+              'so the wrap would be visible');
+    }
     f.dispose();
   });
 
