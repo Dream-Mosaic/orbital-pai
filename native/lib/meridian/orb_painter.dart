@@ -155,10 +155,13 @@ class OrbFrame extends ChangeNotifier {
   bool get _reactive =>
       _state == OrbState.listening || _state == OrbState.speaking;
 
-  /// Raw loudness in (0..1). Set from the audio chunk listener; smoothed per
-  /// FRAME by [advance] so the response is frame-locked and device-independent
-  /// (orb.js smooths once per requestAnimationFrame, not once per audio buffer).
-  /// Deliberately does NOT notify — [advance] drives the repaint.
+  /// Raw loudness in (0..1). Set from the playback-clock poll (looked up by
+  /// the frame actually leaving the speaker, not by chunk arrival — TTS
+  /// audio arrives far faster than it plays); the mic listener no longer
+  /// writes this at all. Smoothed per FRAME by [advance] so the response is
+  /// frame-locked and device-independent (orb.js smooths once per
+  /// requestAnimationFrame, not once per audio buffer). Deliberately does NOT
+  /// notify — [advance] drives the repaint.
   set audioTarget(double v) => _audioTarget = v;
 
   /// Smoothed loudness, derived. No public setter by design.

@@ -755,6 +755,11 @@ class VoiceController extends ChangeNotifier {
       return;
     }
     _playerReady = true;
+    // `_initPlayer` is fired unawaited on join; if the orb already reached
+    // `speaking` during this round trip, the last `_syncOrb()` ran while
+    // `_playerReady` was still false and never started the timer. Re-sync now
+    // so that utterance is not left inert.
+    _syncLevelPoll();
     _log('audio track ready (24k)');
     _safeNotify();
   }
@@ -958,12 +963,18 @@ class VoiceController extends ChangeNotifier {
     // dispose() closes the socket fire-and-forget, so frames already in flight
     // can land after orbFrame.dispose().
     if (_disposed) return;
-    if (_playerReady) _player.write(pcm);
-    // INDEXED, not applied. Audio arrives far faster than it plays, so the
-    // chunk in hand is not the chunk being heard; _pollPlaybackLevel asks the
-    // player which frame is actually leaving the speaker and looks up this
-    // chunk's loudness when it gets there.
-    _levels.add(pcm);
+    // Gated on `_playerReady`, same as the write just below: a chunk the
+    // player never received must not advance `_levels`' `_written` either —
+    // indexing a chunk that was dropped on the floor would permanently offset
+    // every later lookup from the head by that chunk's frame count.
+    if (_playerReady) {
+      _player.write(pcm);
+      // INDEXED, not applied. Audio arrives far faster than it plays, so the
+      // chunk in hand is not the chunk being heard; _pollPlaybackLevel asks
+      // the player which frame is actually leaving the speaker and looks up
+      // this chunk's loudness when it gets there.
+      _levels.add(pcm);
+    }
   }
 
   @visibleForTesting
@@ -980,6 +991,15 @@ class VoiceController extends ChangeNotifier {
   @visibleForTesting
   void debugResetPlaybackLevels() => _levels.reset();
 
+  /// Test seam: flip `_playerReady` without a real join round trip. Production
+  /// only ever sets it inside `_initPlayer`'s success path; tests that never
+  /// connect a socket have no other way to reach it.
+  @visibleForTesting
+  void debugSetPlayerReady() {
+    _playerReady = true;
+    _syncOrb();
+  }
+
   /// How often the orb's level is refreshed from the real playback position.
   /// 20Hz: syllables move on a ~100ms scale, so 50ms granularity is ample, and
   /// unlike the cursor this drove before, a late value here is invisible — it
@@ -988,20 +1008,33 @@ class VoiceController extends ChangeNotifier {
 
   Timer? _levelTimer;
 
+  /// Whether the CURRENT run of poll failures has already been logged. A
+  /// persistently failing `playedFrames()` ticks at 20Hz; without this, that
+  /// either floods the event log with one line per tick or (worse, if never
+  /// logged at all) leaves the log silent while the orb sits inert — exactly
+  /// the failure class this redesign exists to kill. Cleared on the next
+  /// success, so a later, separate failure run logs again.
+  bool _levelPollFailed = false;
+
   Future<void> _pollPlaybackLevel() {
-    // Not gated on `_playerReady` here: that gate decides whether the
-    // periodic timer should be running at all (`_syncLevelPoll`, below), not
-    // whether one lookup is safe. In production the timer never fires while
-    // the player isn't ready, so this only runs early via the debug seam
-    // (tests that never join a channel, and so never flip `_playerReady`); a
-    // genuinely unready platform channel is caught below regardless.
-    if (_disposed) return Future.value();
+    if (_disposed || !_playerReady) return Future.value();
+    // Two-argument `then(onValue, onError:)`, not `.then().catchError()`: the
+    // latter attaches to the Future `then` RETURNS, so it would also swallow
+    // anything thrown INSIDE the value callback (a type error, a null deref,
+    // a ChangeNotifier used after dispose) — bugs in this method's own logic,
+    // not platform-channel hiccups. `onError:` here only ever sees a failure
+    // from `playedFrames()` itself.
     return _player.playedFrames().then((f) {
       if (_disposed) return;
       orbFrame.audioTarget = _levels.levelAt(f);
-    }).catchError((_) {
+      _levelPollFailed = false;
+    }, onError: (Object e) {
       // A platform-channel hiccup must not take the orb down; the level holds
-      // and decays through its own release.
+      // and decays through its own release. Logged once per failure run.
+      if (!_levelPollFailed) {
+        _levelPollFailed = true;
+        _log('playback level poll failed: $e');
+      }
     });
   }
 
@@ -1023,8 +1056,16 @@ class VoiceController extends ChangeNotifier {
 
   void _handleStopPlayback() async {
     if (!_playerReady) return;
-    final ms = await _player.stopAndFlush();
+    // Reset BEFORE the flush round trip, not after. Method channels preserve
+    // ordering, so a chunk that arrives WHILE `stopAndFlush()` is in flight is
+    // written after the flush and lands at post-flush head positions 0..N —
+    // resetting after the await would wipe that chunk's index entry, and the
+    // next chunk would then claim 0..M while the player already has it at
+    // N..N+M, offsetting every `levelAt()` for the rest of the run by N.
+    // Resetting first clears exactly the entries the flush is about to
+    // discard, so an in-flight chunk indexes from 0 in step with the player.
     _levels.reset();
+    final ms = await _player.stopAndFlush();
     _live?.push('played', {'ms': ms});
     _log('stop_playback → played ${ms}ms');
     _safeNotify();
@@ -1464,12 +1505,15 @@ class VoiceController extends ChangeNotifier {
     // `VoiceController` (and a fresh `SherpaWakeSpotter`) leaks the previous
     // one's ONNX engine for the rest of the process.
     unawaited(_spotter.dispose());
+    // Cancelled BEFORE the player is disposed: the timer calls into the
+    // player, so tearing the player down first would read backwards even
+    // though both are synchronous today.
+    _levelTimer?.cancel();
+    _levelTimer = null;
     if (_playerReady) {
       _player.dispose();
       _playerReady = false;
     }
-    _levelTimer?.cancel();
-    _levelTimer = null;
     orbFrame.dispose();
     super.dispose();
   }
