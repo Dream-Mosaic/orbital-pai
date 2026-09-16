@@ -29,6 +29,17 @@ class OrbFrame extends ChangeNotifier {
   double _t = 0.0;
 
   double _presence = 0.0;
+  double _ringPhase = 0.0;
+
+  /// The halo rings' own clock, in radians, advanced per frame at the state's
+  /// cadence ([_ringSpeed]) rather than at [t]'s.
+  ///
+  /// Separate from [t] because the rings are the orb's ambient loop and want
+  /// their own pace: calm at idle, quicker while Henry is thinking, quickest
+  /// while he is speaking. Monotonic by construction — it is a phase, never
+  /// wound back except by powering off — so a cadence change is a change of
+  /// SPEED, never a jump in position.
+  double get ringPhase => _ringPhase;
 
   /// How much of the line is on screen, 0..1.
   ///
@@ -62,6 +73,7 @@ class OrbFrame extends ChangeNotifier {
       // Same reasoning for the line: a wake must not inherit the presence or
       // the loudness of whatever was being said when we powered down.
       _presence = 0.0;
+      _ringPhase = 0.0;
     }
     notifyListeners();
   }
@@ -74,6 +86,17 @@ class OrbFrame extends ChangeNotifier {
   /// you are actually reading while you talk.
   bool get _reactive =>
       _state == OrbState.listening || _state == OrbState.speaking;
+
+  /// Phase advance per second for the current state. `off` and `ambient` are 0
+  /// by contract — the wall device at rest must not animate.
+  double get _ringSpeed => switch (_state) {
+        OrbState.off || OrbState.ambient => 0.0,
+        OrbState.idle => kRingSpeedIdle,
+        OrbState.listening => kRingSpeedListening,
+        OrbState.thinking => kRingSpeedThinking,
+        OrbState.speaking =>
+          kRingSpeedSpeaking + _smoother.value * kRingSpeedLevelBoost,
+      };
 
   /// Raw loudness in (0..1). Set from the playback-clock poll (looked up by
   /// the frame actually leaving the speaker, not by chunk arrival — TTS
@@ -93,9 +116,12 @@ class OrbFrame extends ChangeNotifier {
 
   double get t => _t;
 
-  /// Test seams: pin the clock and the smoothed level so OrbPainter.paint becomes
-  /// an explicitly pure function of (state, t, level, presence, size) — which is
-  /// what makes a golden possible. Neither notifies.
+  /// Test seams: pin the clock and the smoothed level so OrbPainter.paint
+  /// becomes an explicitly pure function of
+  /// (state, t, ringPhase, level, presence, size) — which is what makes a
+  /// golden possible. Neither notifies. `ringPhase` and `presence` have no
+  /// seam of their own: both are pure accumulations of [advance], so a fixed
+  /// number of fixed-dt frames pins them exactly.
   @visibleForTesting
   set debugT(double v) => _t = v;
 
@@ -123,6 +149,7 @@ class OrbFrame extends ChangeNotifier {
       _transient.reset();
       _audioTarget = 0.0;
       _presence = 0.0;
+      _ringPhase = 0.0;
       return;
     }
     final reactive = _reactive;
@@ -135,6 +162,7 @@ class OrbFrame extends ChangeNotifier {
         ? 1.4
         : 1.0 + (reactive ? _smoother.value * 1.4 : 0.0);
     _t += dt * speed;
+    _ringPhase += dt * _ringSpeed;
     _presence += ((_lineWanted ? 1.0 : 0.0) - _presence) *
         alphaForDt(_presenceAlpha60, dt);
     notifyListeners();
@@ -188,6 +216,7 @@ class OrbPainter extends CustomPainter {
     final level = frame.level;
     final punch = off ? 0.0 : frame.punch;
     final t = frame.t;
+    final ringPhase = frame.ringPhase;
 
     final cx = w / 2;
     final cy = h / 2;
@@ -208,7 +237,22 @@ class OrbPainter extends CustomPainter {
         final spread =
             r0 * (1.06 + i * 0.17 + level * 0.05 + punch * kPunchSpread);
         final rr = spread +
-            math.sin(t * 1.3 + i * 1.4) * r0 * 0.025 * kBreathe * (1 + level);
+            math.sin(ringPhase * 1.3 + i * 1.4) *
+                r0 *
+                0.025 *
+                kBreathe *
+                (1 + level);
+        // Each ring orbits its own little Lissajous — two independent phases,
+        // so the three never lock into a formation. The formula is the
+        // shader's `haloField` drift verbatim; the only difference is the base
+        // radius, r0 here against the shader's breathing R, which is the same
+        // base the halo radii above already use. Keeping the centre on that
+        // base is what keeps the whole ring assembly a uniform scale of the
+        // shader's rather than a distorted one.
+        final drift = Offset(
+          kRingDrift * r0 * math.sin(ringPhase + i * 2.1),
+          kRingDrift * r0 * math.cos(ringPhase * 0.83 + i * 1.7),
+        );
         final alpha = (0.42 - f * 0.3) *
             (0.6 + level * 0.6) *
             (0.5 + kGlow * 0.5) *
@@ -222,7 +266,7 @@ class OrbPainter extends CustomPainter {
           // is the matching semantic. BlurStyle.normal would replace the crisp
           // stroke with the blur, crushing a thin stroke's peak alpha to near zero.
           ..maskFilter = MaskFilter.blur(BlurStyle.solid, _sigma(10 + 14 * kGlow));
-        canvas.drawCircle(center, rr, paint);
+        canvas.drawCircle(center + drift, rr, paint);
       }
     }
 

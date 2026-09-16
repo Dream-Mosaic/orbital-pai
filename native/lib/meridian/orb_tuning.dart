@@ -127,3 +127,28 @@ const double kLineSpeedLoud = 2.6;
 // to the shader as a uniform (see orb_uniforms.dart), so the two renderers
 // cannot drift apart on a value they both use. kPunchSpread and kPunchGlow
 // above are the two that qualify today.
+
+// ---------------------------------------------------------------------------
+// Ring cadence — the ambient loop, per state.
+// ---------------------------------------------------------------------------
+
+/// Phase advance per second, by state. Idle calm, listening a little more,
+/// thinking faster, speaking fastest (and level-modulated on top).
+/// `off` and `ambient` are deliberately 0: a wall device at rest must not
+/// animate at all.
+const double kRingSpeedIdle = 0.35;
+const double kRingSpeedListening = 0.60;
+const double kRingSpeedThinking = 1.10;
+const double kRingSpeedSpeaking = 1.00;
+
+/// Extra speed at full level while speaking.
+const double kRingSpeedLevelBoost = 0.80;
+
+/// How far each ring drifts off-centre, as a fraction of the sphere radius.
+/// This is what makes them ORBIT rather than only breathe in place.
+///
+/// Hand-kept in step with `kRingDrift` in `shaders/orb.frag` — GLSL cannot
+/// read Dart constants, and this one is geometry rather than a shared motion
+/// value worth a uniform slot of its own. Change one, change the other, or the
+/// fallback painter stops looking like the shader.
+const double kRingDrift = 0.045;

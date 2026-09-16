@@ -18,6 +18,7 @@ uniform vec4  uLo;           // 16..19
 uniform vec4  uRim;          // 20..23
 uniform float uPunchSpread;  // 24    from orb_tuning.dart
 uniform float uPunchGlow;    // 25    from orb_tuning.dart
+uniform float uRingPhase;    // 26    the rings' own clock, from orb_tuning.dart
 
 out vec4 fragColor;
 
@@ -74,6 +75,17 @@ const float kBreathe  = 1.05;
 const float kSphereR  = 0.60; // r0 = min(w,h)*0.3 over a half-extent of min/2
 const int   kHalos    = 3;
 const float kGlowGain = 1.10; // (0.5 + kGlow*0.5) with kGlow = 1.2
+// How far each ring's centre orbits off the sphere's, as a fraction of the
+// sphere radius. Hand-kept in step with kRingDrift in orb_tuning.dart, exactly
+// as kBreathe and kHalos are with orb_painter.dart: the fallback painter draws
+// the same orbit from the Dart copy, and a change to one side that is not
+// mirrored on the other makes the two renderers disagree.
+const float kRingDrift = 0.045;
+// The most a drifted centre can sit from the sphere's centre. NOT kRingDrift:
+// the drift's two components carry independent phases, so sin and cos can both
+// peak at once and |drift| reaches kRingDrift*sqrt(2). Rounded UP from
+// 1.4142136 so the bound is conservative.
+const float kRingDriftMax = kRingDrift * 1.41422;
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -83,12 +95,28 @@ float hash12(vec2 p) {
 
 // Three concentric rings as TRUE Gaussians. Canvas could only approximate this
 // with a blur pass per ring; here it is three exp() calls.
-float haloField(float rn) {
+//
+// Takes the fragment POSITION rather than a radius because the rings orbit:
+// each one's centre is offset by its own drift, so each needs its distance
+// measured from its own centre and a single shared rn will no longer do. `p`
+// is in main()'s -1..1 space and `R` is the breathing sphere radius, so
+// `length(p / R)` is exactly the rn the old signature was handed.
+//
+// Both the wobble and the orbit run on uRingPhase, not uT: the rings are the
+// orb's ambient loop and keep their own per-state cadence (0 for off and
+// ambient), while uT still drives the glass.
+float haloField(vec2 p, float R) {
   float acc = 0.0;
   for (int i = 0; i < kHalos; i++) {
     float fi = float(i) / float(kHalos - 1);
+    // Two independent phases, so each ring traces a Lissajous rather than a
+    // circle and the three never lock into a formation. Mirrored exactly in
+    // orb_painter.dart's fallback halo loop.
+    vec2 drift = kRingDrift * vec2(sin(uRingPhase + float(i) * 2.1),
+                                   cos(uRingPhase * 0.83 + float(i) * 1.7));
+    float rn = length(p / R - drift);
     float spread = 1.06 + float(i) * 0.17 + uLevel * 0.05 + uPunch * uPunchSpread;
-    float rr = spread + sin(uT * 1.3 + float(i) * 1.4) * 0.025 * kBreathe * (1.0 + uLevel);
+    float rr = spread + sin(uRingPhase * 1.3 + float(i) * 1.4) * 0.025 * kBreathe * (1.0 + uLevel);
     float a = (0.42 - fi * 0.3) * (0.6 + uLevel * 0.6) * kGlowGain
             * (1.0 + uPunch * uPunchGlow);
     float d = (rn - rr) / kHaloSigma;
@@ -138,7 +166,17 @@ void main() {
   // 1.6 before counting any of the Gaussian's own sigma. 1.9 clears the peak
   // by ~5.4*kHaloSigma (kHaloSigma = 0.055), i.e. exp(-0.5*5.4^2) ~= 4e-7 of
   // the ring's already-small peak amplitude: nothing visible is cut.
-  if (rn > 1.9) {
+  //
+  // That derivation is measured from the SPHERE's centre, and the rings no
+  // longer sit on it: each orbits by up to kRingDriftMax (= kRingDrift*sqrt(2)
+  // ~= 0.0636). A fragment's distance from a DRIFTED centre is at least
+  // rn - kRingDriftMax, so a fragment as far out as rn ~= 1.6025 + 0.0636
+  // ~= 1.6661 can still land on a ring's peak. Raising the cut by exactly
+  // kRingDriftMax restores the clearance the paragraph above established --
+  // 1.9636 - 1.6661 = 0.2975 = 5.4*kHaloSigma, the same 4e-7 of peak as
+  // before -- rather than eroding it by an amount nothing would have noticed
+  // until a ring's outer edge started getting clipped square at full level.
+  if (rn > 1.9 + kRingDriftMax) {
     fragColor = vec4(0.0);
     return;
   }
@@ -148,7 +186,7 @@ void main() {
 
   // --- halos + contact glow, outside the sphere ---
   if (!off) {
-    float h = haloField(rn);
+    float h = haloField(p, R);
     col += uGlow.rgb * h;
     alpha += h;
 
@@ -193,7 +231,7 @@ void main() {
     // here again and `bent` silently goes back to sampling empty space near
     // the centre for every fragment, with no visible symptom short of the
     // rings failing to bend through the glass.
-    float bent = haloField(length((p - gd.xy * 0.35) / R));
+    float bent = haloField(p - gd.xy * 0.35, R);
     vec3 body = env * kEnvAmp + uGlow.rgb * bent * 0.25;
 
     // Caustic: light entering the top focuses low inside the sphere. The old

@@ -11,7 +11,7 @@ void main() {
   test('packs exactly the slots the shader declares', () {
     // The GLSL uniform block's declaration ORDER is the contract; a mismatch
     // here does not error, it silently shades with the wrong numbers.
-    expect(OrbU.count, 26);
+    expect(OrbU.count, 27);
   });
 
   test('origin and size come from the rect, never assumed', () {
@@ -95,6 +95,36 @@ void main() {
     final u = orbUniforms(f, const Rect.fromLTWH(0, 0, 100, 100));
     expect(u[OrbU.punchSpread], closeTo(kPunchSpread, 1e-6));
     expect(u[OrbU.punchGlow], closeTo(kPunchGlow, 1e-6));
+    f.dispose();
+  });
+
+  test('ring phase advances at the state cadence', () {
+    double phaseAfterASecond(OrbState s) {
+      final f = OrbFrame()..state = s;
+      for (var i = 0; i < 60; i++) {
+        f.advance(1 / 60);
+      }
+      final p = f.ringPhase;
+      f.dispose();
+      return p;
+    }
+
+    expect(phaseAfterASecond(OrbState.ambient), 0.0,
+        reason: 'a wall device at rest must not animate');
+    expect(phaseAfterASecond(OrbState.listening),
+        greaterThan(phaseAfterASecond(OrbState.idle)));
+    expect(phaseAfterASecond(OrbState.thinking),
+        greaterThan(phaseAfterASecond(OrbState.listening)));
+  });
+
+  test('ring phase is packed for the shader', () {
+    final f = OrbFrame()..state = OrbState.thinking;
+    for (var i = 0; i < 60; i++) {
+      f.advance(1 / 60);
+    }
+    final u = orbUniforms(f, const Rect.fromLTWH(0, 0, 100, 100));
+    expect(u[OrbU.ringPhase], closeTo(f.ringPhase, 1e-6));
+    expect(OrbU.count, 27, reason: 'one slot added; the GLSL must match');
     f.dispose();
   });
 }

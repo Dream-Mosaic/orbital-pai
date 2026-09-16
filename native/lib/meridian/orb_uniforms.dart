@@ -29,7 +29,8 @@ abstract final class OrbU {
   static const int rim = 20; // vec4
   static const int punchSpread = 24;
   static const int punchGlow = 25;
-  static const int count = 26;
+  static const int ringPhase = 26;
+  static const int count = 27;
 }
 
 /// Pack one frame's shader uniforms.
@@ -62,6 +63,7 @@ Float32List orbUniforms(OrbFrame frame, Rect rect) {
 
   out[OrbU.punchSpread] = kPunchSpread;
   out[OrbU.punchGlow] = kPunchGlow;
+  out[OrbU.ringPhase] = frame.ringPhase;
   return out;
 }
 
