@@ -72,3 +72,6 @@ FEEDBACK.md
 # bare `.env` rule above. One `git add -A` away from being committed.
 .env.bak*
 **/.env.bak*
+
+# Junk
+.DS_Store

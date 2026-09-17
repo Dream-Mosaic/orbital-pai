@@ -271,6 +271,55 @@ void main() {
     expect(vc.caption, 'Say “Wake up ${VoiceController.assistantName}”');
   });
 
+  group('captionPending — the trailing ellipsis', () {
+    // Ink-2 never revises text it has already sent, so it withholds the
+    // trailing word or two until they are unrevisable and dumps the tail on
+    // `turn.end`. Nothing here can change that; the flag exists so the UI can
+    // SAY the tail is still coming. Which means the one thing it must never do
+    // is claim words are pending when none are.
+
+    test('a live partial is pending', () {
+      vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
+      expect(vc.captionPending, isTrue);
+    });
+
+    test('the resting wake prompt is NOT pending', () {
+      // The whole reason this is keyed on provenance and not on a turn phase.
+      // A wake-locked device sits in `listening` indefinitely showing a prompt
+      // that is waiting on nothing — dots there would be a lie that never
+      // resolves.
+      vc.debugHandleMessage(msg('locked', const {'locked': true}));
+      expect(vc.caption, 'Say \u201CWake up ${VoiceController.assistantName}\u201D');
+      expect(vc.captionPending, isFalse);
+    });
+
+    test('a stranded partial stops being pending at end of turn', () {
+      vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
+      vc.debugHandleMessage(msg('listening', const {}));
+      expect(vc.captionPending, isFalse);
+    });
+
+    test('a partial that resolves to a transcript stops being pending', () {
+      vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
+      vc.debugHandleMessage(msg('transcript', const {'text': 'what is the weather'}));
+      expect(vc.captionPending, isFalse);
+    });
+
+    test('a wake-locked partial that strands falls back to an unpending prompt', () {
+      vc.debugHandleMessage(msg('locked', const {'locked': true}));
+      vc.debugHandleMessage(msg('partial', const {'text': 'stray words'}));
+      vc.debugHandleMessage(msg('listening', const {}));
+      expect(vc.caption, 'Say \u201CWake up ${VoiceController.assistantName}\u201D');
+      expect(vc.captionPending, isFalse);
+    });
+
+    test('an empty partial is not pending — there is no tail to be waiting on', () {
+      vc.debugHandleMessage(msg('partial', const {'text': ''}));
+      expect(vc.caption, '');
+      expect(vc.captionPending, isFalse);
+    });
+  });
+
   test('clearThread() empties the log and its turn handles', () {
     vc.debugHandleMessage(msg('transcript', const {'text': 'hi'}));
     vc.debugHandleMessage(msg('brain_delta', const {'delta': 'hello'}));

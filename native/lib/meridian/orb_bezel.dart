@@ -33,6 +33,7 @@ class OrbBezel extends StatelessWidget {
     required this.frame,
     required this.glow,
     required this.caption,
+    this.captionPending = false,
     required this.powerOn,
     required this.pttOn,
     required this.abiOn,
@@ -46,6 +47,11 @@ class OrbBezel extends StatelessWidget {
   final OrbFrame frame;
   final Color glow;
   final String caption;
+
+  /// Whether [caption] is a live partial transcript still being extended.
+  /// Drives LiveCaption's trailing ellipsis — see [LiveCaption.pending].
+  final bool captionPending;
+
   final bool powerOn;
   final bool pttOn;
   final bool abiOn;
@@ -87,6 +93,7 @@ class OrbBezel extends StatelessWidget {
       child: IgnorePointer(
         child: LiveCaption(
           text: caption,
+          pending: captionPending,
           width: halfW * 2,
           height: halfH * 2,
         ),

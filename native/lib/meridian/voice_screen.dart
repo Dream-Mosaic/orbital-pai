@@ -254,6 +254,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                     frame: vc.orbFrame,
                     glow: glow,
                     caption: vc.caption,
+                    captionPending: vc.captionPending,
                     powerOn: vc.micOn,
                     powerEnabled:
                         widget.connection.connStatus == ConnStatus.connected,

@@ -205,6 +205,7 @@ class VoiceController extends ChangeNotifier {
   bool _pttHeld = false;
 
   String _caption = '';
+  bool _captionPending = false;
   final List<String> _transcript = [];
   final List<String> _eventLog = [];
 
@@ -274,6 +275,27 @@ class VoiceController extends ChangeNotifier {
   final PlaybackLevels _levels = PlaybackLevels();
 
   String get caption => _caption;
+
+  /// Whether [caption] is a live partial transcript that Ink-2 is still
+  /// extending — i.e. whether the trailing ellipsis belongs on it.
+  ///
+  /// Keyed on the caption's PROVENANCE, not on a turn phase: the only thing
+  /// that sets it true is a `partial` message carrying text. Every other
+  /// writer of the caption — the resting wake prompt, the clear on
+  /// `transcript`, the end-of-turn reset — sets it false. A phase test would
+  /// have been wrong in the one case that matters, since a wake-locked device
+  /// sits in `listening` for hours showing a prompt that is not pending
+  /// anything.
+  bool get captionPending => _captionPending;
+
+  /// Single writer for the pair, so the flag cannot drift from the text it
+  /// describes. Empty text is never pending — there is nothing to be the tail
+  /// of.
+  void _setCaption(String text, {bool pending = false}) {
+    _caption = text;
+    _captionPending = pending && text.isNotEmpty;
+  }
+
   List<String> get transcript => List.unmodifiable(_transcript);
   List<String> get eventLog => List.unmodifiable(_eventLog);
   /// Derived, never stored: the microphone is on iff the conversation is
@@ -498,7 +520,7 @@ class VoiceController extends ChangeNotifier {
     // words on screen for the whole of the next turn. Harmless until the orb's
     // line got taller: the caption box and the line now overlap geometrically
     // during `thinking`, so stale text sits UNDER the wave.
-    _caption = _restingCaption;
+    _setCaption(_restingCaption);
   }
 
   /// What the caption reads when nobody is mid-utterance: the wake prompt on a
@@ -551,7 +573,7 @@ class VoiceController extends ChangeNotifier {
     if (on) {
       await stopMic();
     } else {
-      _caption = '';
+      _setCaption('');
       await startMic();
     }
   }
@@ -881,9 +903,9 @@ class VoiceController extends ChangeNotifier {
           _thread.add(const ThreadDivider());
         }
       case 'partial':
-        _caption = (p['text'] as String?) ?? '';
+        _setCaption((p['text'] as String?) ?? '', pending: true);
       case 'transcript':
-        _caption = '';
+        _setCaption('');
         final text = (p['text'] as String?) ?? '';
         _transcript.add('you: $text');
         _addLine('you', text);
@@ -981,7 +1003,7 @@ class VoiceController extends ChangeNotifier {
         _applyTurnEvent(m.event);
       case 'locked':
         _applyWakeLocked((p['locked'] as bool?) ?? false);
-        _caption = _restingCaption;
+        _setCaption(_restingCaption);
         _log('locked: $_wakeLocked');
         _syncOrb();
       case 'bound':
@@ -1013,7 +1035,7 @@ class VoiceController extends ChangeNotifier {
         // the Settings channel the app used to learn them from is joined only
         // while that drawer is open, so at launch nothing knew them.
         _applyStoredDefaults(p);
-        _caption = _restingCaption;
+        _setCaption(_restingCaption);
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
         // An ABSENT phase must not clobber what we already know.
