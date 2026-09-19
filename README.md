@@ -1,6 +1,6 @@
 <div align="center">
 
-# Orbital P.A.I 🚀
+<img src="docs/brand/hero.jpg" alt="Orbital P.A.I" width="100%" />
 
 [![Elixir](https://img.shields.io/badge/Elixir-4B275F?style=for-the-badge&logo=elixir&logoColor=white)](https://elixir-lang.org/)
 [![Phoenix Framework](https://img.shields.io/badge/Phoenix_Framework-FD4F00?style=for-the-badge&logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org/)

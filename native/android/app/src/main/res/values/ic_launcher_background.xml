@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the master icon's own background, so the foreground's edge is seamless. -->
+    <color name="ic_launcher_background">#02050C</color>
+</resources>

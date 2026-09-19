@@ -236,3 +236,20 @@ the script (`POST /admin/file/`); the brand fields hold the bare filename. The l
 background is recomposed by ImageMagick onto a 2560×1440 canvas with the orb at the far
 left, so `background-size: cover` keeps it clear of the card.
 `login-branded.jpg` is the finished login page.
+
+## 8. Integrated (2026-09-19, closes #2)
+
+Everything derives from `icon-1a.jpg`; regenerate with ImageMagick rather than re-prompting.
+
+- **Android** — minSdk 26, so the adaptive icon (`mipmap-anydpi-v26/ic_launcher.xml`) is what
+  every device shows. Foreground = the master at 79% of the 108dp canvas (sphere ring ≈ 75% of
+  the 72dp visible zone, so no launcher mask clips it) on `#02050C`, sampled from the master's
+  own background so the edge is seamless. No `<monochrome>` layer: themed icons read only its
+  alpha, and an opaque foreground would render as a solid blob. Legacy `ic_launcher.png` per
+  density is the full master.
+- **Web** — `favicon.ico` (48/32/16) and `images/favicon-64.png` from a 780px centre crop so the
+  sphere survives 16px; `icon-192/512.png` + `apple-touch-icon.png` are the full master (the
+  sphere sits inside the 80% maskable safe zone). The old-brand `favicon.svg`/`icon.svg`/`logo.svg`
+  are gone.
+- **README** — `hero.jpg` = `hero-4a.jpg` + the ORBITAL / P.A.I lockup cropped from
+  `images/brand/logo.png` (Space Grotesk), so the wordmark is the designed one, not re-typeset.
