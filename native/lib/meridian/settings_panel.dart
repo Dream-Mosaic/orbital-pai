@@ -248,28 +248,49 @@ class SettingsPanelView extends StatelessWidget {
         child: Text(label),
       );
 
+  /// Both halves of what is deployed, because they are released separately and routinely
+  /// out of step: a device can run a build many commits behind a server that redeployed
+  /// minutes ago, which looks identical in every other way. The app row is THIS binary
+  /// (pubspec version + the git SHA it was built from); the server row is what the channel
+  /// reports from the server's `priv/VERSION`. Bump either with `./bump.sh`.
   Widget _about(SettingsState state) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const _SectionLabel('About'),
           const SizedBox(height: 4), // space-y-1 = 0.25rem = 4px
-          Text('P.A.I v${state.appVersion}',
-              style:
-                  TextStyle(fontSize: 14, color: M.ink.withValues(alpha: 0.6))),
-          // The line above is the SERVER's version; this one is the binary you
-          // are holding. They answer different questions and are routinely out
-          // of step — a device can run a build many commits behind a server
-          // that redeployed minutes ago, which looks identical in every other
-          // way. `unknown` means this build came from a bare `flutter run`
-          // rather than run-dev.sh, so it cannot say; that is deliberately not
-          // dressed up as a version.
-          Text(
-            kBuildShaUnknown ? 'build unknown' : 'build $kBuildSha',
-            key: SettingsPanelView.buildStampKey,
-            style: TextStyle(
-              fontSize: 12,
-              fontFamily: 'monospace',
-              color: M.ink.withValues(alpha: kBuildShaUnknown ? 0.45 : 0.6),
+          _versionRow(
+            'app',
+            // `build unknown` means a bare `flutter run` rather than one of the run
+            // scripts, so this binary cannot say which commit it is. That is
+            // deliberately not dressed up as a SHA.
+            '$kAppVersion \u00B7 ${kBuildShaUnknown ? 'build unknown' : 'build $kBuildSha'}',
+            valueKey: SettingsPanelView.buildStampKey,
+            dim: kBuildShaUnknown,
+          ),
+          const SizedBox(height: 2),
+          _versionRow('server', state.appVersion),
+        ],
+      );
+
+  Widget _versionRow(String label, String value, {Key? valueKey, bool dim = false}) =>
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          SizedBox(
+            width: 56,
+            child: Text(label,
+                style: TextStyle(fontSize: 13, color: M.ink.withValues(alpha: 0.45))),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              key: valueKey,
+              style: TextStyle(
+                fontSize: 13,
+                fontFamily: 'monospace',
+                color: M.ink.withValues(alpha: dim ? 0.45 : 0.7),
+              ),
             ),
           ),
         ],

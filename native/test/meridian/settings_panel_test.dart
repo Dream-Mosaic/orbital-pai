@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/app_version.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/meridian/settings_panel.dart';
 import 'package:orbital_pai/panels/settings_client.dart';
@@ -42,7 +43,11 @@ void main() {
 
   Future<void> pumpPanel(WidgetTester tester, SettingsClient client) async {
     await tester.pumpWidget(MaterialApp(
-      home: Scaffold(body: SettingsPanelView(client: client)),
+      // Scrolls because production does (MeridianDrawer, drawer.dart) — a bare
+      // body left the harness a few px short of overflowing at 600px, so any new
+      // row tripped a layout error that no real device would ever show.
+      home: Scaffold(
+          body: SingleChildScrollView(child: SettingsPanelView(client: client))),
     ));
     await tester.pumpAndSettle();
   }
@@ -70,7 +75,17 @@ void main() {
         findsOneWidget);
     expect(find.text('Danger zone'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
-    expect(find.text('P.A.I v0.4.19'), findsOneWidget);
+    // Issue #1: both halves of what is deployed, since they ship separately.
+    expect(find.text('app'), findsOneWidget);
+    expect(find.text('server'), findsOneWidget);
+    expect(find.text('0.4.19'), findsOneWidget,
+        reason: 'the server row renders the version the channel sent, verbatim');
+    expect(
+      tester.widget<Text>(find.byKey(SettingsPanelView.buildStampKey)).data,
+      '$kAppVersion \u00B7 build unknown',
+      reason: 'the app row is THIS binary: pubspec version + build stamp '
+          '(unstamped under flutter test)',
+    );
 
     await conn.disconnect();
   });

@@ -301,9 +301,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   concurrent calendar fan-out can `pool_not_available` until warm; IPv4-only is the real fix, TBD);
   SQLite on a persistent `/data` volume (else redeploys wipe data), container runs as root for
   volume writes; register BOTH redirect URIs (localhost + prod) in the Google Cloud console; deploy
-  is `App.version`-stamped — bump `version:` in mix.exs before deploying (shows in footer + boot
-  log). **But** a `mix.exs` edit invalidates the Docker deps layers (cold Rust + EXLA rebuild):
-  read issue #1 before bumping.
+  is `App.version`-stamped from **`server/priv/VERSION`**, read at runtime — bump it with
+  `./bump.sh server patch|minor|major` before deploying (footer, boot log, Settings ▸ About).
+  **Never bump `version:` in mix.exs** — it is frozen: the Dockerfile's deps layers are keyed on
+  mix.exs, so any edit there forces a cold Rust + EXLA rebuild (issue #1). The app's version is
+  separate: `./bump.sh app …` (pubspec + `kAppVersion`, test-locked together).
 - **Gmail = second connector via the same pattern**: one `@connectors` registry entry +
   `App.Google.Gmail` adapter (`list_messages/2`, `get_message/2`, `send_message/2`) + pure helpers
   `App.Google.Gmail.Body` (MIME→plaintext) and `App.Google.Gmail.Mime` (attrs→RFC 2822, header-
