@@ -742,6 +742,36 @@ void main() {
       .map((p) => (p[4] as Map).cast<String, dynamic>())
       .toList();
 
+  test('tapping the Ack chip pushes ack_reminder to the server (issue #4)',
+      () async {
+    // The chip used to flip local state only: the reminder stayed due on the
+    // server, the badge stayed lit, and the nudge re-asked on the next
+    // connect. The push has to ride voice:henry -- panel:reminders is only
+    // joined while the drawer is open.
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'speak_start',
+      json: {'source': 'reminder', 'text': 'bins out'},
+    ));
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'reminder_ack_offer',
+      json: {'id': 42},
+    ));
+    b.vc.ackReminder(42);
+    await settle();
+
+    final acks = pushesOf(b.fake, 'ack_reminder');
+    expect(acks, hasLength(1));
+    expect(acks.single['id'], 42);
+  });
+
   test(
       'regaining bound re-announces this device\'s toggles — a standby ptt '
       'press must not claim into a server still running auto mode',

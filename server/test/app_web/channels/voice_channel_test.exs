@@ -305,6 +305,54 @@ defmodule AppWeb.VoiceChannelTest do
     assert wait_until(fn -> Sessions.lookup(sid) == :error end)
   end
 
+  # The thread's inline Ack chip rides the voice topic (the one every client always holds),
+  # not panel:reminders (joined only while the drawer is open). Issue #4: native's chip used to
+  # flip local state only, so the reminder stayed due and re-nudged on the next connect.
+  describe "ack_reminder" do
+    test "acknowledges one of the user's own fired reminders", %{socket: socket, alice: alice} do
+      r = fired_reminder!(%{body: "bins out", user_id: alice.id})
+      assert [%{id: id}] = App.Reminders.list_unacknowledged(alice.id)
+      assert id == r.id
+
+      ref = push(socket, "ack_reminder", %{"id" => r.id})
+      assert_reply ref, :ok
+      assert App.Reminders.list_unacknowledged(alice.id) == []
+    end
+
+    test "cannot ack another user's reminder, nor one that never fired", %{
+      socket: socket,
+      alice: alice,
+      bob: bob
+    } do
+      theirs = fired_reminder!(%{body: "bob's own", user_id: bob.id})
+      ref = push(socket, "ack_reminder", %{"id" => theirs.id})
+      assert_reply ref, :error, %{reason: "not_found"}
+      assert [%{body: "bob's own"}] = App.Reminders.list_unacknowledged(bob.id)
+
+      {:ok, upcoming} =
+        App.Reminders.create(%{
+          body: "later",
+          user_id: alice.id,
+          due_at: DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+        })
+
+      ref = push(socket, "ack_reminder", %{"id" => upcoming.id})
+      assert_reply ref, :error, %{reason: "not_found"}
+    end
+
+    test "an off-shape payload is refused, not crashed on", %{socket: socket} do
+      ref = push(socket, "ack_reminder", %{"id" => "42"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+    end
+  end
+
+  defp fired_reminder!(attrs) do
+    due = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+    {:ok, r} = App.Reminders.create(Map.merge(%{due_at: due}, attrs))
+    {:ok, r} = App.Reminders.mark_fired(r)
+    r
+  end
+
   describe "vision frame transport" do
     test "relays a capture_frame owner message to the client", %{socket: socket} do
       send(socket.channel_pid, {:to_client, {:capture_frame, 7}})

@@ -124,6 +124,26 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # The thread's inline Ack chip on a delivered reminder. Rides THIS topic because it is the
+  # one every client always holds -- panel:reminders is joined only while its drawer is open,
+  # so an ack tapped in the thread had nowhere to go (issue #4). Same rule as
+  # RemindersChannel.handle_in("ack"): the id is resolved against the user's OWN due list
+  # (which already includes household rows), never Repo.get/2.
+  def handle_in("ack_reminder", %{"id" => id}, socket) when is_integer(id) do
+    case Enum.find(App.Reminders.list_unacknowledged(socket.assigns.user_id), &(&1.id == id)) do
+      nil ->
+        {:reply, {:error, %{reason: "not_found"}}, socket}
+
+      reminder ->
+        App.Reminders.acknowledge(reminder)
+        {:reply, :ok, socket}
+    end
+  end
+
+  # An off-shape ack (client bug) must not crash the channel.
+  def handle_in("ack_reminder", _payload, socket),
+    do: {:reply, {:error, %{reason: "bad_request"}}, socket}
+
   def handle_in("wake_detected", _payload, socket) do
     Conversation.wake_detected(socket.assigns.conversation)
     {:noreply, socket}

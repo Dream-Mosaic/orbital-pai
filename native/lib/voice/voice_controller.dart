@@ -545,7 +545,15 @@ class VoiceController extends ChangeNotifier {
     _safeNotify();
   }
 
+  /// The inline Ack chip. The push rides `voice:henry` -- the one topic this
+  /// client always holds -- because `panel:reminders` is joined only while
+  /// that drawer is open. Before this push existed the chip flipped local
+  /// state only: the reminder stayed due on the server, the badge stayed lit,
+  /// and the nudge re-asked on the next connect (issue #4). The local flip is
+  /// optimistic; the server's `not_found` reply (already acked elsewhere) is
+  /// harmless, since the chip would read "acked" either way.
   void ackReminder(int id) {
+    _live?.push('ack_reminder', {'id': id});
     for (var i = _thread.length - 1; i >= 0; i--) {
       final item = _thread[i];
       if (item is ThreadLine && item.ackId == id) {
