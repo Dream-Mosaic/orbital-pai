@@ -421,10 +421,14 @@ defmodule AppWeb.ConversationLive do
     seconds = secs |> parse_seconds() |> max(10) |> min(30)
     {:ok, user} = App.Users.update_prefs(socket.assigns.current_user, %{relock_seconds: seconds})
 
-    {:noreply,
-     socket
-     |> assign(current_user: user, relock_seconds: user.relock_seconds)
-     |> push_event("set_relock", %{seconds: user.relock_seconds})}
+    # The stored pref seeds new sessions (Conversation.session_prefs/1); a RUNNING one is
+    # updated here directly, same as SettingsChannel.set_relock -- no browser round trip.
+    case App.Conversations.Sessions.lookup(socket.assigns.session_id) do
+      {:ok, pid} -> App.Conversations.Conversation.set_relock_ms(pid, user.relock_seconds * 1000)
+      :error -> :ok
+    end
+
+    {:noreply, assign(socket, current_user: user, relock_seconds: user.relock_seconds)}
   end
 
   def handle_event("set_default_google", %{"id" => id}, socket) do

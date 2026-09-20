@@ -25,6 +25,13 @@ defmodule App.Conversations.ConversationTest do
     pid
   end
 
+  # A session-bound Conversation (session_id set) runs :pull_briefing / :pull_pending_reminders
+  # DB reads right after init. Stop it SYNCHRONOUSLY before the test process -- the sandbox
+  # owner -- exits, or an in-flight pull outlives its owner, its connection is torn down
+  # mid-query, and the next test's first write sees SQLite "Database busy". (It traps exits,
+  # so the test's own exit does not take it down promptly.)
+  defp stop_session(pid), do: :gen_statem.stop(pid, :normal, 2_000)
+
   describe "voice activation gate" do
     test "locked: an utterance WITHOUT the name produces no response" do
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
@@ -213,6 +220,7 @@ defmodule App.Conversations.ConversationTest do
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
       Conversation.endpoint(pid, "what's the weather like")
       refute_receive {:to_client, {:speak_start, _src, _text}}, 500
+      stop_session(pid)
     end
 
     test "a fresh session for a user with voice_activation: false starts unlocked" do
@@ -221,7 +229,7 @@ defmodule App.Conversations.ConversationTest do
       {:ok, user} = App.Users.upsert_allowed("wake-init-off@x.com")
       {:ok, user} = App.Users.update_prefs(user, %{voice_activation: false})
 
-      {:ok, _pid} =
+      {:ok, pid} =
         Conversation.start_link(
           client: self(),
           config: @config,
@@ -230,6 +238,41 @@ defmodule App.Conversations.ConversationTest do
         )
 
       assert_receive {:to_client, {:state, %{phase: "listening", locked: false}}}, 500
+      stop_session(pid)
+    end
+
+    # Same bug class as voice_activation above, for the relock window: only the web ever pushed
+    # `relock` on join, so a native session ran on the app-env default no matter what the user
+    # had stored. The stored pref must seed relock_ms at init, before any client push.
+    test "a fresh session seeds the idle relock from the user's relock_seconds pref" do
+      # app-env default far SHORTER than the pref: if init ignored the pref the relock would
+      # fire inside the refute window below.
+      Application.put_env(:app, :relock_ms, 60)
+      on_exit(fn -> Application.delete_env(:app, :relock_ms) end)
+      Application.put_env(:app, :allowed_users, [%{email: "relock-seed@x.com", name: "R"}])
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      {:ok, user} = App.Users.upsert_allowed("relock-seed@x.com")
+      {:ok, user} = App.Users.update_prefs(user, %{voice_activation: true, relock_seconds: 1})
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(user.id)
+        )
+
+      assert_receive {:to_client, {:state, %{locked: true}}}, 500
+
+      Conversation.endpoint(pid, "Henry hello")
+      assert_receive {:to_client, {:locked, false}}, 500
+      assert_receive {:to_client, {:speak_start, :reflex, _}}, 1000
+      assert_receive {:to_client, {:speak_start, :brain, _}}, 1000
+      # 60ms env default would have relocked by now; the 1s pref must not have
+      refute_receive {:to_client, {:locked, true}}, 400
+      assert_receive {:to_client, {:locked, true}}, 1500
+      stop_session(pid)
     end
 
     test "a session with no session_id (unit-test shape) still defaults to unlocked" do

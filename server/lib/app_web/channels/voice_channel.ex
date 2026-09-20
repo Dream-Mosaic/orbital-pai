@@ -129,12 +129,6 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
-  def handle_in("relock", %{"seconds" => seconds}, socket) do
-    ms = seconds |> to_int() |> max(10) |> min(30) |> Kernel.*(1000)
-    Conversation.set_relock_ms(socket.assigns.conversation, ms)
-    {:noreply, socket}
-  end
-
   def handle_in("vision_frame", %{"ref" => ref, "data" => data} = payload, socket)
       when is_integer(ref) and (is_binary(data) or is_nil(data)) do
     # A nil frame means the browser couldn't capture — log the client's reason (getUserMedia error
@@ -350,16 +344,4 @@ defmodule AppWeb.VoiceChannel do
       user -> %{default_abi: user.default_abi, default_ptt: user.default_ptt}
     end
   end
-
-  defp to_int(n) when is_integer(n), do: n
-  defp to_int(n) when is_float(n), do: trunc(n)
-
-  defp to_int(n) when is_binary(n) do
-    case Integer.parse(n) do
-      {i, _} -> i
-      :error -> 15
-    end
-  end
-
-  defp to_int(_), do: 15
 end

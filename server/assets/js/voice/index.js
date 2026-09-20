@@ -122,11 +122,6 @@ export const Voice = {
     this.defaultPtt = this.el.dataset.defaultPtt === "true"
     this.voiceActivation = this.el.dataset.voiceActivation === "true"
     this.assistantName = this.el.dataset.assistantName || "Henry"
-    this.relockSeconds = parseInt(this.el.dataset.relockSeconds || "15", 10)
-    this.handleEvent("set_relock", ({ seconds }) => {
-      this.relockSeconds = seconds
-      if (this.channel) this.channel.push("relock", { seconds })
-    })
     this.handleEvent("clear_log", () => {
       this.clearThinking()
       this.logEl.innerHTML = ""
@@ -174,7 +169,6 @@ export const Voice = {
         // can only ever be redundant (kiosk, matches the seed) or wrong (a non-kiosk web monitor
         // joining would push `false` into the ONE shared Conversation a phone is streaming into,
         // silently reopening the wake gate and resuming paid STT streaming).
-        this.channel.push("relock", { seconds: this.relockSeconds })
         if (this.kiosk) this.kioskAutoStart()
         if (this.defaultPtt && !this.kiosk) {
           // pre-set PTT mode without auto-starting the mic (no permission prompt on load;

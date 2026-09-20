@@ -133,7 +133,9 @@ defmodule App.Conversations.Conversation do
     config = Keyword.get(opts, :config, Config.default())
     session_id = Keyword.get(opts, :session_id)
     {stt_mod, stt_pid} = maybe_start_stt(session_id, config, :auto)
-    voice_activation = voice_activation_pref(session_id)
+
+    %{voice_activation: voice_activation, relock_seconds: relock_seconds} =
+      session_prefs(session_id)
 
     if session_id do
       Phoenix.PubSub.subscribe(App.PubSub, "agenda:#{session_id}")
@@ -230,7 +232,7 @@ defmodule App.Conversations.Conversation do
       # an unanswered request carried forward from a barge-in, folded into the next turn's brain
       pending_request: nil,
       # voice activation (wake-word gate): voice_activation = mode on for this session, seeded
-      # from the user's stored `voice_activation` pref (see voice_activation_pref/1) rather than
+      # from the user's stored `voice_activation` pref (see session_prefs/1) rather than
       # waiting for a client push -- the client only ever pushes an explicit CHANGE (kiosk
       # toggle, settings drawer), so a session that starts with the pref already true and never
       # gets a push must still arm. locked mirrors it 1:1, same as the {:set_voice_activation,
@@ -241,9 +243,11 @@ defmodule App.Conversations.Conversation do
       # window" (captions keep stripping); last_ack guards the spoken ack's own echo.
       wake_hit: false,
       last_ack: nil,
-      # per-session Lockdown-timeout override (ms) from the user's relock_seconds pref;
-      # nil -> fall back to the app-env default (also the test override hook).
-      relock_ms: nil,
+      # per-session Lockdown-timeout (ms), seeded from the user's relock_seconds pref (see
+      # session_prefs/1) -- nil (no user) falls back to the app-env default (also the test
+      # override hook). Seeded here, not by a client push: only the web ever pushed `relock`
+      # on join, so a native session used to run on the default regardless of the pref.
+      relock_ms: relock_seconds && relock_seconds * 1000,
       # Voice Lock (spec 2026-07-12): per-user gate cache (nil = feature off / no user),
       # the rolling mic ring (created lazily while mode != :off), and the trust anchor.
       voice_lock: nil,
@@ -261,15 +265,16 @@ defmodule App.Conversations.Conversation do
 
   # The session_id IS the user id (String.to_string), per Sessions.start/3's caller
   # (VoiceChannel: `to_string(socket.assigns.user_id)`). No session_id (nil -- unit tests that
-  # start a bare Conversation) or an id that doesn't resolve to a user both default to off,
-  # matching the pref's absence rather than the User schema's own `default: true` (a brand new
-  # row with no session to attribute it to has no business arming a gate).
-  defp voice_activation_pref(session_id) do
+  # start a bare Conversation) or an id that doesn't resolve to a user both default to
+  # voice_activation off, matching the pref's absence rather than the User schema's own
+  # `default: true` (a brand new row with no session to attribute it to has no business arming
+  # a gate), and to no relock override (app-env default).
+  defp session_prefs(session_id) do
     with id when is_integer(id) <- App.Users.id_from_session(session_id),
-         %{voice_activation: enabled} <- App.Users.get(id) do
-      enabled
+         %{voice_activation: enabled, relock_seconds: relock} <- App.Users.get(id) do
+      %{voice_activation: enabled, relock_seconds: relock}
     else
-      _ -> false
+      _ -> %{voice_activation: false, relock_seconds: nil}
     end
   end
 
