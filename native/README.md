@@ -1,23 +1,44 @@
-# Henry native wall client — Milestone 1a (spike + skeleton)
+# Henry native client (`native/`)
 
-Flutter client for the Phoenix voice channel. See
-`docs/superpowers/specs/2026-07-16-native-flutter-wall-client-design.md`.
+The Flutter client for P.A.I. — the product surface (the Phoenix LiveView is a
+monitor). One project, built per target; Android (phone + tablet) is what ships
+today. Design specs live in `docs/superpowers/specs/` (start with
+`2026-07-16-native-flutter-wall-client-design.md` and
+`2026-07-24-native-meridian-voice-screen-design.md`).
 
-## Setup
-1. `cp lib/config.example.dart lib/config.dart` and fill in the socket token
-   (from the web app's `data-user-token`), the Mac's LAN IP, and the Picovoice
-   AccessKey. `config.dart` is gitignored.
-2. Ensure the Phoenix dev server is running on the Mac (`./dev.sh`, PORT 8787),
-   and the phone/tablet is on the same LAN.
-3. `flutter pub get`
-4. `flutter run -d <device>`
+## What it does
 
-## Test
-- `flutter test` — pure-Dart codec + channel framing.
-- On-device smoke — audio/wake/AEC (Tasks 5–7); results in `docs/phase0-results.md`.
+- Signs in through Authentik in the OS auth session (`flutter_web_auth_2`); the
+  token lives in platform secure storage. Nothing to paste.
+- Runs the "Henry" wake word on-device (`sherpa_onnx` keyword spotting,
+  `assets/kws/`); audio only leaves the device after a local hit or while PTT
+  is held.
+- Streams 16 kHz PCM16 up the `voice:henry` Phoenix channel and plays 24 kHz
+  PCM16 TTS back through a Kotlin `AudioTrack` player (`henry/audio_track`
+  method channel) in communication mode, so the platform AEC covers Henry's
+  own voice.
+- Native panels for Reminders, Books, Connectors, Settings (+ Memory, Voice
+  Lock) over the `panel:*` channels. No WebView.
 
-## Wire contract (subset in 1a)
-Client→server: binary `audio` (PCM16LE mono 16 kHz), `played{ms}`.
-Server→client: binary `audio` (PCM16LE mono 24 kHz), `history{turns}`, `partial{text}`,
-`transcript{text}`, `speak_start{source,text}`, `brain_delta{delta}`, `stop_playback`,
-`duck`/`unduck`, `speaking`/`listening`/`thinking`, `state{phase,locked}`.
+## Run
+
+Flutter is not on PATH: `export PATH="$HOME/flutter/bin:$PATH"`.
+
+- `./run-dev.sh [--prod|--local] [device]` — debug build, defaults to the local
+  server (`localhost:8787` via `adb reverse`).
+- `./run-profile.sh` — profile build, same targeting.
+- `./run-build.sh` — release APK, build + install + launch, defaults to prod.
+
+`_target.sh` is the one place these decide where a build points; it prints a
+`▸ target:` banner. The server address is `--dart-define`d
+(`lib/server_config.dart`), defaulting to production.
+
+## Gates
+
+`flutter test` and `flutter analyze` must be clean before a commit. Kotlin
+changes also need `flutter build apk --debug` (analyze does not compile Kotlin).
+
+## Versions
+
+`./bump.sh app patch|minor|major` (repo root) bumps `pubspec.yaml` and
+`kAppVersion` together; a test locks them to each other.

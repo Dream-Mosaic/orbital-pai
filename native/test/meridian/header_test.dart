@@ -4,9 +4,7 @@ import 'package:orbital_pai/meridian/header.dart';
 import 'package:orbital_pai/meridian/tokens.dart';
 
 void main() {
-  Widget host(ConnStatus status,
-          {VoidCallback? onLongPress, bool reduceMotion = false}) =>
-      MaterialApp(
+  Widget host(ConnStatus status, {bool reduceMotion = false}) => MaterialApp(
         home: MediaQuery(
           data: MediaQueryData(disableAnimations: reduceMotion),
           child: Scaffold(
@@ -15,7 +13,6 @@ void main() {
               status: status,
               version: '0.1.0',
               userName: 'David',
-              onVersionLongPress: onLongPress,
             ),
           ),
         ),
@@ -48,12 +45,14 @@ void main() {
     for (final s in ConnStatus.values) {
       await tester.pumpWidget(host(s));
       await tester.pump();
-      final box = tester.widget<Container>(find.byKey(const ValueKey('conn-dot')));
+      final box =
+          tester.widget<Container>(find.byKey(const ValueKey('conn-dot')));
       final decoration = box.decoration! as BoxDecoration;
       expect(decoration.color, connDotColors(s).fill, reason: '$s fill');
       expect(decoration.boxShadow!.single.color.a, closeTo(0.75, 0.01),
           reason: '$s glow alpha (box-shadow 0 0 9px dot@75%)');
-      expect(decoration.boxShadow!.single.blurRadius, 9.0, reason: '$s glow blur');
+      expect(decoration.boxShadow!.single.blurRadius, 9.0,
+          reason: '$s glow blur');
     }
   });
 
@@ -79,15 +78,5 @@ void main() {
     await tester.pump();
     expect(tester.binding.transientCallbackCount, 0,
         reason: 'the same accessibility contract the orb already honours');
-  });
-
-  testWidgets('long-pressing the version fires the dev hook', (tester) async {
-    var fired = false;
-    await tester
-        .pumpWidget(host(ConnStatus.connected, onLongPress: () => fired = true));
-    await tester.longPress(find.text('P.A.I V0.1.0'));
-    expect(fired, isTrue,
-        reason: 'the dev-entry long-press hook must keep firing even though '
-            'nothing is wired to it right now');
   });
 }

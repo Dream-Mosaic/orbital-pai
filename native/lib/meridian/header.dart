@@ -10,17 +10,12 @@ class MeridianHeader extends StatelessWidget {
     required this.status,
     required this.version,
     required this.userName,
-    this.onVersionLongPress,
   });
 
   final String assistantName;
   final ConnStatus status;
   final String version;
   final String userName;
-
-  /// Dev-entry long-press hook on the version label; unwired now that the
-  /// debug wake-word spike screen it used to open is gone.
-  final VoidCallback? onVersionLongPress;
 
   static const double _wordmarkSize = 15.2; // 0.95rem
   static const double _metaSize = 8.32; // 0.52rem
@@ -51,17 +46,13 @@ class MeridianHeader extends StatelessWidget {
               ConnDot(status: status),
             ],
           ),
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onLongPress: onVersionLongPress,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text('P.A.I V${version.toUpperCase()}', style: _metaStyle),
-                Text(userName.toUpperCase(), style: _metaStyle),
-              ],
-            ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('P.A.I V${version.toUpperCase()}', style: _metaStyle),
+              Text(userName.toUpperCase(), style: _metaStyle),
+            ],
           ),
         ],
       ),

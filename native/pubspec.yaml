@@ -15,7 +15,6 @@ dependencies:
   record: ^5.1.2
   sherpa_onnx: ^1.13.8
   path_provider: ^2.1.0
-  permission_handler: ^11.3.0
   flutter_svg: ^2.0.10
   flutter_web_auth_2: ^5.1.0
   flutter_secure_storage: ^11.1.0

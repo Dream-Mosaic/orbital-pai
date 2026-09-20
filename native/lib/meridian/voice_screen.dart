@@ -24,7 +24,6 @@ class MeridianVoiceScreen extends StatefulWidget {
     required this.connection,
     required this.userName,
     this.onOpenPanel,
-    this.onDevEntry,
     this.appVersion = '0.0.0',
     this.badges,
   });
@@ -33,7 +32,6 @@ class MeridianVoiceScreen extends StatefulWidget {
   final AppConnection connection;
   final String userName;
   final void Function(MeridianTab tab)? onOpenPanel;
-  final VoidCallback? onDevEntry;
   final String appVersion;
 
   /// Optional so the widget tests that build a screen without a connection do
@@ -193,7 +191,6 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                           status: widget.connection.connStatus,
                           version: widget.appVersion,
                           userName: widget.userName,
-                          onVersionLongPress: widget.onDevEntry,
                         ),
                         const SizedBox(height: M.columnGap),
                         _orbPane(vc, glow),
