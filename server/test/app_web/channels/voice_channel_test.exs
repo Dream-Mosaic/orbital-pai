@@ -353,6 +353,25 @@ defmodule AppWeb.VoiceChannelTest do
     r
   end
 
+  describe "vision capability at join" do
+    test "a join declaring vision: false is recorded against that channel; a flag-less join is capable",
+         %{bob: bob} do
+      token = AppWeb.UserAuth.socket_token(bob.id)
+      {:ok, socket} = connect(AppWeb.UserSocket, %{"token" => token})
+      {:ok, _reply, channel} = subscribe_and_join(socket, "voice:#{bob.id}", %{"vision" => false})
+      conv = channel.assigns.conversation
+      on_exit(fn -> Sessions.stop(to_string(bob.id)) end)
+
+      {_state, data} = :sys.get_state(conv)
+      assert data.client_caps[channel.channel_pid] == %{vision: false}
+
+      {:ok, socket2} = connect(AppWeb.UserSocket, %{"token" => token})
+      {:ok, _reply, channel2} = subscribe_and_join(socket2, "voice:#{bob.id}", %{})
+      {_state, data} = :sys.get_state(conv)
+      assert data.client_caps[channel2.channel_pid] == %{vision: true}
+    end
+  end
+
   describe "vision frame transport" do
     test "relays a capture_frame owner message to the client", %{socket: socket} do
       send(socket.channel_pid, {:to_client, {:capture_frame, 7}})

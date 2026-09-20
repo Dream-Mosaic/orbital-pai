@@ -742,6 +742,38 @@ void main() {
       .map((p) => (p[4] as Map).cast<String, dynamic>())
       .toList();
 
+  test('the join declares no camera, so the server never holds a turn for one (issue #5)',
+      () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    expect(b.fake.joinPayload('voice:henry'), containsPair('vision', false));
+  });
+
+  test('a stray capture_frame is answered with an empty frame, not ignored', () async {
+    // Defence in depth behind the join flag: an older server (or one that
+    // ever forgets the flag) must get an immediate "no camera" back rather
+    // than wait out its vision timeout with the brain held.
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'capture_frame',
+      json: {'ref': 7},
+    ));
+    await settle();
+
+    final frames = pushesOf(b.fake, 'vision_frame');
+    expect(frames, hasLength(1));
+    expect(frames.single, {'ref': 7, 'data': null, 'error': 'no_camera'});
+  });
+
   test('tapping the Ack chip pushes ack_reminder to the server (issue #4)',
       () async {
     // The chip used to flip local state only: the reminder stayed due on the

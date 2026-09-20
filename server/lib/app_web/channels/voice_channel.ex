@@ -32,7 +32,9 @@ defmodule AppWeb.VoiceChannel do
 
     case resolve_session(session_id) do
       {:ok, pid} ->
-        Conversation.join(pid, payload["device_id"])
+        # `vision: false` = this client has no camera (the native app); anything else, including
+        # the web's flag-less join, means it can answer `capture_frame`.
+        Conversation.join(pid, payload["device_id"], vision: payload["vision"] != false)
         Process.monitor(pid)
         send(self(), :after_join)
         send(self(), {:track_presence, payload["kiosk"] == true})

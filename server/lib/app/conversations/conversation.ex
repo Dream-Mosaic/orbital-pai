@@ -76,8 +76,15 @@ defmodule App.Conversations.Conversation do
 
   Either way the joining pid gets a state snapshot carrying `bound:`. A bind also cancels any
   pending linger.
+
+  `opts[:vision]` declares whether this client can answer `capture_frame` with a camera frame;
+  absent means yes (every web join), and a client that says `false` is never asked -- see
+  `vision_wanted?/2` (issue #5).
   """
-  def join(pid, device_id), do: :gen_statem.cast(pid, {:join, self(), device_id})
+  def join(pid, device_id, opts \\ []) do
+    caps = %{vision: Keyword.get(opts, :vision, true)}
+    :gen_statem.cast(pid, {:join, self(), device_id, caps})
+  end
 
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
@@ -157,6 +164,9 @@ defmodule App.Conversations.Conversation do
       # device's id would stay bound and that device would steal the conversation back on its
       # next reconnect. Pruned of dead channels on every join, the only thing that grows it.
       device_ids: %{},
+      # client pid -> capabilities declared at its latest join (`%{vision: bool}`); a pid with
+      # no entry (a legacy join, or a bare unit-test client) is treated as fully capable.
+      client_caps: %{},
       session_id: session_id,
       stt_mod: stt_mod,
       stt_pid: stt_pid,
@@ -477,8 +487,13 @@ defmodule App.Conversations.Conversation do
 
   # A channel joined. See join/2 for the binding rule; the decision lives here, inside the
   # FSM, so a lookup -> decide -> cast race is impossible.
-  def handle_event(:cast, {:join, from, device_id}, _s, data) do
-    data = remember_device(data, from, device_id)
+  # The pre-capabilities join shape (a caster older than the `caps` element -- tests
+  # simulating other devices send it raw): a legacy join is a fully capable one.
+  def handle_event(:cast, {:join, from, device_id}, s, data),
+    do: handle_event(:cast, {:join, from, device_id, %{vision: true}}, s, data)
+
+  def handle_event(:cast, {:join, from, device_id, caps}, _s, data) do
+    data = data |> remember_device(from, device_id) |> remember_caps(from, caps)
 
     if bind_on_join?(data, from, device_id) do
       data = rebind(data, from, device_id)
@@ -1725,6 +1740,24 @@ defmodule App.Conversations.Conversation do
     %{data | device_ids: ids}
   end
 
+  # Same pruning as remember_device/3: the map is keyed by channel pid, and channels die.
+  defp remember_caps(data, from, caps) do
+    caps_by_pid =
+      data.client_caps
+      |> Enum.filter(fn {pid, _} -> Process.alive?(pid) end)
+      |> Map.new()
+      |> Map.put(from, caps)
+
+    %{data | client_caps: caps_by_pid}
+  end
+
+  # Whether the BOUND client can take a picture. Absent = yes: a legacy join carries no flag,
+  # and so does a bare unit-test client. Only a client that explicitly opted out at join is
+  # never asked -- before this the native app ignored `capture_frame` and every look-phrase
+  # turn waited out the full vision timeout with the brain held (issue #5).
+  defp client_vision?(data),
+    do: Map.get(data.client_caps, data.client, %{vision: true}).vision
+
   defp live?(pid), do: is_pid(pid) and Process.alive?(pid)
 
   # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
@@ -1932,7 +1965,7 @@ defmodule App.Conversations.Conversation do
   # with vision enabled, a live client to capture from, and an explicit look-phrase.
   defp vision_wanted?(t, data) do
     is_nil(data.agenda_turn) and data.config.vision and is_pid(data.client) and
-      LookIntent.wants_look?(t, data.config)
+      client_vision?(data) and LookIntent.wants_look?(t, data.config)
   end
 
   defp note_camera_unavailable(data),

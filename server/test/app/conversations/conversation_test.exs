@@ -2011,6 +2011,39 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:fake_brain_transcript, "look at this"}, 1000
       assert_receive {:fake_brain_image, nil}, 1000
     end
+
+    # Issue #5: the native client has no camera and ignored `capture_frame`, so every
+    # look-phrase turn waited the full vision timeout (8s) before degrading to text-only. A
+    # client declares the capability at join; one that opts out is never asked.
+    test "a client that joined without vision is never asked for a frame" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+      Conversation.join(pid, "phone", vision: false)
+      assert_receive {:to_client, {:state, _}}, 500
+
+      Conversation.endpoint(pid, "look at this")
+
+      refute_receive {:to_client, {:capture_frame, _ref}}, 300
+      assert_receive {:fake_brain_transcript, "look at this"}, 1000
+      assert_receive {:fake_brain_image, nil}, 1000
+    end
+
+    test "the capability follows the LATEST join of the bound client" do
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "one sec"} end)
+      pid = start_conv()
+      Conversation.join(pid, "phone", vision: false)
+      assert_receive {:to_client, {:state, _}}, 500
+      # ... and the same channel rejoins as a camera-capable client (a legacy join carries no
+      # flag and means "capable", which is what every web join looks like).
+      Conversation.join(pid, "phone")
+      assert_receive {:to_client, {:state, _}}, 500
+
+      Conversation.endpoint(pid, "look at this")
+
+      assert_receive {:to_client, {:capture_frame, _ref}}, 1000
+    end
   end
 
   describe "casts from a non-bound client" do
