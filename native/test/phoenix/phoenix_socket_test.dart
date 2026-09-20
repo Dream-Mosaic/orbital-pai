@@ -307,6 +307,62 @@ void main() {
     await hbSocket.close();
   });
 
+  test('an unanswered heartbeat tears the socket down (half-open detection)', () async {
+    // A dead TCP path -- wifi drop, NAT expiry, sleep/wake -- delivers no
+    // error and no onDone for minutes. Phoenix's JS client closes the socket
+    // when the PREVIOUS heartbeat's ref is still unanswered as the next one
+    // comes due; without that rule this client looked connected right up to
+    // the OS timeout while the server had long since dropped the channel.
+    final ctrl2 = StreamChannelController<dynamic>(sync: true);
+    final wire2 = <dynamic>[];
+    ctrl2.foreign.stream.listen(wire2.add);
+    final hbSocket =
+        PhoenixSocket(ctrl2.local, heartbeatInterval: const Duration(milliseconds: 20));
+    var closes = 0;
+    hbSocket.onClose.listen((_) => closes++);
+    hbSocket.start();
+
+    // Nobody answers. Two intervals: the first beat goes out, the second finds
+    // it unanswered.
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+
+    expect(closes, 1, reason: 'the second unanswered beat must close the socket');
+    expect(hbSocket.debugHeartbeatActive, isFalse);
+    final heartbeats =
+        wire2.whereType<String>().map(sent).where((f) => f[3] == 'heartbeat').toList();
+    expect(heartbeats, hasLength(1),
+        reason: 'after the timeout no further beats go into a dead pipe');
+  });
+
+  test('an answered heartbeat keeps the socket alive', () async {
+    final ctrl2 = StreamChannelController<dynamic>(sync: true);
+    final wire2 = <dynamic>[];
+    // Auto-answer every heartbeat the way a live server would.
+    ctrl2.foreign.stream.listen((f) {
+      wire2.add(f);
+      if (f is String) {
+        final d = sent(f);
+        if (d[3] == 'heartbeat') {
+          ctrl2.foreign.sink.add(okReply(d[1] as String, 'phoenix'));
+        }
+      }
+    });
+    final hbSocket =
+        PhoenixSocket(ctrl2.local, heartbeatInterval: const Duration(milliseconds: 20));
+    var closes = 0;
+    hbSocket.onClose.listen((_) => closes++);
+    hbSocket.start();
+
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+
+    expect(closes, 0);
+    final heartbeats =
+        wire2.whereType<String>().map(sent).where((f) => f[3] == 'heartbeat').toList();
+    expect(heartbeats.length, greaterThanOrEqualTo(3),
+        reason: 'answered beats must keep coming on the interval');
+    await hbSocket.close();
+  });
+
   test('close() closes every channel and cancels the heartbeat', () async {
     final voice = socket.channel('voice:henry');
     final panel = socket.channel('panel:reminders:1');

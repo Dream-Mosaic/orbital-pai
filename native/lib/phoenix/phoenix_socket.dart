@@ -37,6 +37,12 @@ class PhoenixSocket {
   Timer? _heartbeatTimer;
   bool _isClosed = false;
 
+  /// The ref of the last heartbeat sent, until the server answers it. Set
+  /// when a beat goes out, cleared by its `phx_reply`; still set when the
+  /// NEXT beat comes due means the path is half-open. Same rule as
+  /// phoenix.js's `pendingHeartbeatRef`.
+  String? _pendingHeartbeatRef;
+
   /// Fires once when the transport dies. AppConnection listens to drive backoff.
   Stream<void> get onClose => _closed.stream;
 
@@ -96,8 +102,20 @@ class PhoenixSocket {
 
   void _sendHeartbeat() {
     if (_isClosed) return;
-    _transport.sink
-        .add(_serializer.encodeText(null, _nextRef(), 'phoenix', 'heartbeat', const {}));
+    if (_pendingHeartbeatRef != null) {
+      // The previous beat was never answered. A dead TCP path (wifi drop, NAT
+      // expiry, sleep/wake) surfaces neither an error nor onDone for minutes,
+      // so without this the socket looked connected long after the server had
+      // dropped every channel. Tear down as a transport death so AppConnection
+      // runs its normal backoff, and close the sink so the dead WebSocket is
+      // released rather than leaked.
+      _teardown(StateError('heartbeat timeout'), null);
+      unawaited(_transport.sink.close());
+      return;
+    }
+    final ref = _nextRef();
+    _pendingHeartbeatRef = ref;
+    _transport.sink.add(_serializer.encodeText(null, ref, 'phoenix', 'heartbeat', const {}));
   }
 
   void _sendPush(String event, Map<String, dynamic> payload, PhoenixChannel ch) {
@@ -133,6 +151,10 @@ class PhoenixSocket {
     }
 
     if (msg.event == 'phx_reply' && msg.ref != null) {
+      if (msg.ref == _pendingHeartbeatRef) {
+        _pendingHeartbeatRef = null;
+        return;
+      }
       final waiting = _pendingRefs.remove(msg.ref);
       // A join reply resolves the channel; any other reply is just delivered.
       if (waiting != null && msg.ref == waiting.joinRef) {
@@ -179,6 +201,7 @@ class PhoenixSocket {
     _isClosed = true;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _pendingHeartbeatRef = null;
     for (final ch in _channels.values.toList()) {
       ch.internalFailJoin(err, st);
       unawaited(ch.internalClose());
