@@ -19,6 +19,7 @@ import 'meridian/search_panel.dart';
 import 'meridian/settings_drawer_host.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
+import 'meridian/orientation_lock.dart';
 import 'panels/badges_client.dart';
 import 'panels/books_client.dart';
 import 'panels/connectors_client.dart';
@@ -43,6 +44,7 @@ void main() {
   // on an asset decode to avoid that trade would be the worse bargain.
   WidgetsFlutterBinding.ensureInitialized();
   unawaited(OrbShaderProgram.load());
+  unawaited(applyOrientationLock());
   runApp(const HenryApp());
 }
 

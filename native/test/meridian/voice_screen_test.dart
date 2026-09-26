@@ -71,6 +71,26 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('a landscape tablet (1280x800) lays out without overflow (issue #8)',
+      (tester) async {
+    // Phones are locked to portrait (orientation_lock.dart); a tablet is not,
+    // so its landscape must fit the portrait column as-is until #14.
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.byType(Thread)).height, greaterThan(100),
+        reason: 'the thread must get real height, not the zero a phone got');
+  });
+
   testWidgets('no text inherits the missing-Material underline', (tester) async {
     // Shipped once: with no Material ancestor, WidgetsApp's fallback
     // DefaultTextStyle applies, and our styles override its colour/size/family

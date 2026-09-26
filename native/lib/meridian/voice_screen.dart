@@ -15,8 +15,10 @@ import 'tokens.dart';
 
 /// The Meridian voice screen — the port of `<main>` in conversation_live.ex:
 /// header / orb pane / thread / hold-to-talk / nav, on the lit MeridianSurface.
-/// Phone portrait; every dimension is derived from the constraints, so a later
-/// landscape pass is a layout change here and nowhere else.
+/// Phone portrait — phones are held there by orientation_lock.dart (#8); a
+/// tablet's short side clears the column in either orientation. Every
+/// dimension is derived from the constraints, so a later landscape pass (#14)
+/// is a layout change here and nowhere else.
 class MeridianVoiceScreen extends StatefulWidget {
   const MeridianVoiceScreen({
     super.key,
