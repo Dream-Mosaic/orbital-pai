@@ -496,8 +496,31 @@ class MicCapture {
     echoCancel: true,
     noiseSuppress: true,
     autoGain: true,
+    // NONE: the recorder must not take part in audio focus at all. With
+    // anything else, record_android 1.5.2 (`AudioRecorder.kt:191-193,
+    // 237-270`) requests its OWN AUDIOFOCUS_GAIN, as USAGE_MEDIA, on every
+    // start and abandons it on every stop — and under the default `pause` any
+    // focus loss calls `pauseRecording()` and never resumes. Focus is held per
+    // listener, not per app, so our player's own request (AudioRouteOwner.kt)
+    // would count as a loss: the mic would go silent mid-session with no
+    // error and no state change we could see. Focus, like mode and route, is
+    // owned by AudioRouteOwner.kt alone.
+    audioInterruption: AudioInterruptionMode.none,
     androidConfig: AndroidRecordConfig(
       audioSource: AndroidAudioSource.voiceCommunication,
+      // OFF: the route owner picks the communication device (and runs SCO
+      // itself below API 31). Left on, record_android registers its own
+      // device callback and calls `startBluetoothSco()` whenever a SCO device
+      // appears (`BluetoothReceiver.kt:47-49,100-110`), and stops it again on
+      // unregister — a second owner fighting `setCommunicationDevice`.
+      manageBluetooth: false,
+      // Explicit, because it is what keeps the recorder's hands off the
+      // AudioManager mode. record_android writes `mode` on start and restores
+      // the mode it captured at construction on every stop/pause ONLY when
+      // this is not MODE_NORMAL (`AudioRecorder.kt:198-200,218-220`); set it
+      // to modeInCommunication "to help AEC" and every mic stop would drop
+      // the player's call mode mid-session. The mode belongs to the player.
+      audioManagerMode: AudioManagerMode.modeNormal,
     ),
   );
 }

@@ -122,6 +122,10 @@ class FakeRecorder implements MicRecorder {
       <StreamController<Uint8List>>[];
 
   int startCalls = 0;
+
+  /// Every config `startStream` was handed, in call order — the only way a
+  /// test can see what MicCapture asks the platform for.
+  final List<RecordConfig> startConfigs = <RecordConfig>[];
   int stopCalls = 0;
   int permissionCalls = 0;
   bool listening = false;
@@ -218,6 +222,7 @@ class FakeRecorder implements MicRecorder {
     final delay = _forCall(_startDelays, startCalls, startDelay);
     if (_live != null) startedOnLiveRecorder = true;
     startCalls++;
+    startConfigs.add(config);
     _enteringStart();
     // Deliberately NOT inside the try below: a hung call never leaves the
     // recorder, so its slot in `_startsInFlight` must never be given back.

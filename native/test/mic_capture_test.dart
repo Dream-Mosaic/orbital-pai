@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/audio/mic_capture.dart';
+import 'package:record/record.dart';
 
 import 'support/fakes.dart';
 
@@ -764,4 +765,31 @@ void main() {
             'AudioRecorder');
     expect(mic.isRecording, isTrue);
   }, timeout: const Timeout(Duration(seconds: 8)));
+
+  test('the recorder is opened with its hands off audio focus, mode and '
+      'Bluetooth', () async {
+    // Each of these is a platform side effect nothing in Dart can observe, so
+    // this is the only place a regression shows up before a live session
+    // goes quiet. AudioRouteOwner.kt owns all three; see the comments on
+    // MicCapture's config for what the recorder does with each otherwise.
+    final rec = FakeRecorder();
+    final mic = MicCapture(recorder: rec);
+
+    final session = mic.start();
+    await session.stream;
+    await session.stop();
+
+    final config = rec.startConfigs.single;
+    expect(config.audioInterruption, AudioInterruptionMode.none,
+        reason: 'any other mode makes the recorder request its own focus, and '
+            'pause the mic for good when the player takes focus from it');
+    expect(config.androidConfig.manageBluetooth, isFalse,
+        reason: 'a second SCO owner fights setCommunicationDevice');
+    expect(config.androidConfig.audioManagerMode, AudioManagerMode.modeNormal,
+        reason: 'any other value makes every mic stop restore the mode the '
+            'recorder captured, dropping the player out of call mode');
+    expect(config.androidConfig.audioSource,
+        AndroidAudioSource.voiceCommunication,
+        reason: 'the source that is cancelled against the voice-call stream');
+  });
 }

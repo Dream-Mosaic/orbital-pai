@@ -19,7 +19,8 @@ class AudioTrackPlayer {
 
   /// Frames played since the last [stopAndFlush] (or [init]) — NOT relative to
   /// a playback "run". See the Kotlin note: a clock that re-anchors under a
-  /// consumer that does not is what made the orb's trace reset.
+  /// consumer that does not is what made the orb's trace reset. A 64-bit
+  /// count — the Kotlin side widens AudioTrack's wrapping 32-bit head.
   Future<int> playedFrames() async =>
       (await _ch.invokeMethod<int>('playedFrames')) ?? 0;
 
