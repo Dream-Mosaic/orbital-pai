@@ -27,9 +27,9 @@ void main() {
   });
 
   test('metrics render one decimal and drop null halves', () {
-    expect(const ThreadMetrics(ttfaMs: 555, ttbMs: 3400).text, '⚡ 0.6s · 🧠 3.4s');
-    expect(const ThreadMetrics(ttfaMs: 1145).text, '⚡ 1.1s');
-    expect(const ThreadMetrics(ttbMs: 2000).text, '🧠 2.0s');
+    expect(const ThreadMetrics(ttfaMs: 555, ttbMs: 3400).text, 'audio 0.6s · brain 3.4s');
+    expect(const ThreadMetrics(ttfaMs: 1145).text, 'audio 1.1s');
+    expect(const ThreadMetrics(ttbMs: 2000).text, 'brain 2.0s');
     expect(const ThreadMetrics().text, '');
   });
 

@@ -526,9 +526,10 @@ class VoiceController extends ChangeNotifier {
   /// What the caption reads when nobody is mid-utterance: the wake prompt on a
   /// locked device, nothing otherwise. Locked is not a turn state — clearing it
   /// at end of turn would strand a locked device with no way to know the words
-  /// that unlock it.
+  /// that unlock it. The name alone: the on-device spotter's keyword file
+  /// (assets/kws/keywords.txt) holds just the name, so that is all it takes.
   String get _restingCaption =>
-      _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
+      _wakeLocked ? 'Say \u201C$assistantName\u201D' : '';
 
   /// The trash detent: delete the conversation on the SERVER, then drop the
   /// on-screen thread — the same effect as Settings ▸ Clear conversation, so

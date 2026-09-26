@@ -15,7 +15,6 @@ import 'meridian/login_screen.dart';
 import 'meridian/nav.dart';
 import 'meridian/orb_shader.dart';
 import 'meridian/reminders_panel.dart';
-import 'meridian/search_panel.dart';
 import 'meridian/settings_drawer_host.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
@@ -378,6 +377,15 @@ class _HenryHomeState extends State<HenryHome> {
                 settings: settings,
                 memory: memory,
                 voiceLock: voiceLock,
+                onSignOut: _auth == null
+                    ? null
+                    : () {
+                        // Close the drawer FIRST: the sign-out tears the
+                        // shell down under it, and a route left on the
+                        // navigator would sit on top of the login screen.
+                        onClose();
+                        unawaited(_auth?.signOut());
+                      },
               ),
             ))
             // The drawer can be dismissed from ANY layer (✕, scrim, or back),
@@ -390,13 +398,6 @@ class _HenryHomeState extends State<HenryHome> {
           memory.close();
           settings.close();
         });
-
-      case MeridianTab.search:
-        // No channel: nothing to open or close.
-        Navigator.of(context).push(meridianDrawerRoute(
-          title: tab.label,
-          child: const SearchPanelView(),
-        ));
 
       case MeridianTab.books:
         books.open();

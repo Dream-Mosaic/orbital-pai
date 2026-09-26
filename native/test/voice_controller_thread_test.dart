@@ -222,7 +222,7 @@ void main() {
     expect(vc.thread.whereType<ThreadMetrics>(), hasLength(1));
     vc.debugHandleMessage(msg('metrics', const {'ttfa': 555, 'ttb': 3400}));
     expect(vc.thread.whereType<ThreadMetrics>(), hasLength(1));
-    expect(vc.thread.whereType<ThreadMetrics>().single.text, '⚡ 0.6s · 🧠 3.4s');
+    expect(vc.thread.whereType<ThreadMetrics>().single.text, 'audio 0.6s · brain 3.4s');
   });
 
   test('an ack offer attaches to the last reminder line', () {
@@ -246,7 +246,7 @@ void main() {
 
   test('a wake lock writes the canned caption', () {
     vc.debugHandleMessage(msg('locked', const {'locked': true}));
-    expect(vc.caption, 'Say “Wake up ${VoiceController.assistantName}”');
+    expect(vc.caption, 'Say “${VoiceController.assistantName}”');
     vc.debugHandleMessage(msg('locked', const {'locked': false}));
     expect(vc.caption, '');
   });
@@ -268,7 +268,7 @@ void main() {
     vc.debugHandleMessage(msg('locked', const {'locked': true}));
     vc.debugHandleMessage(msg('partial', const {'text': 'stray words'}));
     vc.debugHandleMessage(msg('listening', const {}));
-    expect(vc.caption, 'Say “Wake up ${VoiceController.assistantName}”');
+    expect(vc.caption, 'Say “${VoiceController.assistantName}”');
   });
 
   group('captionPending — the trailing ellipsis', () {
@@ -289,7 +289,7 @@ void main() {
       // that is waiting on nothing — dots there would be a lie that never
       // resolves.
       vc.debugHandleMessage(msg('locked', const {'locked': true}));
-      expect(vc.caption, 'Say \u201CWake up ${VoiceController.assistantName}\u201D');
+      expect(vc.caption, 'Say \u201C${VoiceController.assistantName}\u201D');
       expect(vc.captionPending, isFalse);
     });
 
@@ -309,7 +309,7 @@ void main() {
       vc.debugHandleMessage(msg('locked', const {'locked': true}));
       vc.debugHandleMessage(msg('partial', const {'text': 'stray words'}));
       vc.debugHandleMessage(msg('listening', const {}));
-      expect(vc.caption, 'Say \u201CWake up ${VoiceController.assistantName}\u201D');
+      expect(vc.caption, 'Say \u201C${VoiceController.assistantName}\u201D');
       expect(vc.captionPending, isFalse);
     });
 

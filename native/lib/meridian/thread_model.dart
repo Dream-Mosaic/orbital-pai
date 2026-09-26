@@ -110,10 +110,12 @@ class ThreadMetrics extends ThreadItem {
   @override
   double get margin => 0;
 
+  /// Words, not the web's ⚡/🧠: the bundled fonts carry no emoji, so those
+  /// rendered in whatever emoji font a desktop happened to have.
   String get text {
     final parts = <String>[];
-    if (ttfaMs != null) parts.add('⚡ ${(ttfaMs! / 1000).toStringAsFixed(1)}s');
-    if (ttbMs != null) parts.add('🧠 ${(ttbMs! / 1000).toStringAsFixed(1)}s');
+    if (ttfaMs != null) parts.add('audio ${(ttfaMs! / 1000).toStringAsFixed(1)}s');
+    if (ttbMs != null) parts.add('brain ${(ttbMs! / 1000).toStringAsFixed(1)}s');
     return parts.join(' · ');
   }
 }

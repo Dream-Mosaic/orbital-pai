@@ -17,8 +17,9 @@ const Color _dangerRed = Color(0xFFEA003E);
 /// The Settings drawer's Voice / Danger-zone / About sections, plus the
 /// Memory and Voice Lock nav rows — the port of `settings_panel/1` in
 /// `lib/app_web/components/voice_modals.ex` (the function itself runs
-/// ~541-682). The Account, Active-now and Switch-user sections are still OUT
-/// of scope; see the design's §2 Scope
+/// ~541-682), plus an Account section with Sign out, which the web never
+/// needed (its sign-out is the header link). Active-now and Switch-user are
+/// still OUT of scope; see the design's §2 Scope
 /// (`docs/superpowers/specs/2026-08-11-settings-panel-design.md`):
 /// Switch-user is blocked on native session support (roadmap phase 7),
 /// Active-now is a "who else is online" strip not worth a subscription yet.
@@ -33,7 +34,11 @@ class SettingsPanelView extends StatelessWidget {
   static const Key buildStampKey = ValueKey('settings-build-stamp');
 
   const SettingsPanelView(
-      {super.key, required this.client, this.onOpenMemory, this.onOpenVoiceLock});
+      {super.key,
+      required this.client,
+      this.onOpenMemory,
+      this.onOpenVoiceLock,
+      this.onSignOut});
 
   final SettingsClient client;
 
@@ -44,6 +49,10 @@ class SettingsPanelView extends StatelessWidget {
   /// Null hides the Voice Lock row entirely. settings_drawer_host.dart is the
   /// only caller that supplies it.
   final VoidCallback? onOpenVoiceLock;
+
+  /// Null hides the Account section. Null whenever the host injected its own
+  /// connection (tests), since there is then no sign-in to leave.
+  final VoidCallback? onSignOut;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -67,6 +76,10 @@ class SettingsPanelView extends StatelessWidget {
                   const SizedBox(height: 4), // space-y-1 = 0.25rem
                 if (onOpenVoiceLock != null)
                   _navRow('Voice Lock', onOpenVoiceLock!),
+              ],
+              if (onSignOut != null) ...[
+                const SizedBox(height: 24),
+                _account(context, onSignOut!),
               ],
             ],
           );
@@ -246,6 +259,27 @@ class SettingsPanelView extends StatelessWidget {
           side: BorderSide(color: _dangerRed.withValues(alpha: 0.4)),
         ),
         child: Text(label),
+      );
+
+  /// Not a Danger-zone button: signing out loses nothing, since the next
+  /// sign-in lands on the same server-side account. Still confirmed, because
+  /// getting back in means a trip through the browser.
+  Widget _account(BuildContext context, VoidCallback onSignOut) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _SectionLabel('Account'),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () async {
+              if (await _confirm(context, 'Sign out of this device?')) onSignOut();
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: M.ink,
+              side: BorderSide(color: M.ink.withValues(alpha: 0.25)),
+            ),
+            child: const Text('Sign out'),
+          ),
+        ],
       );
 
   /// Both halves of what is deployed, because they are released separately and routinely

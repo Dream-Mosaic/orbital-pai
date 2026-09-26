@@ -170,7 +170,7 @@ void main() {
     // happen to read "Groceries" here, same as the web (the list book's
     // label IS the list's name).
     expect(find.text('Groceries'), findsNWidgets(2));
-    expect(find.text('Clear ↻'), findsOneWidget);
+    expect(find.text('Clear'), findsOneWidget);
 
     await conn.disconnect();
   });
@@ -279,7 +279,7 @@ void main() {
       expect(find.byKey(BooksPanelView.bookRowKey('list:3')), findsOneWidget);
       expect(find.byKey(BooksPanelView.bookRowKey('garden')), findsOneWidget);
       expect(find.text('Garden'), findsOneWidget);
-      expect(find.text('➕ New list…'), findsOneWidget);
+      expect(find.text('New list'), findsOneWidget);
       expect(find.byKey(BooksPanelView.newListFieldKey), findsOneWidget);
       expect(find.byKey(BooksPanelView.createButtonKey), findsOneWidget);
 
@@ -711,7 +711,7 @@ void main() {
     });
   });
 
-  group('Clear ↻', () {
+  group('Clear', () {
     testWidgets(
         "shows the server's clear_confirm string verbatim; cancelling pushes "
         'nothing', (tester) async {
@@ -721,7 +721,7 @@ void main() {
           await openedClient(tester, _groceriesFrame(clearConfirm: confirm));
       await pumpPanel(tester, client);
 
-      await tester.tap(find.text('Clear ↻'));
+      await tester.tap(find.text('Clear'));
       await tester.pumpAndSettle();
 
       expect(find.text(confirm), findsOneWidget);
@@ -743,7 +743,7 @@ void main() {
       final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
       await pumpPanel(tester, client);
 
-      await tester.tap(find.text('Clear ↻'));
+      await tester.tap(find.text('Clear'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
@@ -783,7 +783,7 @@ void main() {
       final (client, conn, fake) = await openedClient(tester, frame);
       await pumpPanel(tester, client);
 
-      await tester.tap(find.text('Clear ↻'));
+      await tester.tap(find.text('Clear'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
@@ -806,7 +806,7 @@ void main() {
       final (client, conn, fake) = await openedClient(tester, _groceriesFrame());
       await pumpPanel(tester, client);
 
-      await tester.tap(find.text('Clear ↻'));
+      await tester.tap(find.text('Clear'));
       await tester.pumpAndSettle();
 
       await tester.tapAt(const Offset(10, 10));

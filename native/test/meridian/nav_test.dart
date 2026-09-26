@@ -21,7 +21,7 @@ void main() {
     await loader.load();
   });
 
-  testWidgets("all five tabs ship, in the web's order", (tester) async {
+  testWidgets('the four stations ship, and Search is not one (#20)', (tester) async {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: MeridianNav(onTap: (_) {})),
     ));
@@ -30,7 +30,6 @@ void main() {
       MeridianTab.reminders,
       MeridianTab.books,
       MeridianTab.connectors,
-      MeridianTab.search,
     ]);
     for (final tab in MeridianTab.values) {
       expect(find.text(tab.label.toUpperCase()), findsOneWidget);
@@ -44,7 +43,6 @@ void main() {
     expect(MeridianTab.reminders.modal, 'reminders');
     expect(MeridianTab.books.modal, 'books');
     expect(MeridianTab.connectors.modal, 'connectors');
-    expect(MeridianTab.search.modal, 'search');
   });
 
   testWidgets('tapping reports the tab', (tester) async {

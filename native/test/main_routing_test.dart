@@ -18,7 +18,6 @@ import 'package:orbital_pai/meridian/hero_icon.dart';
 import 'package:orbital_pai/meridian/login_screen.dart';
 import 'package:orbital_pai/meridian/nav.dart';
 import 'package:orbital_pai/meridian/reminders_panel.dart';
-import 'package:orbital_pai/meridian/search_panel.dart';
 import 'package:orbital_pai/meridian/settings_drawer_host.dart';
 import 'package:orbital_pai/meridian/voice_screen.dart';
 import 'package:orbital_pai/panels/books_client.dart';
@@ -254,19 +253,6 @@ void main() {
     final (conn, _) = await pumpHome(tester);
     await expectNativeStation(
         tester, MeridianTab.settings, SettingsDrawerHost);
-    await conn.disconnect();
-  });
-
-  testWidgets('Search opens the native panel and joins no topic',
-      (tester) async {
-    final (conn, fake) = await pumpHome(tester);
-    final before = List<String>.from(fake.joinedTopics);
-
-    await expectNativeStation(tester, MeridianTab.search, SearchPanelView);
-
-    // Search is the one station with no channel behind it; a future refactor
-    // that gave it one would have to say so here.
-    expect(fake.joinedTopics, before);
     await conn.disconnect();
   });
 
@@ -568,6 +554,48 @@ void main() {
           reason: 'signOut() clearing the store is not enough — the shell must actually tear '
               'down and fall through to the login screen, or the user is stuck on a dead '
               'MeridianVoiceScreen with no way back in short of killing the app');
+    });
+
+    testWidgets('Settings ▸ Sign out lands on the login screen, drawer gone (#20)',
+        (tester) async {
+      phone(tester);
+      final store = freshStore();
+      await store.write('stored-token');
+      final client = MockClient((_) async => http.Response('{}', 500));
+      final auth = AuthController(store: store, httpClient: client);
+      addTearDown(auth.dispose);
+      final fake = FakeSocket(joinPushes: {
+        'panel:settings:henry': '[null,null,"panel:settings:henry","state",'
+            '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+            '"briefing_time":null,"relock_seconds":15,"app_version":"0.4.19"}]',
+      });
+
+      await tester.pumpWidget(MaterialApp(
+        home: HenryHome(
+          auth: auth,
+          buildConnection: (token, onRejected) => AppConnection(
+            connector: () async => fake.socket,
+            rejoinBackoff: const [Duration(days: 1)],
+          ),
+        ),
+      ));
+      await tester.pump();
+      await tester.pump();
+
+      await tapStation(tester, MeridianTab.settings);
+      await tester.ensureVisible(find.text('Sign out'));
+      await tester.tap(find.text('Sign out'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.text('OK'));
+      await tester.pump();
+      await tester.pump(MeridianDrawer.slide + const Duration(milliseconds: 100));
+      await tester.pump();
+
+      expect(await store.read(), isNull);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(find.byType(MeridianDrawer), findsNothing,
+          reason: 'a drawer left on the navigator would cover the login screen');
     });
   });
 

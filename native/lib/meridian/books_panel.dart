@@ -10,7 +10,7 @@ import 'tokens.dart';
 /// `garden_panel/1` in `books_garden.dart`) in
 /// `lib/app_web/components/voice_modals.ex` (~157-214, ~216-295, ~297-373): a
 /// header showing the current book's icon/label plus a type-aware
-/// "Clear ↻", a "Switch book" disclosure listing every book, and the current
+/// "Clear", a "Switch book" disclosure listing every book, and the current
 /// book's body.
 ///
 /// Server-authoritative, same pattern as the other panels: every write pushes
@@ -19,7 +19,7 @@ import 'tokens.dart';
 /// NOT re-sort either.
 ///
 /// **The one intentional divergence from the web:** the web nests a second
-/// `<details>` inside "Switch book" for "➕ New list…"
+/// `<details>` inside "Switch book" for "New list"
 /// (`voice_modals.ex:346-361`) — two taps to reach a text field, on a phone,
 /// inside a drawer. This view FLATTENS that inner disclosure: expanding
 /// "Switch book" shows every book AND the create row (label, field, button)
@@ -158,7 +158,7 @@ class _BooksPanelViewState extends State<BooksPanelView> {
               ),
             ),
             _ghostTextButton(
-              'Clear ↻',
+              'Clear',
               // Both arguments from `state` — the same snapshot, deliberately.
               onTap: () =>
                   _clearBook(context, state.clearConfirm, state.currentKey),
@@ -237,17 +237,16 @@ class _BooksPanelViewState extends State<BooksPanelView> {
         ),
       );
 
-  /// The flattened create row: no nested disclosure, just a label — "➕ New
-  /// list…" is the web's own copy for the inner `<summary>` it replaces
-  /// (`voice_modals.ex:348-350`) — sitting above an always-visible field +
-  /// button. See this file's top doc comment for why there is no second tap.
+  /// The flattened create row: no nested disclosure, just a label (the web's
+  /// "➕ New list…" minus the emoji, which the bundled fonts do not carry)
+  /// sitting above an always-visible field + button. See this file's top doc comment for why there is no second tap.
   Widget _createRow(double bottomInset) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 4),
             child: Text(
-              '➕ New list…',
+              'New list',
               style: TextStyle(fontSize: 13, color: M.inkDim),
             ),
           ),

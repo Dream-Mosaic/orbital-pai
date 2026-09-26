@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 import 'hero_icon.dart';
 import 'tokens.dart';
 
-/// The five bottom-nav stations, in the web's source order
-/// (conversation_live.ex:904-941). **This order is fixed**: phases B–D
-/// swapped a webview for a native screen one station at a time, never the
-/// shape of the nav (parent spec §7). All five are native now.
-enum MeridianTab { settings, reminders, books, connectors, search }
+/// The bottom-nav stations. Search is deliberately absent: the web's station
+/// only ever said "coming soon", and a station that opens onto nothing costs a
+/// thumb-width of nav. It comes back when research mode exists (#20).
+enum MeridianTab { settings, reminders, books, connectors }
 
 extension MeridianTabInfo on MeridianTab {
   String get label => switch (this) {
@@ -14,7 +13,6 @@ extension MeridianTabInfo on MeridianTab {
         MeridianTab.reminders => 'Reminders',
         MeridianTab.books => 'Books',
         MeridianTab.connectors => 'Connectors',
-        MeridianTab.search => 'Search',
       };
 
   /// The web's own heroicon, bundled — not a Material lookalike.
@@ -23,7 +21,6 @@ extension MeridianTabInfo on MeridianTab {
         MeridianTab.reminders => HeroIcon.bell,
         MeridianTab.books => HeroIcon.bookOpen,
         MeridianTab.connectors => HeroIcon.link,
-        MeridianTab.search => HeroIcon.magnifyingGlass,
       };
 
   /// The `phx-value-modal` the web's nav button carries, and the `?panel=`
@@ -43,7 +40,6 @@ extension MeridianTabInfo on MeridianTab {
         MeridianTab.reminders => 'reminders',
         MeridianTab.books => 'books',
         MeridianTab.connectors => 'connectors',
-        MeridianTab.search => 'search',
       };
 }
 
@@ -77,7 +73,7 @@ class MeridianNav extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           for (final tab in MeridianTab.values)
-            // Flexible, because five engraved labels do not fit a 360px phone at
+            // Flexible, because the engraved labels do not fit a 360px phone at
             // their natural width. The CSS gets away with it: flex items shrink
             // by default and `.nlabel` has no `nowrap`, so the browser wraps the
             // label. A plain Row would just overflow — which it did.

@@ -311,6 +311,40 @@ void main() {
     await conn.disconnect();
   });
 
+  testWidgets('no Account section without a sign-in to leave', (tester) async {
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+    expect(find.text('Sign out'), findsNothing);
+    await conn.disconnect();
+  });
+
+  testWidgets('Sign out asks first, and only a confirm signs out',
+      (tester) async {
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+    var signedOut = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+          body: SingleChildScrollView(
+              child: SettingsPanelView(
+                  client: client, onSignOut: () => signedOut++))),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Sign out'));
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(signedOut, 0);
+
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(signedOut, 1);
+    await conn.disconnect();
+  });
+
   testWidgets('renders without throwing before the first push lands',
       (tester) async {
     // No joinPushes entry for the topic: the join reply arrives but no

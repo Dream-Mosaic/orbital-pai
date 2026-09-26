@@ -28,6 +28,7 @@ class SettingsDrawerHost extends StatefulWidget {
     required this.settings,
     required this.memory,
     required this.voiceLock,
+    this.onSignOut,
   });
 
   final Animation<double> animation;
@@ -35,6 +36,9 @@ class SettingsDrawerHost extends StatefulWidget {
   final SettingsClient settings;
   final MemoryClient memory;
   final VoiceLockClient voiceLock;
+
+  /// Passed through to [SettingsPanelView.onSignOut].
+  final VoidCallback? onSignOut;
 
   @override
   State<SettingsDrawerHost> createState() => _SettingsDrawerHostState();
@@ -94,6 +98,7 @@ class _SettingsDrawerHostState extends State<SettingsDrawerHost> {
                 client: widget.settings,
                 onOpenMemory: () => _openOnly(_Layer.memory),
                 onOpenVoiceLock: () => _openOnly(_Layer.voiceLock),
+                onSignOut: widget.onSignOut,
               ),
             _Layer.memory => MemoryPanelView(client: widget.memory),
             _Layer.voiceLock => VoiceLockPanelView(client: widget.voiceLock),

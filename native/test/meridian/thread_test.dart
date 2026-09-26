@@ -72,7 +72,7 @@ void main() {
     expect(find.text('— earlier —'), findsOneWidget);
     expect(find.text('⚙ checking your calendar…'), findsOneWidget);
     expect(find.text('⚙ checking the weather ✓'), findsOneWidget);
-    expect(find.text('⚡ 0.6s · 🧠 3.4s'), findsOneWidget);
+    expect(find.text('audio 0.6s · brain 3.4s'), findsOneWidget);
   });
 
   testWidgets('collapsed margins: chips stack tight, lines keep the rhythm',
