@@ -22,6 +22,22 @@ import '../support/fakes.dart';
 Finder findHero(HeroIcon icon) =>
     find.byWidgetPredicate((w) => w is HeroIconView && w.icon == icon);
 
+/// Records which clear the screen asked for, without needing a joined socket.
+class _ClearSpy extends VoiceController {
+  _ClearSpy({required super.connection})
+      : super(mic: FakeMic(), player: FakePlayer());
+  int serverClears = 0;
+  int localClears = 0;
+  @override
+  bool clearConversation() {
+    serverClears++;
+    return true;
+  }
+
+  @override
+  void clearThread() => localClears++;
+}
+
 void main() {
   late AppConnection conn;
 
@@ -119,6 +135,36 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(tester.takeException(), isNull,
         reason: 'the thread is the only flexible row — it must absorb the growth');
+  });
+
+  testWidgets(
+      'the trash detent, once confirmed, clears the SERVER conversation (issue #9)',
+      (tester) async {
+    // Settings ▸ Clear conversation deletes server turns; the detent shares
+    // its label, so it must share its effect — not merely hide the thread.
+    phone(tester);
+    final vc = _ClearSpy(connection: conn);
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.pump();
+
+    // The orb animates forever, so pumpAndSettle would never return.
+    await tester.tap(find.byTooltip('Clear conversation'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Cancel'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(vc.serverClears, 0, reason: 'cancel must not delete anything');
+
+    await tester.tap(find.byTooltip('Clear conversation'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Clear'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(vc.serverClears, 1);
+    expect(vc.localClears, 0,
+        reason: 'a local-only clear is the bug: the label promises the server one');
   });
 
   testWidgets('the nav reports taps up to the host', (tester) async {

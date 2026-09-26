@@ -530,11 +530,22 @@ class VoiceController extends ChangeNotifier {
   String get _restingCaption =>
       _wakeLocked ? 'Say \u201CWake up $assistantName\u201D' : '';
 
-  /// Drop the local transcript. NOTE: the web's trash button fires the LiveView's
-  /// `clear_conversation` handler, which also clears server-side memory — the
-  /// voice CHANNEL has no equivalent handle_in, and A2 makes no server changes
-  /// beyond the panel route. So this is local-only; clearing memory stays a panel
-  /// action.
+  /// The trash detent: delete the conversation on the SERVER, then drop the
+  /// on-screen thread — the same effect as Settings ▸ Clear conversation, so
+  /// the two controls sharing that label cannot disagree (issue #9). Rides
+  /// voice:henry, not panel:settings, because the detent is used with no
+  /// drawer open. Returns false, touching nothing, when not joined: wiping the
+  /// screen would claim a server delete that never happened.
+  bool clearConversation() {
+    final ch = _live;
+    if (ch == null) return false;
+    ch.push('clear_turns', const {});
+    clearThread();
+    return true;
+  }
+
+  /// Drop the local transcript only. The callback the panel clients run after
+  /// THEIR server-side clear; the detent goes through [clearConversation].
   void clearThread() {
     _thread.clear();
     _brainIndex = null;

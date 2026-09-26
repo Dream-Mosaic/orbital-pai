@@ -146,6 +146,16 @@ defmodule AppWeb.VoiceChannel do
   def handle_in("ack_reminder", _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
+  # The voice screen's trash detent (issue #9): clears the SERVER conversation, same as
+  # Settings > Clear conversation. Rides this topic for the ack_reminder reason -- the detent
+  # is used with no drawer open, so panel:settings is not joined. Mirrors SettingsChannel's
+  # clear_turns: the DB delete plus a reset of the live FSM's turn state.
+  def handle_in("clear_turns", _payload, socket) do
+    App.Memory.clear_turns(socket.assigns.user_id)
+    Conversation.clear_memory(socket.assigns.conversation)
+    {:reply, :ok, socket}
+  end
+
   def handle_in("wake_detected", _payload, socket) do
     Conversation.wake_detected(socket.assigns.conversation)
     {:noreply, socket}

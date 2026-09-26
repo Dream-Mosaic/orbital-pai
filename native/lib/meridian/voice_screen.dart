@@ -155,7 +155,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         ],
       ),
     );
-    if (ok ?? false) widget.controller.clearThread();
+    if (ok ?? false) widget.controller.clearConversation();
   }
 
   @override

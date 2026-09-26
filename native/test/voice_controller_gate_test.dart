@@ -804,6 +804,48 @@ void main() {
     expect(acks.single['id'], 42);
   });
 
+  test('the trash detent clears the SERVER conversation, then the thread (issue #9)',
+      () async {
+    // Two controls read "Clear conversation"; they must do the same thing.
+    // Rides voice:henry for the ack_reminder reason: the detent is used with
+    // no drawer open, so panel:settings is not joined.
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'transcript',
+      json: {'text': 'hi'},
+    ));
+    expect(b.vc.thread, isNotEmpty);
+
+    expect(b.vc.clearConversation(), isTrue);
+    await settle();
+
+    expect(pushesOf(b.fake, 'clear_turns'), hasLength(1));
+    expect(b.vc.thread, isEmpty);
+  });
+
+  test('clearing while not joined leaves the thread alone -- nothing was deleted',
+      () async {
+    final b = build();
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'transcript',
+      json: {'text': 'hi'},
+    ));
+
+    expect(b.vc.clearConversation(), isFalse);
+    expect(b.vc.thread, isNotEmpty,
+        reason: 'wiping the screen would claim a server delete that never happened');
+  });
+
   test(
       'regaining bound re-announces this device\'s toggles — a standby ptt '
       'press must not claim into a server still running auto mode',

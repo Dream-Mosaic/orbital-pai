@@ -346,6 +346,36 @@ defmodule AppWeb.VoiceChannelTest do
     end
   end
 
+  # The voice screen's trash detent (issue #9). Same topic rationale as ack_reminder: the
+  # detent is on screen with no drawer open, so panel:settings is not joined.
+  describe "clear_turns" do
+    test "wipes this user's turns, nobody else's, and resets the live FSM", %{
+      socket: socket,
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, _} =
+        App.Memory.persist_turn(%{user_id: alice.id, user_text: "hi", brain_text: "hello"})
+
+      {:ok, _} = App.Memory.persist_turn(%{user_id: bob.id, user_text: "hi", brain_text: "hello"})
+
+      conv = socket.assigns.conversation
+
+      :sys.replace_state(conv, fn {state, data} ->
+        {state, %{data | pending_request: "leftover"}}
+      end)
+
+      ref = push(socket, "clear_turns", %{})
+      assert_reply ref, :ok
+
+      assert App.Memory.recent_turns(alice.id, 10) == []
+      assert length(App.Memory.recent_turns(bob.id, 10)) == 1
+      # clear_memory/1 is a cast; the reply can beat it.
+      Process.sleep(50)
+      assert :sys.get_state(conv) |> elem(1) |> Map.get(:pending_request) == nil
+    end
+  end
+
   defp fired_reminder!(attrs) do
     due = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
     {:ok, r} = App.Reminders.create(Map.merge(%{due_at: due}, attrs))
