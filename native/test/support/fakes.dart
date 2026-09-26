@@ -386,12 +386,17 @@ class FakePlayer implements AudioTrackPlayer {
 
 /// Headless [WakeSpotter]: no sherpa-onnx, no assets, no FFI.
 ///
-/// [fireNext] arms exactly one detection: the next [offer] call returns
-/// `true` and disarms it, mirroring the real spotter's one-shot fire (it
-/// resets its internal decoder on a hit) without any of the audio math. Every
-/// call is counted so a test can assert the spotter kept seeing chunks even
-/// while the gate stayed closed, and [available] defaults to `true` so a test
-/// has to opt into the fail-open scenario rather than get it by accident.
+/// [fireNext] arms exactly one detection: the next [offer] call reports a hit
+/// and disarms it, mirroring the real spotter's one-shot fire (it resets its
+/// internal decoder on a hit) without any of the audio math. The hit is
+/// delivered ASYNCHRONOUSLY, after [offer] has returned — as the real
+/// worker-isolate spotter's is — so the controller has already handed that
+/// chunk to the gate by the time it hears about it. [fire] delivers a hit
+/// with no chunk at all, for a test that wants one landing between chunks.
+/// Every call is counted so a test can assert the spotter kept seeing chunks
+/// even while the gate stayed closed, and [available] defaults to `true` so a
+/// test has to opt into the fail-open scenario rather than get it by
+/// accident.
 class FakeSpotter implements WakeSpotter {
   /// [available] is the fixed, immediately-true-or-false shape (the default,
   /// and what most tests want). [loadAfter], when given, models the REAL
@@ -440,12 +445,26 @@ class FakeSpotter implements WakeSpotter {
     _available = true;
   }
 
+  // Not sync: a broadcast controller's default delivery is a later
+  // microtask, which is exactly the "after offer() returned" timing the real
+  // spotter has.
+  final StreamController<void> _detections = StreamController<void>.broadcast();
+
   @override
-  bool offer(Uint8List pcm16) {
+  Stream<void> get detections => _detections.stream;
+
+  /// Deliver one hit now, independent of any chunk. Deliberately NOT gated on
+  /// stop/dispose: dropping stale hits is the real spotter's job (covered in
+  /// keyword_spotter_test.dart), so this lets a test prove the controller
+  /// does not act on one either.
+  void fire() => _detections.add(null);
+
+  @override
+  void offer(Uint8List pcm16) {
     offerCalls++;
-    if (disposed || !fireNext) return false;
+    if (disposed || !fireNext) return;
     fireNext = false;
-    return true;
+    fire();
   }
 
   @override

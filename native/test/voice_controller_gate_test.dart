@@ -199,12 +199,98 @@ void main() {
     await settle();
 
     expect(b.fake.sentEvents.where((e) => e == 'wake_detected'), hasLength(1));
-    expect(b.fake.binaryFrames, isNotEmpty);
 
     b.mic.emit(chunk(320));
     await settle();
+    expect(b.fake.binaryFrames, isNotEmpty);
     expect(b.fake.sentEvents.where((e) => e == 'wake_detected'), hasLength(1),
         reason: 'already unlocked — do not re-push');
+  });
+
+  test(
+      'a detection that lands chunks after the wake word still opens the '
+      'gate and flushes that word from the pre-roll (issue #22)', () async {
+    // The spotter decodes on a worker isolate, so its hit arrives after the
+    // controller has already refused the chunk that produced it. That is
+    // only safe because the refused chunks sit in the gate's pre-roll ring —
+    // pinned here so a change to either side cannot quietly drop the word.
+    final spotter = FakeSpotter();
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'locked',
+      json: {'locked': true},
+    ));
+    // Distinct sizes so the order on the wire is readable.
+    b.mic.emit(chunk(320)); // "Hen-"
+    b.mic.emit(chunk(640)); // "-ry"
+    await settle();
+    expect(b.fake.binaryFrames, isEmpty, reason: 'sanity: still locked');
+
+    spotter.fire(); // the late hit, between chunks
+    await settle();
+    expect(b.fake.sentEvents.where((e) => e == 'wake_detected'), hasLength(1));
+
+    b.mic.emit(chunk(960));
+    await settle();
+    // Relative to the first frame: each binary push carries a fixed
+    // envelope ahead of the PCM.
+    final frames = b.fake.binaryFrames;
+    expect([for (final f in frames) f.length - frames.first.length], [0, 320, 640],
+        reason: 'the pre-roll carrying the wake word goes out first, in order');
+  });
+
+  test('a detection landing after stopMic is not acted on', () async {
+    final spotter = FakeSpotter();
+    final b = build(spotter: spotter);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'locked',
+      json: {'locked': true},
+    ));
+
+    await b.vc.stopMic();
+    await settle();
+    spotter.fire();
+    await settle();
+
+    expect(b.fake.sentEvents, isNot(contains('wake_detected')),
+        reason: 'a hit with no microphone would unlock a conversation '
+            'nothing is listening to');
+  });
+
+  test('a detection landing after dispose is not acted on', () async {
+    final spotter = FakeSpotter();
+    final b = build(spotter: spotter);
+    addTearDown(b.conn.dispose);
+    await b.conn.connect();
+    await settle();
+    await b.vc.startMic();
+    await settle();
+    b.vc.debugHandleMessage(const DecodedMessage(
+      topic: 'voice:henry',
+      event: 'locked',
+      json: {'locked': true},
+    ));
+
+    b.vc.dispose();
+    spotter.fire();
+    await settle();
+
+    expect(b.fake.sentEvents, isNot(contains('wake_detected')));
   });
 
   test('with no spotter available the sink stays open — fail open, never deaf',

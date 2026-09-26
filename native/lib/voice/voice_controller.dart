@@ -70,6 +70,9 @@ class VoiceController extends ChangeNotifier {
     // two independent async chains (this one, and connect()'s own socket
     // handshake) happens to resolve first.
     _deviceIdReady = _enrichJoinWithDeviceId();
+    // Once, for the controller's lifetime: the spotter is one instance shared
+    // across every mic session, and so is its detection stream.
+    _wakeSub = _spotter.detections.listen((_) => _onWakeDetected());
   }
 
   static const String _topic = 'voice:henry';
@@ -225,6 +228,7 @@ class VoiceController extends ChangeNotifier {
   /// mic `listen` callback in [startMic] for where they meet the audio.
   final WakeSpotter _spotter;
   final WakeGate _gate;
+  StreamSubscription<void>? _wakeSub;
 
   /// Bound on [startMic]'s `await _spotter.start()`. The spotter's own
   /// fail-open (a `throw` inside `start()`) is unconditional and needs no
@@ -1490,13 +1494,10 @@ class VoiceController extends ChangeNotifier {
           _live?.pushBinary('audio', chunk);
           return;
         }
-        // Only a fresh detection while the gate is still closed announces
-        // itself — an already-open gate (a second false-ish fire, or the
-        // gate opened by PTT instead) must not re-push wake_detected.
-        if (_spotter.offer(chunk) && !_gate.open) {
-          _gate.onWakeDetected();
-          _live?.push('wake_detected', const {});
-        }
+        // Fire-and-forget: a hit arrives later, on `_onWakeDetected`. The
+        // gate refuses this chunk into its pre-roll ring meanwhile, and the
+        // ring is what makes a late hit harmless — see that method.
+        _spotter.offer(chunk);
         final decision = _gate.offer(chunk);
         if (decision.send) {
           for (final pre in decision.preRoll) {
@@ -1549,6 +1550,27 @@ class VoiceController extends ChangeNotifier {
       _log('mic start failed: $e');
       _safeNotify();
     }
+  }
+
+  /// A keyword hit from the spotter's worker, one or more chunks after the
+  /// audio that produced it.
+  ///
+  /// Late is safe: while the gate is closed every chunk goes into its 1.5s
+  /// pre-roll ring, and [WakeGate.onWakeDetected] arms a flush of that ring
+  /// on the next offer — so the wake word, already in the ring, still goes
+  /// out ahead of the live audio. The spotter itself drops hits from a
+  /// session it has since been stopped for; the mic check here is the
+  /// controller's own half of that, since a hit arriving with no microphone
+  /// would unlock a conversation nothing is listening to.
+  ///
+  /// Only a fresh detection while the gate is still closed announces itself
+  /// — an already-open gate (a second false-ish fire, or the gate opened by
+  /// PTT instead) must not re-push wake_detected.
+  void _onWakeDetected() {
+    if (_disposed || !_micState.on) return;
+    if (_gate.open) return;
+    _gate.onWakeDetected();
+    _live?.push('wake_detected', const {});
   }
 
   /// The platform ended [ended]'s stream without being asked to.
@@ -1696,6 +1718,8 @@ class VoiceController extends ChangeNotifier {
     // goes with it: otherwise a fresh sign-in building a fresh
     // `VoiceController` (and a fresh `SherpaWakeSpotter`) leaks the previous
     // one's ONNX engine for the rest of the process.
+    unawaited(_wakeSub?.cancel());
+    _wakeSub = null;
     unawaited(_spotter.dispose());
     // Cancelled BEFORE the player is disposed: the timer calls into the
     // player, so tearing the player down first would read backwards even
