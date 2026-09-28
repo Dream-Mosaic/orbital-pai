@@ -104,8 +104,11 @@ defmodule App.Config do
             source_ingest_batch: 200,
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
             weather_home: {38.52, -89.98, "Belleville, IL"},
-            # Trusted-wall user switching; enable only on the household kiosk deployment.
-            kiosk_user_switch: false,
+            # Whether a tool call may target a NAMED household member ("remind Sarah to…",
+            # "add milk to Sarah's list"). Off by default: any allowlisted user could then write
+            # into another's reminders and lists. Was `kiosk_user_switch`, a name left over from
+            # the web wall it was first built for (spec 2026-09-26-web-admin-dashboard-design).
+            household_named_targets: false,
             # Vision ("look at this"): grab a single webcam frame on an explicit spoken cue and
             # send it to the multimodal brain. ON by default (further gated by camera permission +
             # the explicit phrase); env-backed so `VISION=false`/`0` disables it without recompiling.
@@ -125,7 +128,7 @@ defmodule App.Config do
   def default do
     base = %__MODULE__{
       timezone: timezone(),
-      kiosk_user_switch: kiosk_user_switch?(),
+      household_named_targets: household_named_targets?(),
       vision: vision?()
     }
 
@@ -151,10 +154,9 @@ defmodule App.Config do
 
   defp valid_zone?(_), do: false
 
-  # Env-backed (unlike the frozen struct-literal toggles) so tests / prod config can flip it via
-  # `Application.put_env(:app, :kiosk_user_switch, true)` without recompiling; struct default stays
-  # false either way.
-  defp kiosk_user_switch?, do: Application.get_env(:app, :kiosk_user_switch, false)
+  # Env-backed (unlike the frozen struct-literal toggles) so tests and prod config can flip it
+  # via `Application.put_env(:app, :household_named_targets, true)` without recompiling.
+  defp household_named_targets?, do: Application.get_env(:app, :household_named_targets, false)
 
   # Env-backed (default ON). `VISION=false`/`0` flips it off in config/runtime.exs without a
   # recompile; anything else (or unset) leaves it on. Nothing happens without ALSO the explicit

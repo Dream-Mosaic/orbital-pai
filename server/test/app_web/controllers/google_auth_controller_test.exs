@@ -350,9 +350,19 @@ defmodule AppWeb.GoogleAuthControllerTest do
       assert get_session(conn, :user_return_to) == path
     end
 
-    # Resuming a POST would replay a write the user never re-confirmed.
+    # Resuming a POST would replay a write the user never re-confirmed. No authenticated POST
+    # route exists any more, so run the auth plug on a POST directly. `bypass_through` still
+    # needs SOME route to match the verb+path (it only overrides which pipeline runs, not
+    # whether the router finds one at all) -- "/" has no POST route since Task 4 removed the
+    # last one, so this posts to the one POST route left anywhere in the router
+    # (/api/auth/exchange) and overrides its real pipeline (:api) with :browser, the one under
+    # test. Its own :exchange action never runs -- bypass halts before the controller.
     test "a refused POST is not remembered", %{anon: anon} do
-      conn = post(anon, ~p"/kiosk/switch_user", %{})
+      conn =
+        anon
+        |> bypass_through(AppWeb.Router, [:browser])
+        |> post("/api/auth/exchange")
+        |> AppWeb.UserAuth.call(AppWeb.UserAuth.init([]))
 
       assert redirected_to(conn) == "/login"
       assert get_session(conn, :user_return_to) == nil

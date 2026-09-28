@@ -76,12 +76,12 @@ defmodule App.Tools.GardenTest do
       assert result.assigned == "you"
     end
 
-    test "for: a named member assigns to them when kiosk_user_switch is on", %{
+    test "for: a named member assigns to them when household_named_targets is on", %{
       user: user,
       other: other
     } do
-      Application.put_env(:app, :kiosk_user_switch, true)
-      on_exit(fn -> Application.delete_env(:app, :kiosk_user_switch) end)
+      Application.put_env(:app, :household_named_targets, true)
+      on_exit(fn -> Application.delete_env(:app, :household_named_targets) end)
 
       assert {:ok, result} =
                Tool.execute("add_plant", %{"name" => "bonsai", "for" => "bob"}, ctx(user))

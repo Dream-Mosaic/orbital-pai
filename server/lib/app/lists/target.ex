@@ -4,9 +4,9 @@ defmodule App.Lists.Target do
   `App.Reminders.Target` with the default FLIPPED TO HOUSEHOLD: unspecified/household-words
   always resolve to the shared household list (unconditional — "shared by default" is the
   headline decision, unlike reminders' personal default). Personal words resolve to the session
-  user. A NAMED person is gated by `kiosk_user_switch` (like reminders' user-switching) since
-  attributing something to someone else by voice needs the trusted-wall context; gate off (or an
-  unrecognized name) falls back to the session user, personal — never silently household to a
+  user. A NAMED person is gated by `household_named_targets` (like reminders' named targeting)
+  since attributing something to someone else by voice needs that explicit opt-in; gate off (or
+  an unrecognized name) falls back to the session user, personal — never silently household to a
   stranger. Returns `%{user_id, household, assigned}` — `assigned` is a human label the brain
   reads back so it never silently mis-scopes.
   """

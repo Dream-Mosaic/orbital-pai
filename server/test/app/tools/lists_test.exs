@@ -56,12 +56,13 @@ defmodule App.Tools.ListsTest do
       assert result.assigned == "you"
     end
 
-    test "for: a named household member assigns it to them, when kiosk_user_switch is on", %{
-      user: user,
-      other: other
-    } do
-      Application.put_env(:app, :kiosk_user_switch, true)
-      on_exit(fn -> Application.delete_env(:app, :kiosk_user_switch) end)
+    test "for: a named household member assigns it to them, when household_named_targets is on",
+         %{
+           user: user,
+           other: other
+         } do
+      Application.put_env(:app, :household_named_targets, true)
+      on_exit(fn -> Application.delete_env(:app, :household_named_targets) end)
 
       assert {:ok, result} =
                Tool.execute("add_to_list", %{"item" => "milk", "for" => "bob"}, ctx(user))
@@ -70,7 +71,7 @@ defmodule App.Tools.ListsTest do
       assert Enum.any?(App.Lists.list_visible(other.id), &(&1.name == "To-do"))
     end
 
-    test "for: a name falls back to personal when kiosk_user_switch is off (default)", %{
+    test "for: a name falls back to personal when household_named_targets is off (default)", %{
       user: user
     } do
       assert {:ok, result} =

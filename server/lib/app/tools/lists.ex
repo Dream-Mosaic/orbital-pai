@@ -211,7 +211,7 @@ defmodule App.Tools.Lists do
   defp resolve_target(for_arg, ctx) do
     Target.resolve(for_arg, %{
       session_user_id: uid(ctx),
-      gate_on: App.Config.default().kiosk_user_switch,
+      gate_on: App.Config.default().household_named_targets,
       users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
     })
   end

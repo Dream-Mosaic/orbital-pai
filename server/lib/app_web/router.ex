@@ -34,7 +34,6 @@ defmodule AppWeb.Router do
     end
 
     get "/auth/google/connect", GoogleAuthController, :connect
-    post "/kiosk/switch_user", KioskController, :switch_user
   end
 
   scope "/api", AppWeb do

@@ -176,7 +176,7 @@ defmodule App.Tools.Reminders do
       Target.resolve(args["for"], %{
         session_user_id: uid(ctx),
         active_scope: Map.get(ctx, :active_scope, :personal),
-        gate_on: App.Config.default().kiosk_user_switch,
+        gate_on: App.Config.default().household_named_targets,
         users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
       })
 
@@ -267,7 +267,7 @@ defmodule App.Tools.Reminders do
       Target.resolve(args["for"], %{
         session_user_id: uid(ctx),
         active_scope: Map.get(ctx, :active_scope, :personal),
-        gate_on: App.Config.default().kiosk_user_switch,
+        gate_on: App.Config.default().household_named_targets,
         users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
       })
 
