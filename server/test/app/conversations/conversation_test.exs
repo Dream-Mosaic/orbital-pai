@@ -2321,4 +2321,78 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:partial, "what is the weather like today"}}, 500
     end
   end
+
+  # Spec 2026-09-26-web-admin-dashboard-design: the dashboard watches a conversation over
+  # PubSub and never joins, so it can never bind or take audio.
+  describe "dashboard mirror" do
+    setup do
+      sid = "mirror-#{System.unique_integer([:positive])}"
+      Phoenix.PubSub.subscribe(App.PubSub, "conversation:" <> sid)
+      %{sid: sid}
+    end
+
+    test "a session announces itself, then mirrors a turn's text but never its audio", %{
+      sid: sid
+    } do
+      Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer."])
+      Application.put_env(:app, :fake_brain_done_ms, 300)
+
+      on_exit(fn ->
+        Application.delete_env(:app, :fake_brain_text_deltas)
+        Application.put_env(:app, :fake_brain_done_ms, 0)
+      end)
+
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+
+      pid = start_conv_session(@config, sid)
+      assert_receive {:mirror, :session_started}, 500
+
+      Conversation.partial(pid, "what's the")
+      assert_receive {:mirror, {:partial, "what's the"}}, 500
+
+      Conversation.endpoint(pid, "what's the weather")
+      assert_receive {:mirror, {:phase, :awaiting_reflex}}, 500
+      assert_receive {:mirror, {:transcript, "what's the weather"}}, 500
+      assert_receive {:mirror, {:speak_start, :reflex, "huh"}}, 1000
+      assert_receive {:mirror, {:metrics, ttfa, _ttb}}, 1000
+      assert is_integer(ttfa)
+      assert_receive {:mirror, {:brain_delta, "The answer."}}, 1000
+      assert_receive {:mirror, {:speak_start, :brain, "the answer"}}, 1000
+      assert_receive {:mirror, {:phase, :listening}}, 3000
+
+      refute_received {:mirror, {:audio, _, _}}
+      stop_session(pid)
+    end
+
+    test "bound_device follows join, claim and disconnect; snapshot reports it", %{sid: sid} do
+      pid = start_conv_session(@config, sid)
+      assert_receive {:mirror, :session_started}, 500
+
+      # The test process is the conversation's client, so its own join binds.
+      Conversation.join(pid, "phone-1")
+      assert_receive {:mirror, {:bound_device, "phone-1"}}, 500
+
+      assert %{phase: :listening, locked: false, bound_device: "phone-1"} =
+               Conversation.snapshot(pid)
+
+      # A second device joins standby, then claims with a PTT press.
+      tablet = spawn_client_proxy(self(), :tablet)
+      :gen_statem.cast(pid, {:join, tablet, "tablet-1"})
+      :gen_statem.cast(pid, {:ptt_press, tablet})
+      assert_receive {:mirror, {:bound_device, "tablet-1"}}, 500
+      assert %{bound_device: "tablet-1"} = Conversation.snapshot(pid)
+
+      Conversation.client_disconnected(pid, tablet)
+      assert_receive {:mirror, {:bound_device, nil}}, 500
+      stop_session(pid)
+    end
+
+    test "a conversation with no session id broadcasts nothing and still talks to its client" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+      pid = start_conv()
+      Conversation.endpoint(pid, "q")
+      assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+      refute_received {:mirror, _}
+    end
+  end
 end

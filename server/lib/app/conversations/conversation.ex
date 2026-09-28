@@ -117,6 +117,13 @@ defmodule App.Conversations.Conversation do
   @doc "Reset the in-flight turn/transcript state (used by the per-user clear controls)."
   def clear_memory(server), do: :gen_statem.cast(server, :clear_memory)
 
+  @doc """
+  What a watcher (the web dashboard) needs to draw its status strip when it mounts mid-session:
+  the policy phase, the wake lock, and the bound device's id (nil while nothing live holds it).
+  A watcher never joins; see `emit/2`.
+  """
+  def snapshot(pid), do: :gen_statem.call(pid, :snapshot, 1_000)
+
   @doc false
   def child_spec(opts) do
     %{
@@ -268,6 +275,8 @@ defmodule App.Conversations.Conversation do
     data = %{data | voice_lock: Keyword.get(opts, :voice_lock, load_voice_lock(session_id))}
     if vl = data.voice_lock, do: Phoenix.PubSub.subscribe(App.PubSub, "voice_lock:#{vl.user_id}")
 
+    # A dashboard opened before any device connected is waiting on this to start watching.
+    mirror(data, :session_started)
     send_state_snapshot(data)
 
     {:ok, :running, data}
@@ -506,10 +515,22 @@ defmodule App.Conversations.Conversation do
     end
   end
 
+  def handle_event({:call, from}, :snapshot, _s, data) do
+    reply = %{
+      phase: data.policy.phase,
+      locked: data.locked,
+      bound_device: if(live?(data.client), do: data.device_id)
+    }
+
+    {:keep_state_and_data, [{:reply, from, reply}]}
+  end
+
   # Only the CURRENTLY bound channel arms the linger — a stale channel (another device took
   # over via a join or a claim) terminating must not schedule the death of a session in use.
   def handle_event(:cast, {:client_disconnected, from}, _s, %{client: from} = data) do
     Logger.info("[conn] client gone — lingering #{linger_ms()}ms for a rebind")
+    # Nobody holds the conversation while it lingers; a watcher should see that.
+    mirror(data, {:bound_device, nil})
     {:keep_state, data, [{{:timeout, :client_linger}, linger_ms(), :expire}]}
   end
 
@@ -700,7 +721,7 @@ defmodule App.Conversations.Conversation do
         %{policy: %{phase: phase, reflex_sent: true}} = data
       )
       when phase != :listening do
-    send(data.client, {:to_client, {:brain_delta, delta}})
+    emit(data, {:brain_delta, delta})
     {:keep_state, data}
   end
 
@@ -719,7 +740,7 @@ defmodule App.Conversations.Conversation do
   # from an abandoned/barged turn (phase back to :listening) is dropped, same as brain_text.
   def handle_event(:info, {:brain_tool_call, name}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
-    send(data.client, {:to_client, {:tool_call, name}})
+    emit(data, {:tool_call, name})
     {:keep_state, data}
   end
 
@@ -968,7 +989,7 @@ defmodule App.Conversations.Conversation do
   # Start the streaming brain now, attaching this turn's vision_image (nil on a normal turn).
   # Adopts a live pre-warm (BrainStream.begin/4) or cold-starts; either way the image rides along.
   defp start_brain_now(data, acts) do
-    send(data.client, {:to_client, :thinking})
+    emit(data, :thinking)
 
     # agenda turns choose their own context isolation (reminders: no recent turns)
     recent? = agenda_recent_context(data.agenda_turn)
@@ -1087,7 +1108,7 @@ defmodule App.Conversations.Conversation do
   # path clears the hold in run_effect(:cancel_brain, _) — so a held answer is always released
   # or discarded, never stranded.
   defp push_or_hold_answer(text, %{policy: %{reflex_sent: true}} = data) do
-    send(data.client, {:to_client, {:speak_start, :brain, text}})
+    emit(data, {:speak_start, :brain, text})
     data
   end
 
@@ -1139,7 +1160,7 @@ defmodule App.Conversations.Conversation do
       {:wake, rest} ->
         Logger.info(~s|[wake] unlocked by partial: "#{t}"|)
         data = unlock(%{data | wake_hit: true})
-        if rest != "", do: send(data.client, {:to_client, {:partial, rest}})
+        if rest != "", do: emit(data, {:partial, rest})
         {:keep_state, data, [relock_action(data)]}
     end
   end
@@ -1160,7 +1181,7 @@ defmodule App.Conversations.Conversation do
           :keep_state_and_data
         else
           if rest != "" and data.policy.phase == :listening,
-            do: send(data.client, {:to_client, {:partial, rest}})
+            do: emit(data, {:partial, rest})
 
           feed({:partial, t}, data)
         end
@@ -1194,7 +1215,7 @@ defmodule App.Conversations.Conversation do
   end
 
   defp unduck(%{ducked?: true} = data) do
-    send(data.client, {:to_client, :unduck})
+    emit(data, :unduck)
     %{data | ducked?: false}
   end
 
@@ -1212,7 +1233,7 @@ defmodule App.Conversations.Conversation do
     if ptt_idle?(data) do
       :keep_state_and_data
     else
-      if data.policy.phase == :listening, do: send(data.client, {:to_client, {:partial, t}})
+      if data.policy.phase == :listening, do: emit(data, {:partial, t})
       feed({:partial, t}, data)
     end
   end
@@ -1338,7 +1359,7 @@ defmodule App.Conversations.Conversation do
           {{:drop, reason}, score} ->
             Logger.info(~s|[gate] ✗ dropped (#{reason}, score #{inspect(score)}): "#{t}"|)
             log_gate(data, "drop", reason, score, speech_ms, t)
-            send(data.client, {:to_client, {:voice_gate, :drop}})
+            emit(data, {:voice_gate, :drop})
             {:keep_state, cancel_speculative_reflex(data)}
         end
     end
@@ -1523,7 +1544,7 @@ defmodule App.Conversations.Conversation do
     ack = Enum.random(@acks)
     client = data.client
     cfg = data.config
-    send(client, {:to_client, {:speak_start, :reflex, ack}})
+    emit(data, {:speak_start, :reflex, ack})
 
     Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
       case tts().synthesize(ack, tts_opts(cfg)) do
@@ -1585,7 +1606,7 @@ defmodule App.Conversations.Conversation do
       {:keep_state, data}
     else
       Logger.info("[turn] ◉ turn.start during #{phase} — ducked, awaiting words")
-      send(data.client, {:to_client, :duck})
+      emit(data, :duck)
 
       {:keep_state, %{data | interrupt_pending?: true, ducked?: true},
        [{{:timeout, :interrupt_pending}, @interrupt_window_ms, :expire}]}
@@ -1635,7 +1656,8 @@ defmodule App.Conversations.Conversation do
   defp feed(event, data) do
     old_phase = data.policy.phase
     {policy, effects} = Policy.decide(data.policy, event, data.config)
-    notify_turn_state(old_phase, policy.phase, data.client)
+    notify_turn_state(old_phase, policy.phase, data)
+    if policy.phase != old_phase, do: mirror(data, {:phase, policy.phase})
     {data, actions} = run_effects(effects, %{data | policy: policy})
 
     # Voice activation: any turn-ending transition back to :listening re-arms the
@@ -1672,26 +1694,54 @@ defmodule App.Conversations.Conversation do
   end
 
   # Tell the client when a turn begins / ends so it can gate the mic (half-duplex).
-  defp notify_turn_state(:listening, new, client) when new != :listening,
-    do: send(client, {:to_client, :speaking})
+  defp notify_turn_state(:listening, new, data) when new != :listening,
+    do: emit(data, :speaking)
 
-  defp notify_turn_state(old, :listening, client) when old != :listening,
-    do: send(client, {:to_client, :listening})
+  defp notify_turn_state(old, :listening, data) when old != :listening,
+    do: emit(data, :listening)
 
-  defp notify_turn_state(_old, _new, _client), do: :ok
+  defp notify_turn_state(_old, _new, _data), do: :ok
 
-  defp notify_locked(%{client: client, locked: locked}) when is_pid(client),
-    do: send(client, {:to_client, {:locked, locked}})
+  defp notify_locked(%{client: client} = data) when is_pid(client),
+    do: emit(data, {:locked, data.locked})
 
   defp notify_locked(_data), do: :ok
 
   # `bound` and `locked` are deliberately separate facts ("someone else owns the conversation"
   # vs "the wake gate is shut"); folding them together would make the client's gate a function
   # of whichever message landed last.
-  defp notify_bound(%{client: client}, bound) when is_pid(client),
-    do: send(client, {:to_client, {:bound, bound}})
+  defp notify_bound(%{client: client} = data, bound) when is_pid(client),
+    do: emit(data, {:bound, bound})
 
   defp notify_bound(_data, _bound), do: :ok
+
+  # The one way an event reaches the bound client. Text events are also mirrored to
+  # "conversation:<session_id>" for the web dashboard, which only ever subscribes: it never
+  # joins, so watching can never bind the conversation or take its audio (spec
+  # 2026-09-26-web-admin-dashboard-design). Sends addressed to one specific pid -- the state
+  # snapshot to a joining client, `{:bound, false}` to a displaced one -- stay direct `send`s.
+  defp emit(data, event) do
+    if is_pid(data.client), do: send(data.client, {:to_client, event})
+    if mirrored?(event), do: mirror(data, event)
+    :ok
+  end
+
+  # A session with no id (unit tests, tool-only sessions) has no watcher to tell.
+  defp mirror(%{session_id: nil}, _event), do: :ok
+
+  defp mirror(%{session_id: sid}, event),
+    do: Phoenix.PubSub.broadcast(App.PubSub, "conversation:" <> sid, {:mirror, event})
+
+  # Conversation, not plumbing: audio, ducking, playback stops, gate drops and per-client
+  # binding facts are only meaningful to the device that holds the conversation.
+  defp mirrored?({:partial, _}), do: true
+  defp mirrored?({:transcript, _}), do: true
+  defp mirrored?({:speak_start, _, _}), do: true
+  defp mirrored?({:brain_delta, _}), do: true
+  defp mirrored?({:tool_call, _}), do: true
+  defp mirrored?({:metrics, _, _}), do: true
+  defp mirrored?({:locked, _}), do: true
+  defp mirrored?(_), do: false
 
   # ---- device binding (handoff) ----
 
@@ -1710,7 +1760,9 @@ defmodule App.Conversations.Conversation do
   # stranding the phone in standby on its next reconnect.
   defp rebind(%{client: client} = data, from, device_id) do
     if live?(client) and client != from, do: send(client, {:to_client, {:bound, false}})
-    %{data | client: from, device_id: device_id || data.device_id}
+    data = %{data | client: from, device_id: device_id || data.device_id}
+    mirror(data, {:bound_device, data.device_id})
+    data
   end
 
   # A claim is at least as strong a signal of a live client as a join is, so it cancels the
@@ -1819,8 +1871,8 @@ defmodule App.Conversations.Conversation do
       # prior effect in the endpoint list), so it fires and masks this ~1s. Keep the pre-warm alive
       # (do NOT cancel :prewarm_ttl here) so start_brain_now can still adopt it when the frame lands.
       seq = data.vision_seq + 1
-      send(data.client, {:to_client, :thinking})
-      send(data.client, {:to_client, {:capture_frame, seq}})
+      emit(data, :thinking)
+      emit(data, {:capture_frame, seq})
 
       {%{data | vision_seq: seq, vision_pending: %{ref: seq, t: t}},
        [{{:timeout, :vision_capture}, vision_capture_timeout_ms(), :expire} | acts]}
@@ -1830,7 +1882,7 @@ defmodule App.Conversations.Conversation do
   end
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
-    send(data.client, {:to_client, {:speak_start, reflex_source(data), text}})
+    emit(data, {:speak_start, reflex_source(data), text})
     maybe_offer_ack(data)
     {spawn_reflex_tts(text, data), acts}
   end
@@ -1847,13 +1899,13 @@ defmodule App.Conversations.Conversation do
     # concatenation render identically, and one is cheaper.
     case {data.pending_answer, data.caption_buffer} do
       {answer, _deltas} when is_binary(answer) ->
-        send(data.client, {:to_client, {:speak_start, :brain, answer}})
+        emit(data, {:speak_start, :brain, answer})
 
       {nil, []} ->
         :ok
 
       {nil, deltas} ->
-        send(data.client, {:to_client, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()}})
+        emit(data, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()})
     end
 
     data =
@@ -1877,7 +1929,7 @@ defmodule App.Conversations.Conversation do
     do: {data |> cancel_speculative_reflex() |> complete_turn() |> flush_pending_agenda(), acts}
 
   defp run_effect(:stop_playback, {data, acts}) do
-    send(data.client, {:to_client, :stop_playback})
+    emit(data, :stop_playback)
     {data, acts}
   end
 
@@ -1940,7 +1992,7 @@ defmodule App.Conversations.Conversation do
 
   defp announce_heard(t, data) do
     Logger.info("[turn] ▶ heard: #{inspect(t)}")
-    send(data.client, {:to_client, {:transcript, t}})
+    emit(data, {:transcript, t})
   end
 
   # The audio source/label for the reflex slot: an agenda turn's lead is labeled by item.kind.
@@ -1949,9 +2001,9 @@ defmodule App.Conversations.Conversation do
 
   # When the lead being spoken belongs to a persisted reminder, tell the client its id so it can
   # offer an inline "Ack" chip on the reminder line. nil id (unpersisted) or a non-agenda turn: no-op.
-  defp maybe_offer_ack(%{agenda_turn: {%Item{reminder_id: id}, _mode}, client: client})
+  defp maybe_offer_ack(%{agenda_turn: {%Item{reminder_id: id}, _mode}} = data)
        when is_integer(id),
-       do: send(client, {:to_client, {:reminder_ack_offer, id}})
+       do: emit(data, {:reminder_ack_offer, id})
 
   defp maybe_offer_ack(_), do: :ok
 
@@ -2118,7 +2170,7 @@ defmodule App.Conversations.Conversation do
 
     data = %{data | audio_until: max(data.audio_until || now, now) + dur}
     data = record_metrics(source, data)
-    send(data.client, {:to_client, {:audio, source, pcm}})
+    emit(data, {:audio, source, pcm})
     data
   end
 
@@ -2141,7 +2193,7 @@ defmodule App.Conversations.Conversation do
 
       :telemetry.execute([:app, :turn, :audio], measurements, %{source: source})
       Logger.info("[turn] metrics: ttfa=#{inspect(ttfa)}ms ttb=#{inspect(ttb)}ms (#{source})")
-      send(data.client, {:to_client, {:metrics, ttfa, ttb}})
+      emit(data, {:metrics, ttfa, ttb})
       data
     end
   end
