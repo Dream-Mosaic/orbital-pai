@@ -2,21 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
     <meta name="app-version" content={App.version()} />
 
-    <%!-- PWA + favicons: installable, standalone, and theme-color so the mobile browser chrome
-          blends with the app's dark frame. --%>
-    <meta name="theme-color" content="#07080f" />
     <link rel="icon" href={~p"/favicon.ico"} sizes="16x16 32x32 48x48" />
     <link rel="icon" href={~p"/images/favicon-64.png"} sizes="64x64" type="image/png" />
-    <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
-    <link rel="manifest" href={~p"/images/manifest.webmanifest"} />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content={App.Config.default().name} />
 
     <.live_title default={App.Config.default().name} suffix="" phx-no-format>{assigns[:page_title]}</.live_title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />

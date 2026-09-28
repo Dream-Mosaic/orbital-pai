@@ -3,7 +3,7 @@ defmodule AppWeb.ReminderFormat do
   Display strings for a reminder: the due timestamp and the recurrence cadence,
   both in `App.Config.default().timezone`.
 
-  Lives outside `AppWeb.VoiceModals` because it has two consumers now — the
+  Lives in its own module because it has two consumers now — the
   LiveView's panel component and `AppWeb.Panels.RemindersChannel`, which renders
   these server-side so the native client never reimplements timezone-dependent
   humanising in Dart.

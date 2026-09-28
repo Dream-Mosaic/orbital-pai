@@ -4,8 +4,9 @@ defmodule App.Google.Grant do
 
   Lives outside the LiveView because it is about to have two callers — the LiveView's connectors
   panel and the upcoming `AppWeb.Panels.ConnectorsChannel` (native client) — the same situation
-  that put `AppWeb.BookFormat` and `AppWeb.ReminderFormat` outside `AppWeb.VoiceModals`. A
-  previous phase extracted display strings for exactly that reason, and a final review still
+  that put `AppWeb.BookFormat` and `AppWeb.ReminderFormat` in their own modules, split out of
+  the web's display components. A previous phase extracted display strings for exactly that
+  reason, and a final review still
   found one function left copy-pasted between the LiveView and the channel — with a concrete
   scenario where the app and the web would open on different data for the same user, while every
   test passed, because each surface was tested against its own copy. An extraction that stops one

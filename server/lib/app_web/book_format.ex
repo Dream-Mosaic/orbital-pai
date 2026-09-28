@@ -3,7 +3,7 @@ defmodule AppWeb.BookFormat do
   Display strings and orderings for the Books panel: item order, a plant's meta
   line, a note's date, season order, and the type-aware Clear confirmation.
 
-  Lives outside `AppWeb.VoiceModals` for the same reason `AppWeb.ReminderFormat`
+  Lives in its own module for the same reason `AppWeb.ReminderFormat`
   does — there are two consumers now: the LiveView's `books_panel/1` and
   `AppWeb.Panels.BooksChannel`, which renders these server-side so the native
   client never grows a second, drifting copy of the same copy.

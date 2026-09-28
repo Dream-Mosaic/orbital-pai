@@ -36,7 +36,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
   Three booleans are derived HERE because the web derives them there and the
   rules are not obvious to a client:
 
-    * `shows_default` — the web's `connector_multi?/2` (`voice_modals.ex:522-523`)
+    * `shows_default` — the web's `multi?/2` (`dashboard_panels.ex`)
     * `only_grant`    — decides whether Disconnect works natively at all
     * `access`        — `Connectors.access/2`, an atom, stringified for the wire
   """
@@ -257,7 +257,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
     |> List.first()
   end
 
-  # The web's connection_rows/1 (voice_modals.ex:517-520), verbatim. Sorted by
+  # The web's connection_rows/1 (dashboard_panels.ex), verbatim. Sorted by
   # {label, email} SERVER-SIDE — the client never re-sorts, so this is the only
   # place the order is decided.
   defp rows(accounts) do
@@ -284,7 +284,7 @@ defmodule AppWeb.Panels.ConnectorsChannel do
     }
   end
 
-  # The web's connector_multi?/2 (voice_modals.ex:522-523), verbatim: the
+  # The web's multi?/2 (dashboard_panels.ex), verbatim: the
   # default badge/button only appears once at least TWO accounts can reach this
   # connector, because with one there is nothing to choose between.
   defp multi?(accounts, connector),
