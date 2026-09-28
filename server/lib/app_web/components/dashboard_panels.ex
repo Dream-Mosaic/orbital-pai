@@ -51,11 +51,13 @@ defmodule AppWeb.DashboardPanels do
   def thread_row(assigns) do
     ~H"""
     <div :if={@row.kind == :you} class="chat chat-end" data-kind="you">
-      <div class="chat-bubble chat-bubble-warning whitespace-pre-wrap">{@row.text}</div>
+      <div class="chat-bubble chat-bubble-warning whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {@row.text}
+      </div>
     </div>
     <div :if={@row.kind == :brain} class="chat chat-start" data-kind="brain">
       <div class="chat-header text-xs opacity-60">{@assistant_name}</div>
-      <div class="chat-bubble whitespace-pre-wrap">{@row.text}</div>
+      <div class="chat-bubble whitespace-pre-wrap [overflow-wrap:anywhere]">{@row.text}</div>
     </div>
     <div
       :if={@row.kind == :tool}
@@ -77,7 +79,9 @@ defmodule AppWeb.DashboardPanels do
       data-kind={@row.kind}
     >
       <div class="chat-header text-xs opacity-60">{@row.kind}</div>
-      <div class="chat-bubble chat-bubble-neutral whitespace-pre-wrap opacity-80">{@row.text}</div>
+      <div class="chat-bubble chat-bubble-neutral whitespace-pre-wrap opacity-80 [overflow-wrap:anywhere]">
+        {@row.text}
+      </div>
     </div>
     """
   end

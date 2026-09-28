@@ -99,6 +99,22 @@ defmodule AppWeb.ConversationLiveTest do
       assert html =~ "audio 0.6s · brain 3.4s"
     end
 
+    test "a long unbreakable token in a brain row carries the wrap-anywhere class, not a scrollbar",
+         %{conn: conn, user: user} do
+      {:ok, lv, _html} = live(conn, "/")
+
+      long_url = "https://example.com/" <> String.duplicate("a", 120)
+      mirror(user, {:brain_delta, long_url})
+
+      html = render(lv)
+      assert html =~ long_url
+
+      assert has_element?(
+               lv,
+               ~s(div[data-kind="brain"] .chat-bubble[class*="overflow-wrap:anywhere"])
+             )
+    end
+
     test "no session, then a session starts and the strip goes live", %{conn: conn, user: user} do
       {:ok, lv, _html} = live(conn, "/")
       assert lv |> element("#status-session") |> render() =~ "no session"
@@ -221,7 +237,9 @@ defmodule AppWeb.ConversationLiveTest do
       html = lv |> element(~s(#inspector [phx-value-tab="connectors"])) |> render_click()
       assert html =~ "Google Calendar"
       assert html =~ "r@x.com"
-      assert html =~ "read"
+      # Scoped to the access-level badge itself — `html =~ "read"` alone can never fail, since
+      # `render_click` returns the WHOLE view and `id="thread"` always contains "read".
+      assert has_element?(lv, "#panel-connectors .badge", "read")
     end
 
     test "settings: shows the stored prefs, read fresh on tab open", %{conn: conn, user: user} do

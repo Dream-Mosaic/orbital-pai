@@ -212,20 +212,31 @@ defmodule AppWeb.ConversationLive do
         <.link href={~p"/logout"} method="delete" class="btn btn-ghost btn-xs">Sign out</.link>
       </header>
 
-      <main class="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <section id="live" class="flex min-h-[70dvh] flex-col gap-3 rounded-box bg-base-200 p-4">
+      <main class="grid grid-cols-1 gap-4 p-4 md:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_26rem]">
+        <section
+          id="live"
+          class="flex min-h-[70dvh] min-w-0 flex-col gap-3 rounded-box bg-base-200 p-4 md:h-[calc(100dvh-5rem)]"
+        >
           <.status_strip status={@mirror.status} present={@present} />
-          <div id="thread" phx-update="stream" class="flex-1 space-y-2 overflow-y-auto">
+          <div
+            id="thread"
+            phx-update="stream"
+            class="flex-1 space-y-2 overflow-x-hidden overflow-y-auto"
+          >
             <div :for={{dom_id, row} <- @streams.thread} id={dom_id}>
               <.thread_row row={row} assistant_name={@assistant_name} />
             </div>
           </div>
-          <p :if={@mirror.caption} id="caption" class="text-sm italic opacity-60">
+          <p
+            :if={@mirror.caption}
+            id="caption"
+            class="text-sm italic opacity-60 [overflow-wrap:anywhere]"
+          >
             {@mirror.caption}
           </p>
         </section>
 
-        <aside id="inspector" class="rounded-box bg-base-200 p-4">
+        <aside id="inspector" class="min-w-0 rounded-box bg-base-200 p-4">
           <div role="tablist" class="tabs tabs-box tabs-sm flex-wrap">
             <button
               :for={t <- @tabs}
