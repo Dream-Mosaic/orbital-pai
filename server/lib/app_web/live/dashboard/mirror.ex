@@ -89,8 +89,12 @@ defmodule AppWeb.Dashboard.Mirror do
 
   @doc "Adopt a `Conversation.snapshot/1` into the strip; nil means no session is running."
   @spec put_snapshot(t(), map() | nil) :: t()
-  def put_snapshot(state, nil),
-    do: put_status(state, session: :none, phase: nil, locked: nil, bound_device: nil)
+  def put_snapshot(state, nil) do
+    # No session means no turn in flight: clear live turn state so the next turn opens fresh.
+    state
+    |> then(&%{&1 | caption: nil, live_brain: nil, metrics: nil})
+    |> put_status(session: :none, phase: nil, locked: nil, bound_device: nil)
+  end
 
   def put_snapshot(state, %{phase: phase, locked: locked, bound_device: device}),
     do: put_status(state, session: :live, phase: phase, locked: locked, bound_device: device)

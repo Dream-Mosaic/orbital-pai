@@ -115,4 +115,30 @@ defmodule AppWeb.Dashboard.MirrorTest do
              %{id: "h-2-you", kind: :you, text: "and?"}
            ] = Mirror.history_rows(turns)
   end
+
+  test "no session clears live turn state (caption, brain, metrics)" do
+    # Simulate session 1 ending mid-answer.
+    state =
+      Mirror.new()
+      |> then(fn s -> elem(Mirror.apply_event(s, {:partial, "half"}), 0) end)
+      |> then(fn s -> elem(Mirror.apply_event(s, {:brain_delta, "old"}), 0) end)
+
+    assert state.caption == "half"
+    assert state.live_brain != nil
+    old_id = state.live_brain.id
+
+    # Session ends (snapshot nil), then session 2 starts.
+    state = Mirror.put_snapshot(state, nil)
+    assert state.caption == nil
+    assert state.live_brain == nil
+    assert state.metrics == nil
+
+    # Session 2's first turn is an agenda turn (no transcript).
+    # Brain deltas must open a fresh row, not append to the previous session's.
+    {_state, [row]} = Mirror.apply_event(state, {:brain_delta, "new"})
+
+    assert row.text == "new"
+    # Verify it's a different row than the old one (ids must be unique across sessions).
+    assert row.id != old_id
+  end
 end
