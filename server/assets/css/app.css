@@ -127,3 +127,78 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+
+/* dashboard */
+/* The admin dashboard (AppWeb.ConversationLive) wears the phone's Meridian palette
+   (native/lib/meridian/tokens.dart) so a state reads in the same colour on both surfaces:
+   amber is the user's (and the open ear), green is Henry's (and his voice), violet is
+   thinking, sky is winding down. The phase is one registered colour, --phase, set from a
+   data-phase attribute, so the strip and the thread's spine recolour together and cross-fade
+   instead of snapping. */
+@theme {
+  --color-you: #f2ac46;
+  --color-you-body: #d7cbb2;
+  --color-henry: #3ecf9a;
+  --color-brain-body: #e2e6f0;
+  --color-think: #c084fc;
+  --color-reflex: #6ee7b7;
+  --color-drain: #43b2e1;
+  --color-followup: #ba9cef;
+  --color-idle: #5d647a;
+}
+
+@property --phase {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #5d647a;
+}
+
+.dashboard {
+  /* The Meridian ground, a shade lifted so panels still read as layers. */
+  --color-base-100: oklch(22.5% 0.02 268);
+  --color-base-200: oklch(17% 0.017 268);
+  --color-base-300: oklch(12.5% 0.014 268);
+  --color-base-content: oklch(94% 0.012 268);
+  scrollbar-color: color-mix(in oklab, var(--color-base-content) 16%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.dashboard ::selection {
+  background: color-mix(in oklab, var(--color-henry) 32%, transparent);
+}
+
+.dashboard [data-phase] {
+  transition: --phase 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dashboard [data-phase="listening"] { --phase: var(--color-you); }
+.dashboard [data-phase="awaiting_reflex"] { --phase: var(--color-think); }
+.dashboard [data-phase="speaking_reflex"] { --phase: var(--color-reflex); }
+.dashboard [data-phase="streaming"] { --phase: var(--color-henry); }
+.dashboard [data-phase="draining"] { --phase: var(--color-drain); }
+
+/* The thread's rail, as on the phone: your turns sit left of the spine, Henry's answers in
+   the field to its right. Measured in container units so the spine (an overlay that does
+   not scroll) and the rows (which do) agree to the pixel whatever the scrollbar takes. On a
+   narrow column the rail folds to the left edge and every row moves into the field. */
+.meridian > * { --rail: 0.375rem; }
+@container (width >= 36rem) {
+  .meridian > * { --rail: clamp(9rem, 26cqi, 15rem); }
+}
+
+.meridian-spine {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--phase) 75%, transparent) 10%,
+    color-mix(in oklab, var(--phase) 14%, transparent)
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard [data-phase] { transition: none; }
+}
+
+/* The root layout's fixed version stamp would sit over the inspector on a phone; the
+   dashboard's header already carries the version. */
+body:has(.dashboard) > footer { display: none; }

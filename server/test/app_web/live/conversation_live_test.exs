@@ -109,9 +109,11 @@ defmodule AppWeb.ConversationLiveTest do
       html = render(lv)
       assert html =~ long_url
 
+      # The element that holds the token must carry it, not merely some ancestor of it.
       assert has_element?(
                lv,
-               ~s(div[data-kind="brain"] .chat-bubble[class*="overflow-wrap:anywhere"])
+               ~s(div[data-kind="brain"] p[class*="overflow-wrap:anywhere"]),
+               long_url
              )
     end
 

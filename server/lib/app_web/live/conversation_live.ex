@@ -196,60 +196,119 @@ defmodule AppWeb.ConversationLive do
   defp tab_label("voice_lock"), do: "Voice Lock"
   defp tab_label(tab), do: String.capitalize(tab)
 
+  defp tab_icon("reminders"), do: "hero-bell-micro"
+  defp tab_icon("books"), do: "hero-book-open-micro"
+  defp tab_icon("memory"), do: "hero-light-bulb-micro"
+  defp tab_icon("connectors"), do: "hero-link-micro"
+  defp tab_icon("voice_lock"), do: "hero-finger-print-micro"
+  defp tab_icon("settings"), do: "hero-cog-6-tooth-micro"
+
+  # Desktop is a fixed-height shell: the header is a row of its own and the grid takes the
+  # rest (`flex-1 min-h-0`), so the thread and the inspector each scroll inside their column
+  # without any estimate of the header's height. Below `lg` the page scrolls instead and the
+  # live column takes most of a screen, so the inspector is one swipe below it.
+  #
+  # The thread's scroller is `flex-col-reverse` around a single child, which anchors it to
+  # the bottom: the newest row stays in view as the answer grows, with no JS hook.
   @impl true
   def render(assigns) do
     assigns = assign(assigns, :tabs, @tabs)
 
     ~H"""
-    <div data-theme="dark" class="min-h-[100dvh] bg-base-300 text-base-content">
+    <div
+      data-theme="dark"
+      class="dashboard flex min-h-dvh flex-col bg-base-300 text-base-content lg:h-dvh"
+    >
       <Layouts.flash_group flash={@flash} />
 
-      <header class="flex items-center gap-3 border-b border-base-100 px-4 py-3">
-        <span class="font-display text-lg font-semibold">{@assistant_name}</span>
-        <span class="badge badge-ghost badge-sm">dashboard</span>
-        <span class="ml-auto text-xs opacity-60">P.A.I v{@app_version}</span>
-        <span class="text-sm">{@current_user.name}</span>
-        <.link href={~p"/logout"} method="delete" class="btn btn-ghost btn-xs">Sign out</.link>
+      <header class="flex h-12 shrink-0 items-center gap-3 border-b border-base-content/[0.07] px-4">
+        <span class="font-display text-[17px] font-semibold tracking-tight">
+          {@assistant_name}
+        </span>
+        <span class="hidden text-xs text-base-content/50 sm:inline">dashboard</span>
+        <div class="ms-auto flex min-w-0 items-center gap-3">
+          <span class="font-mono text-[11px] text-base-content/45">P.A.I v{@app_version}</span>
+          <span class="truncate text-sm text-base-content/80">{@current_user.name}</span>
+          <.link href={~p"/logout"} method="delete" class="btn btn-ghost btn-xs">Sign out</.link>
+        </div>
       </header>
 
-      <main class="grid grid-cols-1 gap-4 p-4 md:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_26rem]">
+      <main class="grid flex-1 grid-cols-1 gap-3 p-3 lg:min-h-0 lg:grid-cols-[minmax(0,1fr)_22rem] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,1fr)_26rem] 2xl:grid-cols-[minmax(0,1fr)_30rem]">
         <section
           id="live"
-          class="flex min-h-[70dvh] min-w-0 flex-col gap-3 rounded-box bg-base-200 p-4 md:h-[calc(100dvh-5rem)]"
+          data-phase={@mirror.status.phase}
+          class="flex h-[82dvh] min-h-[26rem] min-w-0 flex-col rounded-box border border-base-content/[0.06] bg-base-200 lg:h-auto lg:min-h-0"
         >
-          <.status_strip status={@mirror.status} present={@present} />
-          <div
-            id="thread"
-            phx-update="stream"
-            class="flex-1 space-y-2 overflow-x-hidden overflow-y-auto"
-          >
-            <div :for={{dom_id, row} <- @streams.thread} id={dom_id}>
-              <.thread_row row={row} assistant_name={@assistant_name} />
+          <div class="shrink-0 border-b border-base-content/[0.07] px-4 py-3">
+            <.status_strip status={@mirror.status} present={@present} />
+          </div>
+
+          <div class="meridian @container relative mx-4 flex min-h-0 flex-1 flex-col">
+            <div
+              aria-hidden="true"
+              class="meridian-spine pointer-events-none absolute inset-y-0 left-[var(--rail)] w-[1.5px]"
+            >
+            </div>
+            <div class="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto overscroll-contain pt-1 pr-2 pb-4 [mask-image:linear-gradient(to_bottom,transparent,#000_1.25rem)]">
+              <div id="thread" phx-update="stream">
+                <div
+                  id="thread-empty"
+                  class="relative mt-6 hidden pl-[calc(var(--rail)+1.25rem)] only:block"
+                >
+                  <span
+                    aria-hidden="true"
+                    class="absolute top-[4.5px] left-[calc(var(--rail)-2.75px)] size-[7px] rounded-full border border-base-content/40 bg-base-200"
+                  ></span>
+                  <p class="text-[11px] font-semibold leading-4 tracking-wide text-base-content/45">
+                    quiet
+                  </p>
+                  <p class="mt-1 max-w-[52ch] text-sm leading-relaxed text-base-content/60">
+                    No turns yet. Talk to {@assistant_name} on any device and the conversation
+                    streams in here as it happens; this page only watches.
+                  </p>
+                </div>
+                <div :for={{dom_id, row} <- @streams.thread} id={dom_id}>
+                  <.thread_row row={row} assistant_name={@assistant_name} />
+                </div>
+              </div>
+            </div>
+            <div
+              :if={@mirror.caption}
+              id="caption"
+              class="relative shrink-0 border-t border-dashed border-you/15 pt-2.5 pb-3 pl-[calc(var(--rail)+1.25rem)] [overflow-wrap:anywhere] @xl:border-t-0 @xl:w-[calc(var(--rail)-1.25rem)] @xl:pl-0 @xl:text-right"
+            >
+              <span
+                aria-hidden="true"
+                class="absolute top-[calc(0.625rem+4.5px)] left-[calc(var(--rail)-2.75px)] size-[7px] rounded-full border border-you motion-safe:animate-pulse"
+              ></span>
+              <p class="text-[11px] font-semibold leading-4 tracking-wide text-you/70">hearing</p>
+              <p class="mt-1 text-sm italic leading-relaxed text-you-body/75">{@mirror.caption}</p>
             </div>
           </div>
-          <p
-            :if={@mirror.caption}
-            id="caption"
-            class="text-sm italic opacity-60 [overflow-wrap:anywhere]"
-          >
-            {@mirror.caption}
-          </p>
         </section>
 
-        <aside id="inspector" class="min-w-0 rounded-box bg-base-200 p-4">
-          <div role="tablist" class="tabs tabs-box tabs-sm flex-wrap">
+        <aside
+          id="inspector"
+          class="flex min-w-0 flex-col rounded-box border border-base-content/[0.06] bg-base-200 lg:min-h-0"
+        >
+          <div
+            role="tablist"
+            class="tabs tabs-box tabs-sm m-3 mb-0 grid shrink-0 grid-cols-3 gap-1 sm:grid-cols-6 lg:grid-cols-3"
+          >
             <button
               :for={t <- @tabs}
               type="button"
               role="tab"
+              aria-selected={to_string(@tab == t)}
               phx-click="tab"
               phx-value-tab={t}
-              class={["tab", @tab == t && "tab-active"]}
+              class={["tab min-w-0 flex-nowrap gap-1.5 px-1.5 text-[13px]", @tab == t && "tab-active"]}
             >
-              {tab_label(t)}
+              <.icon name={tab_icon(t)} class="size-3.5 shrink-0 opacity-70" />
+              <span class="truncate">{tab_label(t)}</span>
             </button>
           </div>
-          <div class="mt-4">
+          <div class="px-4 pt-4 pb-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             <.reminders_panel :if={@tab == "reminders"} due={@due} upcoming={@upcoming} />
             <.books_panel
               :if={@tab == "books"}
