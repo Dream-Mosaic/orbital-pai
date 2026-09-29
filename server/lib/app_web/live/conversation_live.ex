@@ -216,6 +216,7 @@ defmodule AppWeb.ConversationLive do
 
     ~H"""
     <div
+      data-admin-dashboard
       data-theme="dark"
       class="dashboard flex min-h-dvh flex-col bg-base-300 text-base-content lg:h-dvh"
     >

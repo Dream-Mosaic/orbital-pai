@@ -199,6 +199,5 @@
   .dashboard [data-phase] { transition: none; }
 }
 
-/* The root layout's fixed version stamp would sit over the inspector on a phone; the
-   dashboard's header already carries the version. */
-body:has(.dashboard) > footer { display: none; }
+/* Hide root.html.heex's fixed version footer on the admin dashboard only: its header already shows the version, and the footer would overlap the full-height shell. */
+body:has([data-admin-dashboard]) > footer { display: none; }
