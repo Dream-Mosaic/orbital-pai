@@ -3,6 +3,7 @@ defmodule AppWeb.ConversationLiveTest do
   import Phoenix.LiveViewTest
 
   alias App.Conversations.Sessions
+  alias AppWeb.Dashboard.Mirror
 
   setup :register_and_log_in_user
 
@@ -175,6 +176,33 @@ defmodule AppWeb.ConversationLiveTest do
       assert lv |> element("#status-session") |> render() =~ "live"
       assert Process.alive?(old)
       :ok = Sessions.stop(sid)
+    end
+
+    test "watch_session monitors the pid even when the snapshot fails or is slow (finding #3)" do
+      sid = "watch-race-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      # A fake session: registered under `sid` (so Sessions.lookup/1 succeeds) but not a real
+      # Conversation, so `Conversation.snapshot/1`'s gen_statem call never gets a reply and
+      # times out — modeling "the session died/stalled between the lookup and the snapshot
+      # call". The old code only called Process.monitor/1 on the happy path (inside the `with`,
+      # after a successful snapshot), so it would come back unmonitored here.
+      fake =
+        spawn(fn ->
+          Registry.register(App.Conversations.Registry, sid, nil)
+          send(test_pid, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :registered, 500
+
+      {_mirror, watched} = AppWeb.ConversationLive.watch_session(sid, Mirror.new())
+
+      assert watched == fake
+      {:monitors, monitors} = Process.info(self(), :monitors)
+      assert {:process, fake} in monitors
+
+      Process.exit(fake, :kill)
     end
 
     test "two dashboards both mirror; neither registers with the conversation",

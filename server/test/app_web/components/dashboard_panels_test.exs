@@ -74,4 +74,14 @@ defmodule AppWeb.DashboardPanelsTest do
     # you/brain/aside bubble, which always renders a separate label line in this exact class.
     refute gate =~ ~s(class="text-[11px] font-semibold leading-4 tracking-wide)
   end
+
+  test "short_id tolerates a non-string device id (finding #5)" do
+    html =
+      render_component(&DashboardPanels.status_strip/1,
+        status: %{session: :live, phase: :listening, locked: false, bound_device: 123_456_789},
+        present: []
+      )
+
+    assert html =~ "12345678"
+  end
 end

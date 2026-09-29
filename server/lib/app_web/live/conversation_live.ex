@@ -119,13 +119,29 @@ defmodule AppWeb.ConversationLive do
 
   # Look up the user's running conversation, monitor it so its end flips the strip, and seed
   # the strip from a snapshot. Returns the watched pid (nil when there is no session).
-  defp watch_session(sid, mirror) do
-    with {:ok, pid} <- Sessions.lookup(sid),
-         {:ok, snap} <- safe_snapshot(pid) do
-      Process.monitor(pid)
-      {Mirror.put_snapshot(mirror, snap), pid}
-    else
-      _ -> {Mirror.put_snapshot(mirror, nil), nil}
+  #
+  # The monitor is armed the moment the lookup succeeds, BEFORE the snapshot call — not after,
+  # inside a `with` that only reaches `Process.monitor/1` on the happy path. A slow or failed
+  # snapshot (the session dies between the lookup and the call) must not leave a live pid
+  # unmonitored: `watched` still gets set to that pid even when the snapshot fails, so a later
+  # `:DOWN` still lands and flips the strip. The status strip itself just stays whatever it was
+  # (typically "no session" from a fresh mirror) until the next event catches it up — see the
+  # finding #3 fix in the final review (2026-09-26-web-admin-dashboard). `@doc false` and public
+  # so the race can be exercised directly in tests, without engineering a real scheduling race
+  # through the full `live/2` mount.
+  @doc false
+  def watch_session(sid, mirror) do
+    case Sessions.lookup(sid) do
+      {:ok, pid} ->
+        Process.monitor(pid)
+
+        case safe_snapshot(pid) do
+          {:ok, snap} -> {Mirror.put_snapshot(mirror, snap), pid}
+          :error -> {mirror, pid}
+        end
+
+      :error ->
+        {Mirror.put_snapshot(mirror, nil), nil}
     end
   end
 

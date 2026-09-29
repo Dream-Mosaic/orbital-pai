@@ -79,7 +79,7 @@ paths where a platform needs them.
 **From `server/`:** `mix precommit` = `compile --warnings-as-errors` + `deps.unlock --unused` +
 `format` + `test`. Equivalent manual gates used per-task: `mix format` (+ verify `--check-formatted`),
 `mix compile --warnings-as-errors`, `mix test`. JS changes also: `mix assets.build` must bundle clean
-(no JS unit tests — the hook is **smoke-verified**).
+(no JS unit tests, and no JS voice code left to test — the web has no voice client any more).
 **From `native/`:** `flutter test` + `flutter analyze` clean; Kotlin changes need
 `flutter build apk --debug` (analyze does NOT compile Kotlin). Flutter is **not on PATH** — the SDK
 lives at `~/flutter/bin` (prepend `export PATH="$HOME/flutter/bin:$PATH"; ` per command).

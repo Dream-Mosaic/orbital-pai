@@ -2227,6 +2227,17 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:mirror, {:phase, :listening}}, 3000
 
       refute_received {:mirror, {:audio, _, _}}
+      # Client-only signals (never mirrored — see `mirrored?/1`): don't leak onto the dashboard.
+      # Not `{:voice_gate, _}` — that one IS mirrored now (finding #2b).
+      refute_received {:mirror, :thinking}
+      refute_received {:mirror, :speaking}
+      refute_received {:mirror, :listening}
+      refute_received {:mirror, :duck}
+      refute_received {:mirror, :stop_playback}
+      refute_received {:mirror, {:bound, _}}
+      # No {:locked, _} occurs naturally in this flow (voice_activation stays off — `sid` here
+      # isn't a real user's id, so `session_prefs/1` defaults it off), so there's nothing cheap
+      # to assert was mirrored for that event in this test.
       stop_session(pid)
     end
 

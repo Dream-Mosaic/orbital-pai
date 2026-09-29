@@ -578,7 +578,8 @@ defmodule AppWeb.DashboardPanels do
 
   defp aside_body(_kind), do: "text-sm italic text-base-content/60"
 
-  defp short_id(id), do: String.slice(id, 0, 8)
+  # A non-string device id (a client bug, or a future numeric id) must not crash the LiveView.
+  defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
 
   defp present_line([]), do: "no one connected"
 
