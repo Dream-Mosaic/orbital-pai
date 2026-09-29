@@ -87,7 +87,7 @@ defmodule App.Conversations.WakeWord do
   # match above then misses the very word it guards, and the utterance leaks to the brain. When
   # the WHOLE utterance is a single (misheard) word, tolerate it within Levenshtein 1 of a
   # single-word sleep word of length >= 5. The length gate keeps short words (e.g. "lock", 4)
-  # EXACT-only so "look" (the vision cue), "lick", "lack" can never lock him; the single-token
+  # EXACT-only so "look" (a common word), "lick", "lack" can never lock him; the single-token
   # gate keeps "sweep the floor" and the like from matching.
   defp fuzzy_sleep?(bare, sw) do
     String.length(sw) >= 5 and not String.contains?(sw, " ") and

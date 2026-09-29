@@ -234,13 +234,6 @@ defmodule AppWeb.VoiceChannelTest do
     assert_receive {:fake_stt_push, ^pcm}
   end
 
-  test "inbound barge_in is forwarded without crashing the channel", %{socket: socket} do
-    push(socket, "barge_in", %{})
-    # channel is still responsive afterward
-    send(socket.channel_pid, {:to_client, :stop_playback})
-    assert_push "stop_playback", %{}
-  end
-
   test "an inbound allow_interruptions toggle is handled without crashing the channel",
        %{socket: socket} do
     push(socket, "allow_interruptions", %{"enabled" => true})
@@ -250,7 +243,7 @@ defmodule AppWeb.VoiceChannelTest do
   end
 
   test "an inbound wake_detected unlocks a locked conversation", %{socket: socket} do
-    push(socket, "voice_activation", %{"enabled" => true})
+    App.Conversations.Conversation.set_voice_activation(socket.assigns.conversation, true)
     assert_push "locked", %{locked: true}
 
     push(socket, "wake_detected", %{})
@@ -381,48 +374,6 @@ defmodule AppWeb.VoiceChannelTest do
     {:ok, r} = App.Reminders.create(Map.merge(%{due_at: due}, attrs))
     {:ok, r} = App.Reminders.mark_fired(r)
     r
-  end
-
-  describe "vision capability at join" do
-    test "a join declaring vision: false is recorded against that channel; a flag-less join is capable",
-         %{bob: bob} do
-      token = AppWeb.UserAuth.socket_token(bob.id)
-      {:ok, socket} = connect(AppWeb.UserSocket, %{"token" => token})
-      {:ok, _reply, channel} = subscribe_and_join(socket, "voice:#{bob.id}", %{"vision" => false})
-      conv = channel.assigns.conversation
-      on_exit(fn -> Sessions.stop(to_string(bob.id)) end)
-
-      {_state, data} = :sys.get_state(conv)
-      assert data.client_caps[channel.channel_pid] == %{vision: false}
-
-      {:ok, socket2} = connect(AppWeb.UserSocket, %{"token" => token})
-      {:ok, _reply, channel2} = subscribe_and_join(socket2, "voice:#{bob.id}", %{})
-      {_state, data} = :sys.get_state(conv)
-      assert data.client_caps[channel2.channel_pid] == %{vision: true}
-    end
-  end
-
-  describe "vision frame transport" do
-    test "relays a capture_frame owner message to the client", %{socket: socket} do
-      send(socket.channel_pid, {:to_client, {:capture_frame, 7}})
-      assert_push "capture_frame", %{ref: 7}
-    end
-
-    test "an inbound vision_frame is accepted without crashing the channel", %{socket: socket} do
-      ref = push(socket, "vision_frame", %{"ref" => 1, "data" => nil})
-      assert_reply ref, :ok
-      # channel still alive + responsive
-      assert Process.alive?(socket.channel_pid)
-    end
-
-    test "a malformed vision_frame is rejected without crashing the channel", %{socket: socket} do
-      ref = push(socket, "vision_frame", %{"ref" => "not-an-int", "data" => nil})
-      assert_reply ref, :error
-      # a missing "data" key also must not crash
-      ref2 = push(socket, "vision_frame", %{"ref" => 1})
-      assert_reply ref2, :error
-      assert Process.alive?(socket.channel_pid)
-    end
   end
 
   # These use `bob`, who — unlike `alice` — is NOT pre-joined by the setup block, so each

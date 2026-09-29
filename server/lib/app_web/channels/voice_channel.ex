@@ -1,6 +1,6 @@
 defmodule AppWeb.VoiceChannel do
   @moduledoc """
-  Bridges a browser to its per-session `Conversation`.
+  Bridges the app to its per-session `Conversation`.
 
   - **Join** resolves the user's *live* session (the linger keeps it alive across a reload/
     reconnect — conversation state is preserved), or starts a fresh one if none exists; a
@@ -8,8 +8,7 @@ defmodule AppWeb.VoiceChannel do
     with this channel's `device_id`, and the FSM decides whether this channel becomes the
     bound one or joins **standby** (connected and fed state, but not the audio owner, until
     it claims by speaking). Either way the channel gets a `state` snapshot carrying `bound`.
-  - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`;
-    `"barge_in"` → `Conversation.barge_in`.
+  - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
     relayed to the browser as a JSON event (`speak_start` / `metrics` / `transcript` /
     `stop_playback` / `state`) — except `audio`, which is pushed as a raw binary
@@ -32,9 +31,7 @@ defmodule AppWeb.VoiceChannel do
 
     case resolve_session(session_id) do
       {:ok, pid} ->
-        # `vision: false` = this client has no camera (the native app); anything else, including
-        # the web's flag-less join, means it can answer `capture_frame`.
-        Conversation.join(pid, payload["device_id"], vision: payload["vision"] != false)
+        Conversation.join(pid, payload["device_id"])
         Process.monitor(pid)
         send(self(), :after_join)
         send(self(), {:track_presence, payload["kiosk"] == true})
@@ -91,11 +88,6 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
-  def handle_in("barge_in", _payload, socket) do
-    Conversation.barge_in(socket.assigns.conversation)
-    {:noreply, socket}
-  end
-
   def handle_in("played", %{"ms" => ms}, socket) when is_number(ms) do
     Conversation.played(socket.assigns.conversation, ms)
     {:noreply, socket}
@@ -118,11 +110,6 @@ defmodule AppWeb.VoiceChannel do
 
   def handle_in("allow_interruptions", %{"enabled" => enabled}, socket) do
     Conversation.set_allow_interruptions(socket.assigns.conversation, enabled)
-    {:noreply, socket}
-  end
-
-  def handle_in("voice_activation", %{"enabled" => enabled}, socket) do
-    Conversation.set_voice_activation(socket.assigns.conversation, enabled)
     {:noreply, socket}
   end
 
@@ -160,24 +147,6 @@ defmodule AppWeb.VoiceChannel do
     Conversation.wake_detected(socket.assigns.conversation)
     {:noreply, socket}
   end
-
-  def handle_in("vision_frame", %{"ref" => ref, "data" => data} = payload, socket)
-      when is_integer(ref) and (is_binary(data) or is_nil(data)) do
-    # A nil frame means the browser couldn't capture — log the client's reason (getUserMedia error
-    # name + camera count) so a wall-kiosk failure is diagnosable from companion.log.
-    if is_nil(data) do
-      Logger.info(
-        "[vision] client sent no frame: #{inspect(Map.get(payload, "error", "(no reason)"))}"
-      )
-    end
-
-    Conversation.vision_frame(socket.assigns.conversation, ref, data)
-    {:reply, :ok, socket}
-  end
-
-  # An off-shape vision_frame (client bug) must not crash the channel — ignore it. The
-  # Conversation's own 2s :vision_capture timeout then degrades that turn to text-only.
-  def handle_in("vision_frame", _payload, socket), do: {:reply, :error, socket}
 
   # ---- outbound: session -> browser ----
   @impl true
@@ -226,11 +195,6 @@ defmodule AppWeb.VoiceChannel do
 
   def handle_info({:to_client, {:tool_call, name}}, socket) do
     push(socket, "tool_call", %{name: name})
-    {:noreply, socket}
-  end
-
-  def handle_info({:to_client, {:capture_frame, ref}}, socket) do
-    push(socket, "capture_frame", %{ref: ref})
     {:noreply, socket}
   end
 

@@ -32,18 +32,6 @@ defmodule App.ConfigTest do
     assert App.Tools.Garden in tools
   end
 
-  describe "vision flag" do
-    test "default/0 enables vision by default" do
-      assert Config.default().vision == true
-    end
-
-    test "default/0 reads the vision override from app env" do
-      Application.put_env(:app, :vision, false)
-      on_exit(fn -> Application.delete_env(:app, :vision) end)
-      assert Config.default().vision == false
-    end
-  end
-
   describe "home assistant flag" do
     test "default/0 leaves the tool OFF when :home_assistant is unconfigured" do
       refute Config.home_assistant?()

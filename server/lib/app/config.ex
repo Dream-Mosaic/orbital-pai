@@ -109,10 +109,6 @@ defmodule App.Config do
             # into another's reminders and lists. Was `kiosk_user_switch`, a name left over from
             # the web wall it was first built for (spec 2026-09-26-web-admin-dashboard-design).
             household_named_targets: false,
-            # Vision ("look at this"): grab a single webcam frame on an explicit spoken cue and
-            # send it to the multimodal brain. ON by default (further gated by camera permission +
-            # the explicit phrase); env-backed so `VISION=false`/`0` disables it without recompiling.
-            vision: true,
             # Voice Lock (speaker verification gate; spec 2026-07-12-voice-lock-design).
             # threshold is PROVISIONAL (spike midpoint 0.4642, rounded) until shadow-mode calibration.
             voice_lock_threshold: 0.46,
@@ -128,8 +124,7 @@ defmodule App.Config do
   def default do
     base = %__MODULE__{
       timezone: timezone(),
-      household_named_targets: household_named_targets?(),
-      vision: vision?()
+      household_named_targets: household_named_targets?()
     }
 
     # Guarded registration: the smart-home tool exists for the brain ONLY when the hub is
@@ -157,11 +152,6 @@ defmodule App.Config do
   # Env-backed (unlike the frozen struct-literal toggles) so tests and prod config can flip it
   # via `Application.put_env(:app, :household_named_targets, true)` without recompiling.
   defp household_named_targets?, do: Application.get_env(:app, :household_named_targets, false)
-
-  # Env-backed (default ON). `VISION=false`/`0` flips it off in config/runtime.exs without a
-  # recompile; anything else (or unset) leaves it on. Nothing happens without ALSO the explicit
-  # look-phrase and browser camera permission, so on-by-default is safe.
-  defp vision?, do: Application.get_env(:app, :vision, true)
 
   @doc """
   Home Assistant configured? True iff `:app, :home_assistant` carries a non-empty url + token

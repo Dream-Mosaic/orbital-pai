@@ -144,7 +144,7 @@ defmodule App.Conversations.WakeWordTest do
 
     test "fuzzy sleep never fires on short lookalikes or multi-word utterances (no false locks)" do
       # "lock" (4 chars) stays EXACT-only, so its near-misses can't lock him — critically "look"
-      # (the vision cue) must never be read as "lock".
+      # (a common word) must never be read as "lock".
       refute WakeWord.sleep_command?("look", @cfg)
       refute WakeWord.sleep_command?("lick", @cfg)
       refute WakeWord.sleep_command?("lack", @cfg)

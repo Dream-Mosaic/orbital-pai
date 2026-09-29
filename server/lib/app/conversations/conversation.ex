@@ -14,7 +14,7 @@ defmodule App.Conversations.Conversation do
   """
   @behaviour :gen_statem
 
-  alias App.Conversations.{Backchannel, LookIntent, Policy, WakeWord}
+  alias App.Conversations.{Backchannel, Policy, WakeWord}
   alias App.Agenda.Item
   alias App.Config
   require Logger
@@ -34,17 +34,6 @@ defmodule App.Conversations.Conversation do
   @brain_ratelimited "Sorry, I'm getting rate-limited right now — could be an API limit or the billing running dry. Give it a minute and try again."
   # Spoken when the brain is fully unreachable: the stream failed AND the batch fallback failed too.
   @brain_unreachable "Sorry, I can't reach my brain right now — give me a moment and try again."
-
-  # Vision ("look at this"): how long to hold the brain waiting for the client's frame before
-  # answering text-only. 8s because a real capture legitimately takes a few seconds — getUserMedia
-  # (+ a fallback getUserMedia on webviews that reject the rear-camera constraint) + a
-  # wait-for-a-real-frame warm-up (the first frames are black) + downscale. The brain starts the
-  # instant the frame arrives (NOT at the timeout), so a generous ceiling adds no latency on
-  # success — it only rescues slow-but-successful captures (live smoke: real frame landed after 2s).
-  # App-env override (:vision_capture_timeout_ms) is the test hook.
-  @vision_capture_timeout_ms 8_000
-  @vision_unavailable_note "\n\n(Note: the camera wasn't available just now — answer from what " <>
-                             "was said and do not describe or invent an image.)"
 
   # ---- public API ----
   def start_link(opts) do
@@ -76,15 +65,8 @@ defmodule App.Conversations.Conversation do
 
   Either way the joining pid gets a state snapshot carrying `bound:`. A bind also cancels any
   pending linger.
-
-  `opts[:vision]` declares whether this client can answer `capture_frame` with a camera frame;
-  absent means yes (every web join), and a client that says `false` is never asked -- see
-  `vision_wanted?/2` (issue #5).
   """
-  def join(pid, device_id, opts \\ []) do
-    caps = %{vision: Keyword.get(opts, :vision, true)}
-    :gen_statem.cast(pid, {:join, self(), device_id, caps})
-  end
+  def join(pid, device_id), do: :gen_statem.cast(pid, {:join, self(), device_id})
 
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
@@ -102,9 +84,6 @@ defmodule App.Conversations.Conversation do
   def eager_end(pid, text), do: :gen_statem.cast(pid, {:stt_eager_end, text})
   def resume(pid), do: :gen_statem.cast(pid, {:stt_resume})
   def turn_start(pid), do: :gen_statem.cast(pid, {:stt_turn_start})
-
-  @doc "Deliver (or fail, with nil) the webcam frame the server requested for a vision turn."
-  def vision_frame(pid, ref, image), do: :gen_statem.cast(pid, {:vision_frame, ref, image})
 
   def set_allow_interruptions(pid, enabled),
     do: :gen_statem.cast(pid, {:set_allow_interruptions, enabled, self()})
@@ -171,9 +150,6 @@ defmodule App.Conversations.Conversation do
       # device's id would stay bound and that device would steal the conversation back on its
       # next reconnect. Pruned of dead channels on every join, the only thing that grows it.
       device_ids: %{},
-      # client pid -> capabilities declared at its latest join (`%{vision: bool}`); a pid with
-      # no entry (a legacy join, or a bare unit-test client) is treated as fully capable.
-      client_caps: %{},
       session_id: session_id,
       stt_mod: stt_mod,
       stt_pid: stt_pid,
@@ -202,15 +178,6 @@ defmodule App.Conversations.Conversation do
       # exists: {pid, ref} | nil. Adopted (BrainStream.begin/3) by the next :start_brain effect,
       # or killed by the :prewarm_ttl timer if the turn never materializes.
       prewarm_brain: nil,
-      # the "look at this" frame (base64 jpeg) for the CURRENT turn, consumed by start_brain_now
-      # and reset per-turn; nil = a normal (no-image) turn.
-      vision_image: nil,
-      # this turn asked us to look (LookIntent matched) — set in generate_reflex, read by start_brain.
-      vision_wanted: false,
-      # while holding the brain for a frame: %{ref: integer, t: transcript} | nil.
-      vision_pending: nil,
-      # monotonically increasing capture-request id, so a stale frame can't attach to a new turn.
-      vision_seq: 0,
       # set once we've fallen back to the batch brain (so we don't loop)
       brain_fallback: false,
       # monotonic ms at which all audio sent so far will have finished playing
@@ -496,13 +463,8 @@ defmodule App.Conversations.Conversation do
 
   # A channel joined. See join/2 for the binding rule; the decision lives here, inside the
   # FSM, so a lookup -> decide -> cast race is impossible.
-  # The pre-capabilities join shape (a caster older than the `caps` element -- tests
-  # simulating other devices send it raw): a legacy join is a fully capable one.
-  def handle_event(:cast, {:join, from, device_id}, s, data),
-    do: handle_event(:cast, {:join, from, device_id, %{vision: true}}, s, data)
-
-  def handle_event(:cast, {:join, from, device_id, caps}, _s, data) do
-    data = data |> remember_device(from, device_id) |> remember_caps(from, caps)
+  def handle_event(:cast, {:join, from, device_id}, _s, data) do
+    data = remember_device(data, from, device_id)
 
     if bind_on_join?(data, from, device_id) do
       data = rebind(data, from, device_id)
@@ -600,18 +562,6 @@ defmodule App.Conversations.Conversation do
   def handle_event(:cast, {:ptt_press, from}, _s, %{client: from} = data),
     do: {:keep_state, data}
 
-  # The client delivered (image) or failed (nil) the frame we asked for. Match the ref so a stale
-  # frame from an earlier request can't attach here; then start the brain (with the image, or
-  # text-only + a note). Cancel the capture timeout either way.
-  def handle_event(:cast, {:vision_frame, ref, image}, _s, %{vision_pending: %{ref: ref}} = data) do
-    data = %{data | vision_pending: nil, vision_wanted: false, vision_image: image}
-    data = if is_nil(image), do: note_camera_unavailable(data), else: data
-    {data, acts} = start_brain_now(data, [{{:timeout, :vision_capture}, :infinity, :cancel}])
-    {:keep_state, data, acts}
-  end
-
-  def handle_event(:cast, {:vision_frame, _ref, _image}, _s, data), do: {:keep_state, data}
-
   def handle_event(:cast, {:push_audio, pcm, from}, _s, %{client: from} = data),
     do: {:keep_state, push_to_stt(pcm, buffer_audio(pcm, data))}
 
@@ -670,16 +620,6 @@ defmodule App.Conversations.Conversation do
   end
 
   def handle_event({:timeout, :prewarm_ttl}, :expire, _s, data), do: {:keep_state, data}
-
-  # The frame never came within the window — answer from text, honestly noting no camera.
-  def handle_event({:timeout, :vision_capture}, :expire, _s, %{vision_pending: %{}} = data) do
-    Logger.info("[vision] capture timed out — answering text-only")
-    data = %{data | vision_pending: nil, vision_wanted: false, vision_image: nil}
-    {data, acts} = start_brain_now(note_camera_unavailable(data), [])
-    {:keep_state, data, acts}
-  end
-
-  def handle_event({:timeout, :vision_capture}, :expire, _s, data), do: {:keep_state, data}
 
   def handle_event({:timeout, :relock}, :relock, _s, %{voice_activation: false} = data),
     do: {:keep_state, data}
@@ -986,8 +926,7 @@ defmodule App.Conversations.Conversation do
   defp rate_limited?({:http, 429, _body}), do: true
   defp rate_limited?(_), do: false
 
-  # Start the streaming brain now, attaching this turn's vision_image (nil on a normal turn).
-  # Adopts a live pre-warm (BrainStream.begin/4) or cold-starts; either way the image rides along.
+  # Start the streaming brain now. Adopts a live pre-warm (BrainStream.begin/3) or cold-starts.
   defp start_brain_now(data, acts) do
     emit(data, :thinking)
 
@@ -1000,7 +939,7 @@ defmodule App.Conversations.Conversation do
           # a prewarmed brain matches this turn's context policy (default recent-context) —
           # adopt it: the Cartesia WS handshake is already done or in flight.
           if Process.alive?(pid) do
-            brain_stream_mod().begin(pid, data.transcript, recent?, data.vision_image)
+            brain_stream_mod().begin(pid, data.transcript, recent?)
             {pid, ref, %{data | prewarm_brain: nil}}
           else
             Process.demonitor(ref, [:flush])
@@ -1038,8 +977,7 @@ defmodule App.Conversations.Conversation do
         transcript: data.transcript,
         session_id: data.session_id,
         recent_context: recent?,
-        config: data.config,
-        image: data.vision_image
+        config: data.config
       )
 
     {pid, Process.monitor(pid), data}
@@ -1792,24 +1730,6 @@ defmodule App.Conversations.Conversation do
     %{data | device_ids: ids}
   end
 
-  # Same pruning as remember_device/3: the map is keyed by channel pid, and channels die.
-  defp remember_caps(data, from, caps) do
-    caps_by_pid =
-      data.client_caps
-      |> Enum.filter(fn {pid, _} -> Process.alive?(pid) end)
-      |> Map.new()
-      |> Map.put(from, caps)
-
-    %{data | client_caps: caps_by_pid}
-  end
-
-  # Whether the BOUND client can take a picture. Absent = yes: a legacy join carries no flag,
-  # and so does a bare unit-test client. Only a client that explicitly opted out at join is
-  # never asked -- before this the native app ignored `capture_frame` and every look-phrase
-  # turn waited out the full vision timeout with the brain held (issue #5).
-  defp client_vision?(data),
-    do: Map.get(data.client_caps, data.client, %{vision: true}).vision
-
   defp live?(pid), do: is_pid(pid) and Process.alive?(pid)
 
   # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
@@ -1837,11 +1757,7 @@ defmodule App.Conversations.Conversation do
         ttb: nil,
         transcript: with_pending(data, t),
         pending_request: nil,
-        reflex_text: nil,
-        # per-turn reset so a prior turn's frame can never leak into this one
-        vision_image: nil,
-        vision_pending: nil,
-        vision_wanted: vision_wanted?(t, data)
+        reflex_text: nil
     }
 
     case {data.agenda_turn, data.speculative_reflex} do
@@ -1865,21 +1781,7 @@ defmodule App.Conversations.Conversation do
     end
   end
 
-  defp run_effect({:start_brain, t}, {data, acts}) do
-    if vision_capture?(data) do
-      # Hold the brain and ask the client for one frame. The reflex effect already ran (it's the
-      # prior effect in the endpoint list), so it fires and masks this ~1s. Keep the pre-warm alive
-      # (do NOT cancel :prewarm_ttl here) so start_brain_now can still adopt it when the frame lands.
-      seq = data.vision_seq + 1
-      emit(data, :thinking)
-      emit(data, {:capture_frame, seq})
-
-      {%{data | vision_seq: seq, vision_pending: %{ref: seq, t: t}},
-       [{{:timeout, :vision_capture}, vision_capture_timeout_ms(), :expire} | acts]}
-    else
-      start_brain_now(data, acts)
-    end
-  end
+  defp run_effect({:start_brain, _t}, {data, acts}), do: start_brain_now(data, acts)
 
   defp run_effect({:speak_reflex, text}, {data, acts}) do
     emit(data, {:speak_start, reflex_source(data), text})
@@ -1955,15 +1857,8 @@ defmodule App.Conversations.Conversation do
          commit_speculative?: false,
          interrupt_pending?: false,
          reflex_ms: 0,
-         brain_ms: 0,
-         vision_wanted: false,
-         vision_pending: nil,
-         vision_image: nil
-     },
-     [
-       {{:timeout, :interrupt_pending}, :infinity, :cancel},
-       {{:timeout, :vision_capture}, :infinity, :cancel} | acts
-     ]}
+         brain_ms: 0
+     }, [{{:timeout, :interrupt_pending}, :infinity, :cancel} | acts]}
   end
 
   defp run_effect(:cancel_reflex, {data, acts}), do: {cancel_reflex_tasks(data), acts}
@@ -1983,12 +1878,6 @@ defmodule App.Conversations.Conversation do
        {{:timeout, :turn_done}, :infinity, :cancel} | acts
      ]}
   end
-
-  defp vision_capture?(data),
-    do: data.vision_wanted and is_nil(data.vision_image) and is_pid(data.client)
-
-  defp vision_capture_timeout_ms,
-    do: Application.get_env(:app, :vision_capture_timeout_ms, @vision_capture_timeout_ms)
 
   defp announce_heard(t, data) do
     Logger.info("[turn] ▶ heard: #{inspect(t)}")
@@ -2012,16 +1901,6 @@ defmodule App.Conversations.Conversation do
 
   defp agenda_recent_context(nil), do: true
   defp agenda_recent_context({%Item{recent_context: rc}, _mode}), do: rc
-
-  # Should THIS turn grab a webcam frame? Only a real user turn (not an agenda/reminder turn),
-  # with vision enabled, a live client to capture from, and an explicit look-phrase.
-  defp vision_wanted?(t, data) do
-    is_nil(data.agenda_turn) and data.config.vision and is_pid(data.client) and
-      client_vision?(data) and LookIntent.wants_look?(t, data.config)
-  end
-
-  defp note_camera_unavailable(data),
-    do: %{data | transcript: data.transcript <> @vision_unavailable_note}
 
   # A briefing is a daily singleton: ignore a second one while one is already queued or in-flight,
   # so the scheduler broadcast and the pull-on-connect injection can't double-speak it.

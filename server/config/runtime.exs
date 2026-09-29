@@ -159,13 +159,6 @@ if System.get_env("HOUSEHOLD_NAMED_TARGETS") in ~w(true 1) do
   config :app, :household_named_targets, true
 end
 
-# Vision ("Henry, look at this"): ON by default. Set VISION=false or VISION=0 to disable the
-# webcam capture path entirely (the server never asks the browser for a frame). Anything else
-# (or unset) leaves it on — it's still gated by the explicit look-phrase + camera permission.
-if System.get_env("VISION") in ~w(false 0) do
-  config :app, :vision, false
-end
-
 # Home Assistant (smart home): instance-wide shared hub — one public URL (Nabu Casa / tunnel) +
 # one long-lived access token for the whole household, NOT per-user. Both must be set (and
 # HOME_ASSISTANT not "false"/"0") or the config stays absent and the tool never registers —
