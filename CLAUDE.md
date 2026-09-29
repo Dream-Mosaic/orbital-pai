@@ -56,29 +56,23 @@ docs/, docker-compose*.yml, dev.sh, CLAUDE.md, AGENTS.md …   top level
 phone/tablet/desktop are build targets + responsive layout inside `native/`, not separate folders.
 Deploy: `docker-compose.yml` (Coolify) builds with `context: ./server`.
 
-## Surfaces: Flutter is the target, the web is the monitor
+## Surfaces: Flutter is the client, the web is the admin dashboard
 
-**As of 2026-09-05 the web UI is no longer the reference implementation.** The Flutter client is
-the product. The LiveView is being allowed to drift, and is slowly becoming a debugging /
-monitoring / deep-analysis view rather than a second front end.
+**As of 2026-09-26 the web is the admin dashboard** (spec
+`docs/superpowers/specs/2026-09-26-web-admin-dashboard-design.md`, #21). Flutter is the only
+client, on every platform: Android now, desktop (#16/#17) and iOS later, with per-platform code
+paths where a platform needs them.
 
-What that changes, concretely:
-
-- **Do NOT keep the two aligned.** Native copy, layout, ordering and affordances are decided on
-  their own merits — a 360dp phone is not a browser window, and matching the web was costing real
-  usability (the connectors rows that truncated to `Google...` and `Google C...` were a direct
-  result of porting the web's one-line row shape).
-- **A divergence is no longer an exception that needs justifying.** Earlier phases documented each
-  one; that framing is obsolete. Justify a *native* decision on native grounds.
-- **Still true, and different:** panels must render what the CHANNEL sent (labels, facts,
-  summaries) rather than inventing their own. The four `"the copy renders verbatim from the
-  server"` tests assert THAT, not web parity -- keep them.
-- The web still needs auth and still needs to work. A monitor you cannot log into is not a monitor.
-
-Parity locks left over from the port, to retire as each file is next touched:
-`connectors_panel_test.dart`'s "byte-exact with voice_modals.ex" test, `nav.dart:6`'s "**This
-order is fixed**" (its reason -- phases B-D -- is complete), and `connectors_panel.dart:836`'s
-byte-exactness claim.
+- The web never joins `voice:` and never writes. It live-mirrors the conversation from PubSub
+  (`"conversation:<uid>"`, `{:mirror, event}` from `Conversation.emit/2`), shows saved history,
+  and has a read-only inspector. Any write it grows later must call the same context function
+  the panel channel does. The old duplicate web write paths drifted from the channels in four
+  ways (see the spec).
+- Native copy, layout and affordances are decided on native grounds; there is no web to match.
+- Panels must render what the CHANNEL sent (labels, facts, summaries) rather than inventing
+  their own. The four "the copy renders verbatim from the server" tests assert that. Keep them.
+- The web still needs auth and must still work: a dashboard you cannot log into is not a
+  dashboard.
 
 ## Gates (always, before any commit)
 
@@ -122,11 +116,10 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   listed in `App.Config :tools`.
 - `lib/app/google/` (OAuth + Calendar + accounts), `lib/app/memory/` (facts/summary/turns/updater),
   `lib/app/reminders/` (context + scheduler + notice).
-- `lib/app_web/` — `VoiceChannel` (binary mic in; speak_start/audio/etc. out), `ConversationLive`
-  (memory + reminders + Google panels), `GoogleAuthController`.
-- `assets/js/voice/` — `index.js` (the `Voice` hook: mic, gapless playback, live brain caption, PTT,
-  toggle relays), `capture.js`, `playback.js`. (Turn detection + barge-in are now **server-side** via
-  Ink, so the old client VAD/RMS knobs are gone; the tunables live on the server — see below.)
+- `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
+  `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
+  `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
+- `assets/js/`: just LiveView bootstrap; the web has no voice client.
 
 ## Gotchas (hard-won — don't re-hit these)
 
