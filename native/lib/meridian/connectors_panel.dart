@@ -34,12 +34,10 @@ _FieldKind _kindOf(String type) => switch (type) {
 /// because it is `_`-private to each library.
 const Color _dangerRed = Color(0xFFEA003E);
 
-/// The Connectors drawer's contents — the port of `connectors_panel/1` in
-/// `lib/app_web/components/voice_modals.ex` (~379-482): one row per
-/// (account, connector) grant, each with its label, email, an optional
-/// default badge/button pair, an access badge, and a Disconnect button,
-/// followed by a `+ Connect account` button and, while open, the "Add a
-/// connection" grant form.
+/// The Connectors drawer's contents: one row per (account, connector) grant,
+/// each with its label, email, an optional default badge/button pair, an
+/// access badge, and a Disconnect button, followed by a `+ Connect account`
+/// button and, while open, the "Add a connection" grant form.
 ///
 /// Server-authoritative, same pattern as the other panels: every write
 /// pushes and the UI re-renders from the next `state`. [Connection] arrives
@@ -720,11 +718,10 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
         .grantUrl(connector: connectorKey, fields: Map.of(_fieldValues));
   }
 
-  /// The port of `connectors_panel/1`'s grant `<div :if={@grant}>` block
-  /// (`voice_modals.ex` ~422-479) — generic over [ConnectorsState.catalog]
-  /// rather than switching on "calendar" or "gmail" by name. A catalog
-  /// entry this client has never seen (a future Home Assistant/CouchDB row)
-  /// renders here exactly the way Google's own two entries do, because
+  /// The grant form, generic over [ConnectorsState.catalog] rather than
+  /// switching on "calendar" or "gmail" by name. A catalog entry this
+  /// client has never seen (a future Home Assistant/CouchDB row) renders
+  /// here exactly the way Google's own two entries do, because
   /// nothing below reads `spec.key` to decide WHAT to draw — only which
   /// entry is currently selected.
   Widget _grantForm(ConnectorsState state) {
@@ -852,11 +849,11 @@ class _ConnectorsPanelViewState extends State<ConnectorsPanelView>
     );
   }
 
-  /// "New Google account" — byte-exact against `voice_modals.ex`'s literal
-  /// `<option>` (~438) for Google's own two connectors today, but not a
-  /// hardcoded string: it is built from the catalog entry's own `provider`,
-  /// so a future provider gets its own label with no Dart change, the same
-  /// generality the catalog itself is designed around (spec §5).
+  /// "New Google account" — this panel's own copy for Google's two
+  /// connectors today, but not a hardcoded string: it is built from the
+  /// catalog entry's own `provider`, so a future provider gets its own
+  /// label with no Dart change, the same generality the catalog itself is
+  /// designed around (spec §5).
   String _newAccountLabel(ConnectorSpec spec) =>
       'New ${_capitalize(spec.provider)} account';
 

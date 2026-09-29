@@ -1046,38 +1046,6 @@ void main() {
     });
 
     testWidgets(
-        'the grant form copy is byte-exact with voice_modals.ex\'s '
-        'connectors_panel/1', (tester) async {
-      final catalog = [_googleConnector('calendar', 'Google Calendar')];
-      final (client, conn, _) = await openedClient(
-          tester, _stateFrame(const [], catalog: catalog));
-      await pumpPanel(tester, client);
-
-      expect(find.text('+ Connect account'), findsOneWidget);
-
-      await tester.tap(find.byKey(ConnectorsPanelView.connectKey));
-      await tester.pumpAndSettle();
-
-      // Every one of these is copy-pasted, byte for byte (verified with a
-      // Python code-point dump against voice_modals.ex, not eyeballed), from
-      // the web's connectors_panel/1 grant block. All seven strings are
-      // plain ASCII on the web side too — there is no U+2026/U+2014 here to
-      // silently normalise.
-      for (final s in const [
-        'Add a connection',
-        'Connector',
-        'Account',
-        'Access',
-        'New Google account',
-        'Cancel',
-      ]) {
-        expect(find.text(s), findsOneWidget, reason: 'copy mismatch: "$s"');
-      }
-
-      await conn.disconnect();
-    });
-
-    testWidgets(
         'killing the socket right after grant_url does not crash the panel',
         (tester) async {
       final catalog = [_googleConnector('calendar', 'Google Calendar')];

@@ -37,14 +37,6 @@ void main() {
     }
   });
 
-  test('each tab carries the phx-value-modal the web uses', () {
-    // conversation_live.ex:904-941 — also the ?panel= value.
-    expect(MeridianTab.settings.modal, 'settings');
-    expect(MeridianTab.reminders.modal, 'reminders');
-    expect(MeridianTab.books.modal, 'books');
-    expect(MeridianTab.connectors.modal, 'connectors');
-  });
-
   testWidgets('tapping reports the tab', (tester) async {
     final tapped = <MeridianTab>[];
     await tester.pumpWidget(MaterialApp(

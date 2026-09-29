@@ -59,7 +59,7 @@ class VoiceController extends ChangeNotifier {
     // never does.
     _connection.openChannel(
       _topic,
-      joinPayload: const {'kiosk': false, 'vision': false},
+      joinPayload: const {'kiosk': false},
       essential: true,
       onChannel: _adoptChannel,
     );
@@ -141,7 +141,7 @@ class VoiceController extends ChangeNotifier {
     if (_disposed) return;
     _connection.openChannel(
       _topic,
-      joinPayload: {'kiosk': false, 'vision': false, 'device_id': id},
+      joinPayload: {'kiosk': false, 'device_id': id},
       essential: true,
       onChannel: _adoptChannel,
     );
@@ -996,13 +996,6 @@ class VoiceController extends ChangeNotifier {
           _thread.add(metrics);
           _metricsIndex = _thread.length - 1;
         }
-      case 'capture_frame':
-        // This client has no camera and says so at join (`vision: false`),
-        // so a server that honours the flag never sends this. Answer a stray
-        // one immediately with an empty frame all the same: an older server
-        // would otherwise hold the brain for its full vision timeout (8s)
-        // waiting on a picture that is never coming (issue #5).
-        _live?.push('vision_frame', {'ref': p['ref'], 'data': null, 'error': 'no_camera'});
       case 'reminder_ack_offer':
         final id = (p['id'] as num?)?.toInt();
         if (id != null) {
