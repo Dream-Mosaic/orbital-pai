@@ -159,6 +159,25 @@ defmodule AppWeb.DashboardPanels do
     """
   end
 
+  # A Voice Lock drop: an utterance was heard but rejected before it became a transcript.
+  # Same style family as the tool/metrics asides (a dim, compact badge branching off the
+  # spine) — NOT the generic clause below, which renders a full you/brain-shaped bubble with
+  # its own label line.
+  def thread_row(%{row: %{kind: :gate}} = assigns) do
+    ~H"""
+    <div class="relative mt-1.5 pl-[calc(var(--rail)+1.25rem)]" data-kind="gate">
+      <span
+        aria-hidden="true"
+        class="absolute top-1/2 left-[calc(var(--rail)+2px)] h-px w-4 bg-base-content/15"
+      ></span>
+      <span class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-base-content/15 bg-base-content/[0.04] px-2 py-0.5 font-mono text-xs text-base-content/50">
+        <.icon name="hero-shield-exclamation-micro" class="size-3.5 shrink-0 text-base-content/35" />
+        <span class="[overflow-wrap:anywhere]">{@row.text}</span>
+      </span>
+    </div>
+    """
+  end
+
   # Spoken asides and agenda leads: the reflex filler, and a reminder, briefing or follow-up
   # opening a turn nobody asked for.
   def thread_row(assigns) do

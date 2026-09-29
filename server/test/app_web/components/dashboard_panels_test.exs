@@ -61,4 +61,17 @@ defmodule AppWeb.DashboardPanelsTest do
 
     assert reminder =~ ~s(data-kind="reminder") and reminder =~ "Heads up"
   end
+
+  test "a Voice Lock gate drop renders its own dim, compact row (finding #2b)" do
+    gate =
+      render_component(&DashboardPanels.thread_row/1,
+        row: %{id: "e", kind: :gate, text: "filtered by Voice Lock"}
+      )
+
+    assert gate =~ ~s(data-kind="gate")
+    assert gate =~ "filtered by Voice Lock"
+    # Same style family as the tool/metrics asides (a compact inline badge), not the generic
+    # you/brain/aside bubble, which always renders a separate label line in this exact class.
+    refute gate =~ ~s(class="text-[11px] font-semibold leading-4 tracking-wide)
+  end
 end

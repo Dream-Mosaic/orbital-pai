@@ -99,6 +99,18 @@ defmodule AppWeb.ConversationLiveTest do
       assert html =~ "audio 0.6s · brain 3.4s"
     end
 
+    test "a Voice Lock drop clears the caption and renders a gate row (finding #2b)",
+         %{conn: conn, user: user} do
+      {:ok, lv, _html} = live(conn, "/")
+
+      mirror(user, {:partial, "lyrics from a song"})
+      assert has_element?(lv, "#caption")
+
+      mirror(user, {:voice_gate, :drop})
+      refute has_element?(lv, "#caption")
+      assert has_element?(lv, ~s([data-kind="gate"]), "filtered by Voice Lock")
+    end
+
     test "a long unbreakable token in a brain row carries the wrap-anywhere class, not a scrollbar",
          %{conn: conn, user: user} do
       {:ok, lv, _html} = live(conn, "/")

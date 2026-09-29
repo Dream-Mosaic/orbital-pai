@@ -44,9 +44,16 @@ defmodule App.Conversations.VoiceLockTest do
     }
 
     config = Keyword.get(opts, :config, %Config{})
+    session_id = Keyword.get(opts, :session_id)
 
     {:ok, pid} =
-      Conversation.start_link(client: self(), config: config, name: nil, voice_lock: vl)
+      Conversation.start_link(
+        client: self(),
+        config: config,
+        name: nil,
+        voice_lock: vl,
+        session_id: session_id
+      )
 
     pid
   end
@@ -66,13 +73,22 @@ defmodule App.Conversations.VoiceLockTest do
     assert_receive {:to_client, {:speak_start, _src, _text}}, 1_000
   end
 
-  test "enforce: mismatched voice is dropped — no reflex/brain, drop event, client pulse", %{
-    user: u
-  } do
+  test "enforce: mismatched voice is dropped — no reflex/brain, drop event, client pulse, and the drop is mirrored to the dashboard (finding #2b)",
+       %{
+         user: u
+       } do
     Application.put_env(:app, :fake_verifier_embedding, @mismatch)
-    pid = start_conv(u, :enforce)
+    # A synthetic id (not `to_string(u.id)`), same trick conversation_test.exs's dashboard-mirror
+    # describe block uses: it makes `session_id` truthy (so the drop IS mirrored) without
+    # resolving to the real user row, whose default voice_activation: true would route the
+    # endpoint through handle_gated_endpoint/2 instead of the gate_and_feed_endpoint/2 path this
+    # test exercises.
+    sid = "vl-#{System.unique_integer([:positive])}"
+    Phoenix.PubSub.subscribe(App.PubSub, "conversation:" <> sid)
+    pid = start_conv(u, :enforce, session_id: sid)
     speak_turn(pid, 3_000, "lyrics from a song")
     assert_receive {:to_client, {:voice_gate, :drop}}, 1_000
+    assert_receive {:mirror, {:voice_gate, :drop}}, 1_000
     refute_receive {:to_client, {:speak_start, _src, _text}}, 500
 
     import Ecto.Query

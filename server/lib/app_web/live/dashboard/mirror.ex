@@ -60,6 +60,14 @@ defmodule AppWeb.Dashboard.Mirror do
 
   def apply_event(state, {:tool_call, name}), do: new_row(state, :tool, to_string(name))
 
+  # Voice Lock dropped this utterance before it became a transcript — the only signal that a
+  # heard-but-rejected utterance ever produces (spec 2026-09-26-web-admin-dashboard-design,
+  # controller ruling on the final review). The ack-echo drop is different: it sends NO event
+  # at all, so a caption it leaves behind is only cleared later, by the next {:phase,
+  # :listening} or {:locked, _} — acceptable, per the same ruling.
+  def apply_event(state, {:voice_gate, :drop}),
+    do: new_row(%{state | caption: nil}, :gate, "filtered by Voice Lock")
+
   def apply_event(state, {:metrics, ttfa, ttb}) do
     text = metrics_text(ttfa, ttb)
 
@@ -75,14 +83,26 @@ defmodule AppWeb.Dashboard.Mirror do
   end
 
   # Back at :listening the turn is over: the next delta (an agenda turn has no transcript to
-  # reset on) must open a fresh answer row rather than append to this one.
+  # reset on) must open a fresh answer row rather than append to this one, the next metrics
+  # event must open a fresh row rather than overwrite the just-finished turn's, and any
+  # "hearing" caption left behind by an utterance that never reached a transcript (a sleep
+  # command, a Voice Lock gate drop with no follow-up, an ack echo) must not strand there.
   def apply_event(state, {:phase, phase}) do
     state = put_status(state, session: :live, phase: phase)
-    state = if phase == :listening, do: %{state | live_brain: nil}, else: state
+
+    state =
+      if phase == :listening,
+        do: %{state | live_brain: nil, metrics: nil, caption: nil},
+        else: state
+
     {state, []}
   end
 
-  def apply_event(state, {:locked, locked}), do: {put_status(state, locked: locked), []}
+  # Same caption-stranding concern as {:phase, :listening} above: a sleep command ("Henry, go
+  # to sleep") endpoints straight to `{:locked, true}` with no transcript in between.
+  def apply_event(state, {:locked, locked}),
+    do: {%{put_status(state, locked: locked) | caption: nil}, []}
+
   def apply_event(state, {:bound_device, id}), do: {put_status(state, bound_device: id), []}
   def apply_event(state, :session_started), do: {put_status(state, session: :live), []}
   def apply_event(state, _event), do: {state, []}

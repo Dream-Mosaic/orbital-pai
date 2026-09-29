@@ -1670,8 +1670,11 @@ defmodule App.Conversations.Conversation do
   defp mirror(%{session_id: sid}, event),
     do: Phoenix.PubSub.broadcast(App.PubSub, "conversation:" <> sid, {:mirror, event})
 
-  # Conversation, not plumbing: audio, ducking, playback stops, gate drops and per-client
-  # binding facts are only meaningful to the device that holds the conversation.
+  # Conversation, not plumbing: audio, ducking, playback stops and per-client binding facts are
+  # only meaningful to the device that holds the conversation. `{:voice_gate, _}` is the one
+  # exception — the dashboard shows filtered utterances, and it is the only signal that clears
+  # a dropped utterance's stranded "hearing" caption (spec 2026-09-26-web-admin-dashboard-
+  # design, controller ruling on the final review).
   defp mirrored?({:partial, _}), do: true
   defp mirrored?({:transcript, _}), do: true
   defp mirrored?({:speak_start, _, _}), do: true
@@ -1679,6 +1682,7 @@ defmodule App.Conversations.Conversation do
   defp mirrored?({:tool_call, _}), do: true
   defp mirrored?({:metrics, _, _}), do: true
   defp mirrored?({:locked, _}), do: true
+  defp mirrored?({:voice_gate, _}), do: true
   defp mirrored?(_), do: false
 
   # ---- device binding (handoff) ----

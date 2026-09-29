@@ -72,6 +72,34 @@ defmodule AppWeb.Dashboard.MirrorTest do
     assert metrics |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 1
   end
 
+  test "an agenda turn's metrics get their own row, not the previous turn's (finding #1)" do
+    {state, rows} =
+      run([
+        {:transcript, "what's the weather"},
+        {:metrics, 640, 3_000}
+      ])
+
+    [_you, first_metrics] = rows
+    assert first_metrics.kind == :metrics
+    assert first_metrics.text == "audio 0.6s · brain 3.0s"
+
+    # Turn ends, an agenda turn (reminder) starts with no transcript of its own.
+    {state, agenda_rows} =
+      [
+        {:phase, :listening},
+        {:speak_start, :reminder, "Heads up —"},
+        {:metrics, nil, 1_200}
+      ]
+      |> Enum.reduce({state, []}, &step/2)
+
+    reminder_metrics = Enum.find(agenda_rows, &(&1.kind == :metrics))
+    assert reminder_metrics.text == "brain 1.2s"
+    assert reminder_metrics.id != first_metrics.id
+    assert state.metrics.id == reminder_metrics.id
+    # The first turn's row, as last emitted, is untouched.
+    assert first_metrics.text == "audio 0.6s · brain 3.0s"
+  end
+
   test "status follows phase, lock, bound device and session start" do
     {state, []} =
       run([
@@ -114,6 +142,32 @@ defmodule AppWeb.Dashboard.MirrorTest do
              %{id: "h-1-brain", kind: :brain, text: "hello"},
              %{id: "h-2-you", kind: :you, text: "and?"}
            ] = Mirror.history_rows(turns)
+  end
+
+  test "the caption clears on {:phase, :listening} (finding #2a)" do
+    {state, []} = Mirror.apply_event(Mirror.new(), {:partial, "half a sent"})
+    assert state.caption == "half a sent"
+
+    {state, []} = Mirror.apply_event(state, {:phase, :listening})
+    assert state.caption == nil
+  end
+
+  test "the caption clears on {:locked, _} (finding #2a)" do
+    {state, []} = Mirror.apply_event(Mirror.new(), {:partial, "half a sent"})
+    assert state.caption == "half a sent"
+
+    {state, []} = Mirror.apply_event(state, {:locked, true})
+    assert state.caption == nil
+    assert state.status.locked == true
+  end
+
+  test "a Voice Lock drop clears the caption and adds a gate row (finding #2b)" do
+    {state, []} = Mirror.apply_event(Mirror.new(), {:partial, "lyrics from a song"})
+    assert state.caption == "lyrics from a song"
+
+    {state, [row]} = Mirror.apply_event(state, {:voice_gate, :drop})
+    assert state.caption == nil
+    assert %{kind: :gate, text: "filtered by Voice Lock"} = row
   end
 
   test "no session clears live turn state (caption, brain, metrics)" do
