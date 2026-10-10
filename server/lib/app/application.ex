@@ -44,6 +44,7 @@ defmodule App.Application do
         timer_scheduler() ++
         briefing_scheduler() ++
         heads_up() ++
+        rain_alerts() ++
         memory_consolidator() ++
         memory_embedder() ++
         source_ingester() ++ pool_warmer() ++ speaker_verifier() ++ backup()
@@ -75,6 +76,12 @@ defmodule App.Application do
   defp heads_up do
     if Application.get_env(:app, :start_heads_up, true),
       do: [App.Agenda.Heads],
+      else: []
+  end
+
+  defp rain_alerts do
+    if Application.get_env(:app, :start_rain_alerts, true),
+      do: [App.Agenda.Rain],
       else: []
   end
 

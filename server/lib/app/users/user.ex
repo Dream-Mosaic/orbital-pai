@@ -17,7 +17,8 @@ defmodule App.Users.User do
     # morning briefing: local "HH:MM" (nil = off) + the local date last DELIVERED (once/day)
     field :briefing_time, :string
     field :briefing_last_on, :date
-    # calendar heads-ups: a spoken nudge ~10 min before each timed event (App.Agenda.Heads)
+    # heads-ups: a spoken nudge ~10 min before each timed event (App.Agenda.Heads), and when
+    # rain's about to start at home (App.Agenda.Rain)
     field :heads_up, :boolean, default: true
     # the release tag of the last "what's new" note spoken to this user (App.Agenda.WhatsNew)
     field :whats_new_seen, :string
