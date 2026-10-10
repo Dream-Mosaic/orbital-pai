@@ -103,7 +103,8 @@ class _OrbFaceState extends State<OrbFace> {
     final fade = widget.dimmed ? 0.45 : 1.0;
 
     final weather = widget.glance.weather;
-    final next = widget.glance.next;
+    final upcoming = widget.glance.next;
+    final next = upcoming != null && upcoming.startedBy(now) ? null : upcoming;
 
     return SizedBox(
       width: widget.width,

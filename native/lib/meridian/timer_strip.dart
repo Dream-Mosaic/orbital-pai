@@ -50,6 +50,11 @@ class TimerStrip extends StatefulWidget {
 class _TimerStripState extends State<TimerStrip>
     with SingleTickerProviderStateMixin {
   Timer? _tick;
+
+  /// Whether the second-tick is armed — what the "stops ticking" test asserts on, since the
+  /// binding's pending-timer check only runs after teardown has already cancelled everything.
+  @visibleForTesting
+  bool get debugTicking => _tick != null;
   late final AnimationController _pulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),

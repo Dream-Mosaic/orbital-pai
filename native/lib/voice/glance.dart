@@ -34,6 +34,7 @@ class Glance {
         title: e['title'] as String,
         time: e['time'] as String,
         day: (e['day'] as String?) ?? '',
+        at: e['at'] is String ? DateTime.tryParse(e['at'] as String) : null,
       );
     }
     return Glance(weather: weather, next: next);
@@ -49,7 +50,8 @@ class Glance {
 
 @immutable
 class GlanceWeather {
-  const GlanceWeather({required this.temp, required this.condition, required this.icon});
+  const GlanceWeather(
+      {required this.temp, required this.condition, required this.icon});
 
   /// e.g. "64°"
   final String temp;
@@ -73,7 +75,14 @@ class GlanceWeather {
 
 @immutable
 class GlanceEvent {
-  const GlanceEvent({required this.title, required this.time, required this.day});
+  const GlanceEvent(
+      {required this.title, required this.time, required this.day, this.at});
+
+  /// When it starts (UTC), if the server said — the face drops it once this has passed rather
+  /// than calling a meeting that's already under way "next".
+  final DateTime? at;
+
+  bool startedBy(DateTime now) => at != null && !now.toUtc().isBefore(at!);
 
   final String title;
 
@@ -85,8 +94,12 @@ class GlanceEvent {
 
   @override
   bool operator ==(Object other) =>
-      other is GlanceEvent && other.title == title && other.time == time && other.day == day;
+      other is GlanceEvent &&
+      other.title == title &&
+      other.time == time &&
+      other.day == day &&
+      other.at == at;
 
   @override
-  int get hashCode => Object.hash(title, time, day);
+  int get hashCode => Object.hash(title, time, day, at);
 }

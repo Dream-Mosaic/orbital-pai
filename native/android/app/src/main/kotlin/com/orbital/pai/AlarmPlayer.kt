@@ -71,7 +71,12 @@ class AlarmPlayer(messenger: BinaryMessenger, private val context: Context) :
             }
             r.play()
         }
-        vibrator()?.vibrate(VibrationEffect.createWaveform(PATTERN, 0))
+        // Tagged as an ALARM vibration: an untagged vibrate() from a backgrounded app (and a
+        // screen-off app counts as backgrounded) is silently dropped by Android.
+        vibrator()?.vibrate(
+            VibrationEffect.createWaveform(PATTERN, 0),
+            AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+        )
         main.postDelayed(capStop, CAP_MS)
     }
 
@@ -90,10 +95,13 @@ class AlarmPlayer(messenger: BinaryMessenger, private val context: Context) :
     /// The user's chosen alarm tone, else the stock alarm, else a notification
     /// or ringtone — some devices ship with no alarm sound set at all.
     private fun alarmTone(): Ringtone? {
+        // getActualDefaultRingtoneUri is null when nothing is SET for that type; getDefaultUri
+        // never is (it's a settings pointer that may resolve to silence), so it can't be the
+        // fallback — chain the actual URIs and only then the pointer.
         val uri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_NOTIFICATION)
+            ?: RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ?: return null
         return RingtoneManager.getRingtone(context, uri)
     }

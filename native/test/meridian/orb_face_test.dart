@@ -64,6 +64,32 @@ void main() {
     expect(find.text('Say “Henry”'), findsOneWidget);
   });
 
+  testWidgets('an event that has already started is not "next"', (tester) async {
+    final glance = Glance.fromJson(const {
+      'next_event': {
+        'title': 'Standup',
+        'time': '9:00 AM',
+        'day': 'Today',
+        'at': '2026-10-10T14:00:00Z',
+      },
+    });
+    await tester.pumpWidget(host(OrbFace(
+      width: 220,
+      height: 180,
+      clock: () => DateTime.utc(2026, 10, 10, 13, 55),
+      glance: glance,
+    )));
+    expect(find.text('Standup'), findsOneWidget);
+
+    await tester.pumpWidget(host(OrbFace(
+      width: 220,
+      height: 180,
+      clock: () => DateTime.utc(2026, 10, 10, 14, 1),
+      glance: glance,
+    )));
+    expect(find.text('Standup'), findsNothing);
+  });
+
   testWidgets('with no glance it is just the clock — no empty rows', (tester) async {
     await tester.pumpWidget(host(OrbFace(
       width: 220,

@@ -85,7 +85,12 @@ defmodule App.GlanceTest do
 
     assert %{
              weather: %{temp: "64°", condition: condition, icon: icon},
-             next_event: %{title: "Dinner with Mom", time: "7:30 PM", day: "Today"}
+             next_event: %{
+               title: "Dinner with Mom",
+               time: "7:30 PM",
+               day: "Today",
+               at: "2026-10-11T00:30:00Z"
+             }
            } = build(config)
 
     assert is_binary(condition) and condition != ""

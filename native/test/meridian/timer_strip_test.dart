@@ -131,7 +131,10 @@ void main() {
     await tester.pumpWidget(
         host([entry(1, deadline: clock.now + const Duration(minutes: 1))]));
     await tester.pump(const Duration(seconds: 1));
+    // ignore: invalid_use_of_visible_for_testing_member
+    bool ticking() => (tester.state(find.byType(TimerStrip)) as dynamic).debugTicking as bool;
+    expect(ticking(), isTrue, reason: 'a countdown on screen ticks');
     await tester.pumpWidget(host(const []));
-    // The test binding fails the test if a Timer is still pending at teardown.
+    expect(ticking(), isFalse, reason: 'no timers left: the tick must be cancelled, not just orphaned');
   });
 }

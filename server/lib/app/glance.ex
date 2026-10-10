@@ -63,7 +63,10 @@ defmodule App.Glance do
       %{
         title: event[:summary] || "(no title)",
         time: clock(local),
-        day: day_label(DateTime.to_date(local), today)
+        day: day_label(DateTime.to_date(local), today),
+        # the instant, so the face can drop an event the moment it starts instead of showing
+        # it as "next" until the following refresh
+        at: start |> DateTime.shift_zone!("Etc/UTC") |> DateTime.to_iso8601()
       }
     else
       other ->

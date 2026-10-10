@@ -116,10 +116,17 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   listed in `App.Config :tools`.
 - `lib/app/google/` (OAuth + Calendar + accounts), `lib/app/memory/` (facts/summary/turns/updater),
   `lib/app/reminders/` (context + scheduler + notice).
+- Household layer (2026-10-10): `lib/app/timers*` (context + `Timers.Scheduler`), `lib/app/messages*`
+  (intercom between household members), `lib/app/trackers*`, `lib/app/routines*`, `lib/app/recipes*`,
+  each with its tool in `lib/app/tools/`. `lib/app/cards.ex` (tool result → display-ready card),
+  `lib/app/glance.ex` (the idle orb's weather + next event), `lib/app/backup.ex` (nightly snapshots).
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
 - `assets/js/`: just LiveView bootstrap; the web has no voice client.
+- Native additions: `lib/meridian/composer.dart` (Type to Henry), `timer_strip.dart`, `orb_face.dart`
+  (+ `lib/voice/glance.dart`), `lib/meridian/cards/` (one widget per card type, `card_view.dart`
+  dispatches), `lib/voice/timers_model.dart`, `lib/audio/alarm_sound.dart` (+ `AlarmPlayer.kt`).
 
 ## Gotchas (hard-won — don't re-hit these)
 
@@ -311,6 +318,47 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   being disabled (hit live 2026-06-25). **`gmail.send` is a restricted scope**: in Google testing
   mode the app stays unverified — refresh tokens can expire ~7 days, surfacing as `:needs_reconnect`.
   **`messages.list` returns ids only** — per-id metadata `get` fan-out is mandatory.
+- **Tools advertise themselves.** A tool's usage guidance lives in its own optional `prompt/0`
+  (`App.Tools.prompt_block/1` appends every enabled tool's fragment). Never grow the giant
+  `Gemini.brain_prompt/1` string for a new tool — that paragraph was a guaranteed merge conflict.
+- **Canned agenda items** (`App.Agenda.Item.canned: true`) speak `prompt` VERBATIM in the brain
+  slot — TTS only, no model call, no BrainStream. Timers, household messages and calendar
+  heads-ups use it: the words are already known, and a brain round would only add latency and
+  paraphrase. `speak_start`'s source is the item's `kind`, so every new kind needs a native
+  `LineKind` or the line is silently dropped (`lineKindFromSource` returns null).
+- **Typed turns are QUIET** (`Conversation.typed/2`): Policy `{:endpoint_quiet, t}` starts the
+  brain with `reflex_sent: true` and no reflex; `BrainStream` runs `tts: false` (no Cartesia
+  socket); fallbacks send text only. A typed message claims like `ptt_press`, bypasses the wake
+  lock / PTT / Voice Lock gate, and never unlocks. `quiet_turn` must reset on EVERY turn exit
+  (`reset_turn_fields`, `:cancel_brain`) or the next spoken turn goes silent.
+- **Cards ride the tool loop.** `Gemini.run_rounds` relays each `{:ok, r}` as
+  `{:gemini_tool_result, …}` → `App.Cards.from_tool/3` (pure, nil when not card-shaped) →
+  `{:card, card}`, HELD behind the reflex in `card_buffer` exactly like caption deltas. A carded
+  result also gets a `display` note in its functionResponse (`Gemini.with_card_note/4`) so the
+  brain gives the takeaway instead of reciting what the card already shows — without it, a weather
+  card came with a seven-day monologue underneath.
+- **Routine hop refund.** `@max_tool_hops` is 3 and `run_routine` spends a hop before any step
+  runs; the FIRST `run_routine` of a turn refunds itself plus `@routine_bonus_hops` (once per turn,
+  so re-calling it can't loop).
+- **Timers are per USER, watched by the channel, not the Conversation.** `VoiceChannel` subscribes
+  to `"timers:<uid>"` after join, so every device of the user shows every timer; the ring is
+  spoken via a canned agenda item AND sounded on-device through the `henry/alarm` MethodChannel
+  (`AlarmPlayer.kt`, `USAGE_ALARM` ringtone) — which must never take audio focus or touch the mode
+  or route; `AudioRouteOwner` stays the only owner. `remaining_ms` is computed at push time and
+  the client anchors it to its own monotonic clock (no clock skew).
+- **The glance is built from real tools, off the channel process** (`App.Glance` via
+  `App.Tools.execute/3`, so it shares the tool cache), refreshed every 15 min. `config :app, glance:
+  false` in test — otherwise every channel test runs weather + calendar.
+- **A joined standby device keeps the session alive.** The 2-minute linger used to stop the
+  session when the BOUND device left even while another device sat in standby — and stopping
+  takes the standby's channel down too (it monitors the session). It now re-arms while any other
+  joined channel is alive.
+- **Emulator smoke without Authentik:** run a throwaway server from a scratch worktree with
+  `elixir --sname <name> --cookie <c> -S mix phx.server` (own DB copy, `HOME_ASSISTANT=false`, the
+  Qdrant writers disabled), tap Sign in, then `adb shell am start -a android.intent.action.VIEW -d
+  "'orbital://auth?code=<App.Auth.AppCode.mint(uid) via :rpc>'"`. A Phoenix-channel client script
+  can push `"text"` for fully scripted typed turns. The debug APK (~260 MB) doesn't fit the stock
+  AVD's /data — install a release `--target-platform android-arm64` build (~100 MB) instead.
 
 ## Testing patterns
 
@@ -324,6 +372,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `Calendar.account_matches?/2`, `Gemini.tools_block/1`, `Weather.build_*`).
 
 ## Known debt / next
+
+- **Shipped 2026-10-10 (household Jarvis, free-rein session):** Type to Henry (quiet text turns),
+  timers, visual cards, the household intercom, trackers, routines, recipes + cook mode, calendar
+  heads-ups, the ambient orb face, nightly backups. Live-smoked on an emulator against a sandbox
+  server; the on-device checklist is `docs/superpowers/results/2026-10-10-household-jarvis-smoke.md`.
 
 - **Done & live-smoked:** the 3-phase **Ink-2 STT migration** (swap off Deepgram+Silero VAD; eager_end
   reflex head-start; stream brain text to the UI), the **barge-in redesign** (server-side `turn.start`,

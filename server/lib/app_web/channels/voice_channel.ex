@@ -199,9 +199,9 @@ defmodule AppWeb.VoiceChannel do
   def handle_info({:timers_changed, _user_id}, socket), do: {:noreply, push_timers(socket)}
 
   # The idle orb's weather + next event (App.Glance). Built OFF the channel process — it runs
-  # real tools (weather, a multi-account calendar fan-out) — and refreshed on a slow cadence;
+  # real tools (weather, a multi-account calendar fan-out) — and refreshed every 5 minutes;
   # the tool cache makes a refresh that lands inside a TTL free. Off in test (`:glance`).
-  @glance_refresh_ms 15 * 60 * 1000
+  @glance_refresh_ms 5 * 60 * 1000
 
   def handle_info(:refresh_glance, socket) do
     if Application.get_env(:app, :glance, true) do
