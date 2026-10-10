@@ -160,14 +160,20 @@ defmodule App.Adapters.TextModel.Gemini do
                "(every row of it). Don't recite it: give the takeaway in a sentence or two " <>
                "and only call out what matters for their question."
 
+  @cook_step_note "This step is ALSO shown large on their screen, but their hands are busy " <>
+                    "and their eyes on the stove: still read the step aloud, briefly, then stop."
+
   @doc false
   # A result that renders as a card (App.Cards) tells the brain so: the card carries the detail,
   # the words carry the takeaway. Without this the answer re-reads the whole week under a card
   # that already shows it — in a typed turn that's a wall of text, spoken it's thirty seconds.
+  # Cook mode is the exception: the step on screen is a backup for the ears, not a substitute.
   def with_card_note(response, name, args, result) do
-    if App.Cards.from_tool(name, args, result),
-      do: Map.put(response, :display, @card_note),
-      else: response
+    case App.Cards.from_tool(name, args, result) do
+      nil -> response
+      %{type: "cook_step"} -> Map.put(response, :display, @cook_step_note)
+      _card -> Map.put(response, :display, @card_note)
+    end
   end
 
   defp spend_hop(calls, hops, tool_ctx) do

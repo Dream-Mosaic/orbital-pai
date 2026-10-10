@@ -9,8 +9,12 @@ defmodule App.Cards do
 
   v1 types: `weather` (get_weather), `agenda` (get_calendar_events), `list` (read_list),
   `reminders` (list_reminders / create_reminder / create_followup) and `email`
-  (search_email). Everything else — an unknown tool, an error- or note-shaped result, an
-  empty one — is `nil`. A malformed result never raises: a card is decoration and must never
+  (search_email). Then `tracker` (get_tracker_entries: stats, a per-day `series` for the bar
+  strip, top tags, recent entries) and `tracker_logged` (log_tracker_entry — its own small
+  type, not a flag on `tracker`: one entry, no series); `recipe` (get_recipe, save_recipe,
+  edit_recipe) and `cook_step` (get_recipe called with `step` in cook mode: the one step,
+  large, its timers and a glance at the next). Everything else — an unknown tool, an error-
+  or note-shaped result, an empty one — is `nil`. A malformed result never raises: a card is decoration and must never
   cost the turn, so it logs at debug and returns `nil`.
   """
   require Logger
@@ -22,6 +26,14 @@ defmodule App.Cards do
   @email_cap 5
   # A chance of rain below this is noise on a card ("5%"), so it is omitted.
   @precip_floor 20
+  # One bar per day for at most this many days; a phone column fits ~30 thin bars.
+  @series_days 30
+  @recent_cap 3
+  @tags_cap 3
+  @ingredients_cap 12
+  @steps_cap 8
+  # Cook mode's "Next: …" is a glance ahead, not the step.
+  @preview_words 6
 
   @doc """
   The card for one tool result, or nil. `opts`: `:now` (UTC `DateTime`) and `:tz` (IANA zone)
@@ -62,6 +74,32 @@ defmodule App.Cards do
 
   defp build("search_email", args, %{messages: [_ | _] = msgs} = r, ctx),
     do: email_card(args, msgs, r, ctx)
+
+  defp build("get_tracker_entries", _args, %{tracker: _, stats: %{}, entries: es} = r, ctx)
+       when is_list(es),
+       do: tracker_card(r, es, ctx)
+
+  defp build("log_tracker_entry", _args, %{logged: true, entry: %{} = e} = r, ctx),
+    do: tracker_logged(r, e, ctx)
+
+  # Cook mode (the brain passed `step`): that one step, large, for the kitchen.
+  defp build("get_recipe", _args, %{current_step: n, steps: [_ | _] = steps} = r, _ctx)
+       when is_integer(n),
+       do: cook_step(r, steps, n)
+
+  defp build("get_recipe", _args, %{title: _, ingredients: is, steps: ss} = r, _ctx)
+       when is_list(is) and is_list(ss),
+       do: recipe_card(r, "Recipe")
+
+  defp build("save_recipe", _args, %{saved: true, recipe: %{} = recipe} = r, _ctx),
+    do:
+      recipe_card(
+        recipe,
+        if(r[:replaced] == true, do: "Recipe replaced", else: "Saved to recipes")
+      )
+
+  defp build("edit_recipe", _args, %{recipe: %{} = recipe}, _ctx),
+    do: recipe_card(recipe, "Recipe updated")
 
   defp build(_name, _args, _result, _ctx), do: nil
 
@@ -471,6 +509,317 @@ defmodule App.Cards do
     end
   end
 
+  # ---- trackers ----
+
+  # A tracker range as a glance: headline stats, one bar per local day for (at most) the last
+  # 30 days of the range, the commonest tags and the newest few entries. The stats cover the
+  # whole range (they're the tool's), the bars only the window they fit.
+  defp tracker_card(r, entries, ctx) do
+    since = Date.from_iso8601!(r.since)
+    until = Date.from_iso8601!(r.until)
+    unit = unit_suffix(r[:unit])
+
+    compact(%{
+      type: "tracker",
+      title: capitalize(r.tracker),
+      range: tracker_range(since, until, ctx),
+      stats: tracker_stats(r.stats, unit),
+      series: series(entries, since, until),
+      top_tags: tag_tally(r.stats[:top_tags]),
+      recent:
+        entries |> Enum.take(@recent_cap) |> Enum.map(&recent_row(&1, unit, ctx)) |> nonempty()
+    })
+  end
+
+  defp tracker_range(since, until, ctx) do
+    days = Date.diff(until, since)
+
+    cond do
+      until == today(ctx) and days in [7, 14, 30, 60, 90] -> "Last #{days} days"
+      days == 0 -> day_name(since, ctx)
+      true -> range_label(since, until)
+    end
+  end
+
+  # Entries always; a valued tracker adds its average and range, a habit (no values) its
+  # distinct days — when that differs from the entry count — and its best streak.
+  defp tracker_stats(stats, unit) do
+    rest =
+      case stats[:value] do
+        %{min: min, max: max, avg: avg} ->
+          [
+            %{label: "Avg", value: with_unit(number(avg), unit)},
+            %{label: "Range", value: with_unit(span(min, max), unit)}
+          ]
+
+        _ ->
+          days = stats[:days_with_entries]
+          streak = get_in(stats, [:longest_streak, :days])
+
+          [
+            if(is_integer(days) and days > 0 and days != stats.count,
+              do: %{label: "Days", value: number(days)}
+            ),
+            if(is_integer(streak) and streak >= 2,
+              do: %{label: "Best streak", value: "#{streak} days"}
+            )
+          ]
+      end
+
+    [%{label: "Entries", value: number(stats.count)} | Enum.reject(rest, &is_nil/1)]
+  end
+
+  defp span(same, same), do: number(same)
+  defp span(min, max), do: "#{number(min)}–#{number(max)}"
+
+  # One point per local day, oldest first: `count` entries that day (0 = none) and `value`, the
+  # day's worst (max) when any entry carried one. The highest day — the latest on a tie — is
+  # marked with its label, for the bar strip to call out.
+  defp series(entries, since, until) do
+    from = Enum.max([since, Date.add(until, 1 - @series_days)], Date)
+    by_day = Enum.group_by(entries, & &1.local_date)
+
+    if Date.compare(from, until) == :gt do
+      []
+    else
+      Date.range(from, until)
+      |> Enum.map(fn date ->
+        day = Map.get(by_day, Date.to_iso8601(date), [])
+        values = for %{value: v} <- day, is_number(v), do: v
+
+        compact(%{
+          label: Calendar.strftime(date, "%b %-d"),
+          count: length(day),
+          value: if(values != [], do: Enum.max(values))
+        })
+      end)
+      |> mark_peak()
+    end
+  end
+
+  defp mark_peak(points) do
+    valued = for {%{value: _} = p, i} <- Enum.with_index(points), do: {p, i}
+
+    case Enum.reverse(valued) do
+      [] ->
+        points
+
+      latest_first ->
+        {peak, i} = Enum.max_by(latest_first, fn {p, _i} -> p.value end)
+        List.replace_at(points, i, Map.put(peak, :peak, number(peak.value)))
+    end
+  end
+
+  defp tag_tally([_ | _] = tags) do
+    tags
+    |> Enum.take(@tags_cap)
+    |> Enum.map(fn %{tag: tag, count: n} -> if n > 1, do: "#{tag} ×#{n}", else: tag end)
+  end
+
+  defp tag_tally(_), do: nil
+
+  defp recent_row(e, unit, ctx) do
+    compact(%{
+      when: logged_when(e, ctx),
+      value: if(is_number(e[:value]), do: with_unit(number(e.value), unit)),
+      note: blank_to_nil(e[:note]) || tags_line(e[:tags])
+    })
+  end
+
+  defp tags_line([_ | _] = tags), do: Enum.join(tags, ", ")
+  defp tags_line(_), do: nil
+
+  # The tool's entry view carries its local date and clock already; only the day is relative.
+  defp logged_when(e, ctx) do
+    date = Date.from_iso8601!(e.local_date)
+
+    day =
+      case Date.diff(today(ctx), date) do
+        0 -> "Today"
+        1 -> "Yesterday"
+        n when n in 2..6 -> Calendar.strftime(date, "%a")
+        _ -> Calendar.strftime(date, "%b %-d")
+      end
+
+    "#{day}, #{e.local_time}"
+  end
+
+  # log_tracker_entry is its own small type rather than a `tracker` flag: the confirmation is a
+  # different shape (one entry, no series), and it shows what was SAVED so a mishearing shows.
+  defp tracker_logged(r, e, ctx) do
+    unit = unit_suffix(r[:unit])
+
+    compact(%{
+      type: "tracker_logged",
+      label: if(r[:created] == true, do: "New tracker", else: "Logged"),
+      title: capitalize(r.tracker),
+      value: if(is_number(e[:value]), do: with_unit(number(e.value), unit)),
+      note: blank_to_nil(e[:note]),
+      tags: nonempty(e[:tags] || []),
+      when: logged_when(e, ctx),
+      summary: if(is_integer(r[:total_entries]), do: "#{ordinal(r.total_entries)} entry")
+    })
+  end
+
+  # A unit that reads as a suffix ("lb", "hours", "steps") rides on the numbers; a scale
+  # description ("pain 1-10") doesn't — the values already say it.
+  defp unit_suffix(unit) when is_binary(unit) do
+    unit = String.trim(unit)
+    if unit != "" and String.length(unit) <= 8 and not (unit =~ ~r/\d/), do: unit
+  end
+
+  defp unit_suffix(_), do: nil
+
+  defp with_unit(s, nil), do: s
+  defp with_unit(s, unit), do: "#{s} #{unit}"
+
+  defp ordinal(n) do
+    suffix =
+      cond do
+        rem(n, 100) in 11..13 -> "th"
+        rem(n, 10) == 1 -> "st"
+        rem(n, 10) == 2 -> "nd"
+        rem(n, 10) == 3 -> "rd"
+        true -> "th"
+      end
+
+    "#{n}#{suffix}"
+  end
+
+  # Whole numbers plain and grouped ("10,000"), others to one decimal ("5.3").
+  defp number(n) when is_integer(n) and n < 0, do: "-" <> number(-n)
+
+  defp number(n) when is_integer(n) do
+    n
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+    |> String.reverse()
+  end
+
+  defp number(n) when is_float(n) do
+    r = Float.round(n, 1)
+    if r == trunc(r), do: number(trunc(r)), else: :erlang.float_to_binary(r, decimals: 1)
+  end
+
+  # ---- recipes ----
+
+  defp recipe_card(r, label) do
+    ingredients = r.ingredients
+    steps = r.steps
+
+    compact(%{
+      type: "recipe",
+      label: label,
+      title: r.title,
+      scope: if(r[:personal] == true, do: "Yours", else: "Household"),
+      meta: recipe_meta(r),
+      ingredients_label: count_label(length(ingredients), "ingredient"),
+      ingredients:
+        ingredients
+        |> Enum.take(@ingredients_cap)
+        |> Enum.map(&split_ingredient/1)
+        |> nonempty(),
+      more_ingredients: more(length(ingredients) - @ingredients_cap),
+      steps_label: count_label(length(steps), "step"),
+      steps:
+        steps
+        |> Enum.take(@steps_cap)
+        |> Enum.map(&%{number: to_string(&1.number), text: &1.text})
+        |> nonempty(),
+      more_steps: more(length(steps) - @steps_cap),
+      notes: blank_to_nil(r[:notes])
+    })
+  end
+
+  defp count_label(0, _noun), do: nil
+  defp count_label(1, noun), do: "1 #{noun}"
+  defp count_label(n, noun), do: "#{n} #{noun}s"
+
+  # "Serves 8 · from Grandma"
+  defp recipe_meta(r) do
+    [servings_label(blank_to_nil(r[:servings])), source_label(blank_to_nil(r[:source]))]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  defp servings_label(nil), do: nil
+
+  defp servings_label(s) do
+    if s =~ ~r/^\d+(\s*(-|–|to)\s*\d+)?$/u, do: "Serves #{s}", else: capitalize(s)
+  end
+
+  defp source_label(nil), do: nil
+
+  defp source_label(s) do
+    case URI.parse(s) do
+      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) ->
+        "from " <> String.replace_prefix(host, "www.", "")
+
+      _ ->
+        "from " <> Regex.replace(~r/^from\s+/i, s, "")
+    end
+  end
+
+  @fraction "[½⅓⅔¼¾⅛⅜⅝⅞]"
+  @amount "(?:\\d+(?:[.,]\\d+)?(?:\\s+\\d+/\\d+|/\\d+|\\s*#{@fraction})?|#{@fraction})"
+  @units ~w(cups cup c tablespoons tablespoon tbsps tbsp tbs tbl teaspoons teaspoon tsps tsp
+            pounds pound lbs lb ounces ounce oz grams gram g kilograms kilogram kg milliliters
+            milliliter ml liters liter litres litre l quarts quart qt pints pint pt gallons
+            gallon gal cloves clove cans can jars jar packages package pkgs pkg sticks stick
+            slices slice pinches pinch dashes dash bunches bunch sprigs sprig heads head stalks
+            stalk handfuls handful boxes box bags bag bottles bottle containers container
+            envelopes envelope pieces piece inches inch)
+  @ingredient_re Regex.compile!(
+                   "^\\s*(#{@amount}(?:\\s*(?:-|–|to)\\s*#{@amount})?(?:\\s*\\([^)]*\\))?" <>
+                     "(?:\\s*(?:#{Enum.join(@units, "|")})\\.?(?=[\\s,]|$))?)\\s*(?:of\\s+)?(.*)$",
+                   "iu"
+                 )
+
+  @doc """
+  An ingredient line split into its quantity and the rest, for a cookbook's two columns:
+  "1 (24 oz) jar marinara" → `%{qty: "1 (24 oz) jar", item: "marinara"}`; a line with no
+  leading amount ("Fresh basil") is all item.
+  """
+  def split_ingredient(line) when is_binary(line) do
+    case Regex.run(@ingredient_re, line) do
+      [_, qty, item] when item != "" -> %{qty: String.trim(qty), item: String.trim(item)}
+      _ -> %{item: String.trim(line)}
+    end
+  end
+
+  defp cook_step(r, steps, n) do
+    step = Enum.find(steps, &(&1.number == n)) || Enum.at(steps, n - 1)
+    next = Enum.find(steps, &(&1.number == n + 1))
+
+    compact(%{
+      type: "cook_step",
+      title: r.title,
+      progress: "Step #{n} of #{length(steps)}",
+      step: n,
+      step_count: length(steps),
+      text: step.text,
+      timers: nonempty(step[:durations] || []),
+      next_label: if(next, do: "Next", else: "Last step"),
+      next: next && preview(next.text)
+    })
+  end
+
+  # The next step's opening words — enough to glance ahead without reading it.
+  defp preview(text) do
+    words = String.split(text)
+
+    if length(words) <= @preview_words do
+      text
+    else
+      opening = words |> Enum.take(@preview_words) |> Enum.join(" ")
+      Regex.replace(~r/[,;:.—–-]+$/u, opening, "") <> "…"
+    end
+  end
+
   @months ~w(jan feb mar apr may jun jul aug sep oct nov dec)
   @zones %{
     "UT" => 0,
@@ -590,4 +939,8 @@ defmodule App.Cards do
 
   # nil fields are dropped rather than sent as null: the client renders what is present.
   defp compact(map), do: map |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+  # An empty list is absent too (compact then drops it), never an empty section.
+  defp nonempty([]), do: nil
+  defp nonempty(list) when is_list(list), do: list
 end

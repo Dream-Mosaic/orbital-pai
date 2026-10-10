@@ -516,6 +516,413 @@ defmodule App.CardsTest do
     end
   end
 
+  describe "tracker" do
+    alias App.Trackers.Entry
+    @tz "America/Chicago"
+
+    defp entry(at, value, tags \\ [], note \\ nil),
+      do: %Entry{recorded_at: at, value: value, tags: tags, note: note}
+
+    # Newest first, as App.Trackers.entries/4 returns them.
+    defp headaches do
+      [
+        entry(~U[2026-10-09 20:45:00Z], 7.0, ["skipped lunch"], "behind the eyes"),
+        entry(~U[2026-10-07 14:10:00Z], 5.0, ["poor sleep"]),
+        entry(~U[2026-10-05 23:00:00Z], 6.0, ["skipped lunch", "coffee"]),
+        entry(~U[2026-10-05 13:00:00Z], 4.0),
+        entry(~U[2026-09-28 22:00:00Z], 6.0, ["poor sleep"]),
+        entry(~U[2026-09-21 18:30:00Z], 5.0, ["screen time"]),
+        entry(~U[2026-09-12 16:00:00Z], 4.0)
+      ]
+    end
+
+    # get_tracker_entries' result, assembled from the tool's own pure pieces (stats + entry
+    # view) exactly as its range_result does.
+    defp range(label, entries, since, until, unit \\ "pain 1-10") do
+      %{
+        tracker: label,
+        unit: unit,
+        timezone: @tz,
+        since: since,
+        until: until,
+        total: length(entries),
+        returned: length(entries),
+        truncated: false,
+        stats: App.Trackers.stats(entries, @tz),
+        entries: Enum.map(entries, &App.Tools.Trackers.entry_view(&1, @tz))
+      }
+    end
+
+    defp headache_card(since \\ "2026-09-10", until \\ "2026-10-10"),
+      do: card("get_tracker_entries", %{}, range("headache", headaches(), since, until))
+
+    test "the header and headline stats, display-ready" do
+      c = headache_card()
+
+      assert c.type == "tracker"
+      assert c.title == "Headache"
+      assert c.range == "Last 30 days"
+
+      assert c.stats == [
+               %{label: "Entries", value: "7"},
+               %{label: "Avg", value: "5.3"},
+               %{label: "Range", value: "4–7"}
+             ]
+
+      assert c.top_tags == ["poor sleep ×2", "skipped lunch ×2", "coffee"]
+    end
+
+    test "the series is the last 30 local days: max per day, gaps empty, the peak marked" do
+      c = headache_card()
+
+      assert length(c.series) == 30
+      assert hd(c.series) == %{label: "Sep 11", count: 0}
+      assert List.last(c.series) == %{label: "Oct 10", count: 0}
+      assert Enum.at(c.series, 1) == %{label: "Sep 12", value: 4, count: 1}
+      # two entries on Mon Oct 5 (4 and 6): the bar is the worse of them
+      assert %{label: "Oct 5", value: 6, count: 2} = Enum.find(c.series, &(&1.label == "Oct 5"))
+
+      assert [%{label: "Oct 9", value: 7, peak: "7"}] = Enum.filter(c.series, & &1[:peak])
+    end
+
+    test "recent entries say when, the value, and a note (or the tags in its place)" do
+      assert headache_card().recent == [
+               %{when: "Yesterday, 3:45 PM", value: "7", note: "behind the eyes"},
+               %{when: "Wed, 9:10 AM", value: "5", note: "poor sleep"},
+               %{when: "Mon, 6:00 PM", value: "6", note: "skipped lunch, coffee"}
+             ]
+    end
+
+    test "a range that isn't the default reads as dates, and the series stays inside it" do
+      c = headache_card("2026-10-01", "2026-10-10")
+      assert c.range == "Oct 1 – 10"
+      assert length(c.series) == 10
+      assert hd(c.series).label == "Oct 1"
+
+      september =
+        card(
+          "get_tracker_entries",
+          %{},
+          range("headache", Enum.drop(headaches(), 4), "2026-09-01", "2026-09-30")
+        )
+
+      assert september.range == "Sep 1 – 30"
+      assert List.last(september.series).label == "Sep 30"
+      assert september.stats |> hd() == %{label: "Entries", value: "3"}
+    end
+
+    test "a short unit rides on the values; a ties peak is the latest; one value is no range" do
+      weights = [
+        entry(~U[2026-10-10 13:00:00Z], 182.4),
+        entry(~U[2026-10-09 13:00:00Z], 183.0),
+        entry(~U[2026-10-08 13:00:00Z], 183.0)
+      ]
+
+      c =
+        card(
+          "get_tracker_entries",
+          %{},
+          range("weight", weights, "2026-09-10", "2026-10-10", "lb")
+        )
+
+      assert c.stats == [
+               %{label: "Entries", value: "3"},
+               %{label: "Avg", value: "182.8 lb"},
+               %{label: "Range", value: "182.4–183 lb"}
+             ]
+
+      assert [%{label: "Oct 9", peak: "183"}] = Enum.filter(c.series, & &1[:peak])
+
+      single =
+        card(
+          "get_tracker_entries",
+          %{},
+          range("weight", [hd(weights)], "2026-10-01", "2026-10-10")
+        )
+
+      assert %{label: "Range", value: "182.4"} in single.stats
+    end
+
+    test "a habit with no values counts days and streaks instead" do
+      days =
+        for d <- [3, 4, 5, 6, 8, 9],
+            do: entry(DateTime.new!(Date.new!(2026, 10, d), ~T[17:00:00]), nil)
+
+      c =
+        card(
+          "get_tracker_entries",
+          %{},
+          range("no soda", Enum.reverse(days), "2026-09-10", "2026-10-10", nil)
+        )
+
+      assert c.title == "No soda"
+
+      assert c.stats == [
+               %{label: "Entries", value: "6"},
+               %{label: "Best streak", value: "4 days"}
+             ]
+
+      assert %{label: "Oct 4", count: 1} = Enum.find(c.series, &(&1.label == "Oct 4"))
+      refute Enum.any?(c.series, & &1[:peak])
+      assert hd(c.recent) == %{when: "Yesterday, 12:00 PM"}
+      refute Map.has_key?(c, :top_tags)
+    end
+
+    test "an empty range is still a card (an answer: none); a missing tracker is not" do
+      c = card("get_tracker_entries", %{}, range("headache", [], "2026-09-10", "2026-10-10"))
+      assert c.stats == [%{label: "Entries", value: "0"}]
+      assert Enum.all?(c.series, &(&1.count == 0))
+      refute Map.has_key?(c, :recent)
+
+      assert card("get_tracker_entries", %{}, %{
+               note: "no tracker called \"migraines\"",
+               trackers: ["headache"]
+             }) == nil
+    end
+
+    test "log_tracker_entry: what was saved, so a mishearing shows" do
+      [latest | _] = headaches()
+
+      result = %{
+        logged: true,
+        tracker: "headache",
+        created: false,
+        unit: "pain 1-10",
+        entry: App.Tools.Trackers.entry_view(latest, @tz),
+        total_entries: 12
+      }
+
+      assert card("log_tracker_entry", %{}, result) == %{
+               type: "tracker_logged",
+               label: "Logged",
+               title: "Headache",
+               value: "7",
+               note: "behind the eyes",
+               tags: ["skipped lunch"],
+               when: "Yesterday, 3:45 PM",
+               summary: "12th entry"
+             }
+
+      first = %{result | created: true, total_entries: 1, entry: %{result.entry | value: nil}}
+      c = card("log_tracker_entry", %{}, first)
+      assert c.label == "New tracker"
+      assert c.summary == "1st entry"
+      refute Map.has_key?(c, :value)
+
+      for {n, ord} <- [
+            {2, "2nd"},
+            {3, "3rd"},
+            {11, "11th"},
+            {12, "12th"},
+            {13, "13th"},
+            {22, "22nd"},
+            {101, "101st"},
+            {111, "111th"}
+          ] do
+        assert card("log_tracker_entry", %{}, %{result | total_entries: n}).summary ==
+                 "#{ord} entry"
+      end
+    end
+
+    test "other tracker results are not cards" do
+      assert card("log_tracker_entry", %{}, %{note: "no user session — trackers unavailable"}) ==
+               nil
+
+      assert card("list_trackers", %{}, %{trackers: []}) == nil
+      assert card("undo_tracker_entry", %{}, %{tracker: "headache", remaining: 3}) == nil
+    end
+  end
+
+  describe "recipe" do
+    defp lasagna(extra \\ %{}) do
+      App.Tools.Recipes.recipe_view(
+        struct(
+          App.Recipes.Recipe,
+          Map.merge(
+            %{
+              title: "Grandma's Lasagna",
+              household: true,
+              servings: "8",
+              source: "Grandma",
+              notes: "Freezes well. Use fresh basil if you have it.",
+              ingredients: [
+                "1 lb ground beef",
+                "12 lasagna noodles",
+                "2 cups ricotta cheese",
+                "1 (24 oz) jar marinara",
+                "½ tsp salt",
+                "1 1/2 cups shredded mozzarella",
+                "2 large eggs",
+                "3 cloves garlic, minced",
+                "1 cup of grated parmesan",
+                "Fresh basil"
+              ],
+              steps: [
+                "Preheat the oven to 375°F.",
+                "Brown the beef with the garlic, about 8 minutes.",
+                "Stir the eggs into the ricotta.",
+                "Layer noodles, sauce, ricotta and mozzarella; repeat three times.",
+                "Bake 25 to 30 minutes, then rest 10 min."
+              ]
+            },
+            extra
+          )
+        )
+      )
+    end
+
+    test "get_recipe: the overview, quantities split from the ingredient" do
+      c = card("get_recipe", %{"name" => "lasagna"}, lasagna())
+
+      assert c.type == "recipe"
+      assert c.label == "Recipe"
+      assert c.title == "Grandma's Lasagna"
+      assert c.scope == "Household"
+      assert c.meta == "Serves 8 · from Grandma"
+      assert c.notes == "Freezes well. Use fresh basil if you have it."
+      assert c.ingredients_label == "10 ingredients"
+      assert c.steps_label == "5 steps"
+
+      assert c.ingredients == [
+               %{qty: "1 lb", item: "ground beef"},
+               %{qty: "12", item: "lasagna noodles"},
+               %{qty: "2 cups", item: "ricotta cheese"},
+               %{qty: "1 (24 oz) jar", item: "marinara"},
+               %{qty: "½ tsp", item: "salt"},
+               %{qty: "1 1/2 cups", item: "shredded mozzarella"},
+               %{qty: "2", item: "large eggs"},
+               %{qty: "3 cloves", item: "garlic, minced"},
+               %{qty: "1 cup", item: "grated parmesan"},
+               %{item: "Fresh basil"}
+             ]
+
+      assert hd(c.steps) == %{number: "1", text: "Preheat the oven to 375°F."}
+      assert List.last(c.steps).number == "5"
+      refute Map.has_key?(c, :more_ingredients)
+      refute Map.has_key?(c, :more_steps)
+    end
+
+    test "split_ingredient: amounts, ranges, unicode fractions; no amount is all item" do
+      assert Cards.split_ingredient("8oz cream cheese") == %{qty: "8oz", item: "cream cheese"}
+
+      assert Cards.split_ingredient("2-3 Tbsp. olive oil") == %{
+               qty: "2-3 Tbsp.",
+               item: "olive oil"
+             }
+
+      assert Cards.split_ingredient("1 ½ cups milk") == %{qty: "1 ½ cups", item: "milk"}
+      assert Cards.split_ingredient("2 c. flour") == %{qty: "2 c.", item: "flour"}
+      assert Cards.split_ingredient("4 garlic cloves") == %{qty: "4", item: "garlic cloves"}
+
+      assert Cards.split_ingredient("1 large onion, diced") == %{
+               qty: "1",
+               item: "large onion, diced"
+             }
+
+      # a unit must be a whole word: "2 large" is not 2 litres of "arge"
+      assert Cards.split_ingredient("2 lemons") == %{qty: "2", item: "lemons"}
+
+      assert Cards.split_ingredient("Salt and pepper to taste") == %{
+               item: "Salt and pepper to taste"
+             }
+
+      # an amount with nothing after it isn't split into an empty item
+      assert Cards.split_ingredient("3 cups") == %{item: "3 cups"}
+    end
+
+    test "a long recipe caps both lists with +N more" do
+      c =
+        card(
+          "get_recipe",
+          %{},
+          lasagna(%{
+            ingredients: for(i <- 1..15, do: "#{i} cups thing #{i}"),
+            steps: for(i <- 1..11, do: "Do thing #{i}.")
+          })
+        )
+
+      assert length(c.ingredients) == 12
+      assert c.more_ingredients == "+3 more"
+      assert length(c.steps) == 8
+      assert c.more_steps == "+3 more"
+      assert c.ingredients_label == "15 ingredients"
+    end
+
+    test "meta: servings phrased sensibly, a URL source shown as its site, a personal scope" do
+      meta = fn extra -> card("get_recipe", %{}, lasagna(extra)) end
+
+      assert meta.(%{servings: "6 to 8"}).meta == "Serves 6 to 8 · from Grandma"
+      assert meta.(%{servings: "24 cookies"}).meta == "24 cookies · from Grandma"
+
+      assert meta.(%{servings: nil, source: "https://www.seriouseats.com/the-best-lasagna"}).meta ==
+               "from seriouseats.com"
+
+      c = meta.(%{servings: nil, source: nil, notes: nil, household: false})
+      refute Map.has_key?(c, :meta)
+      refute Map.has_key?(c, :notes)
+      assert c.scope == "Yours"
+    end
+
+    test "save_recipe and edit_recipe show the recipe they wrote" do
+      saved = %{
+        saved: true,
+        replaced: false,
+        title: "Grandma's Lasagna",
+        personal: false,
+        ingredient_count: 10,
+        step_count: 5,
+        recipe: lasagna()
+      }
+
+      assert %{type: "recipe", label: "Saved to recipes"} = card("save_recipe", %{}, saved)
+
+      assert %{label: "Recipe replaced"} = card("save_recipe", %{}, %{saved | replaced: true})
+
+      edited = %{edited: true, added: ["Fresh basil"], removed: [], recipe: lasagna()}
+      assert %{type: "recipe", label: "Recipe updated"} = card("edit_recipe", %{}, edited)
+
+      # not saved (it already exists — the brain asks first) is no card
+      assert card("save_recipe", %{}, %{saved: false, exists: true, title: "X", note: "…"}) ==
+               nil
+
+      assert card("get_recipe", %{}, %{note: "no recipe called \"flan\"", recipes: []}) == nil
+    end
+  end
+
+  describe "cook_step" do
+    defp cook(step), do: lasagna() |> Map.put(:current_step, step)
+
+    test "get_recipe with a current step is that one step, large, with its timers" do
+      c = card("get_recipe", %{"name" => "lasagna", "step" => 4}, cook(4))
+
+      assert c == %{
+               type: "cook_step",
+               title: "Grandma's Lasagna",
+               progress: "Step 4 of 5",
+               step: 4,
+               step_count: 5,
+               text: "Layer noodles, sauce, ricotta and mozzarella; repeat three times.",
+               next_label: "Next",
+               next: "Bake 25 to 30 minutes, then…"
+             }
+
+      assert card("get_recipe", %{}, cook(2)).timers == ["8 minutes"]
+    end
+
+    test "the last step has no next, and says so" do
+      c = card("get_recipe", %{}, cook(5))
+
+      assert c.progress == "Step 5 of 5"
+      assert c.timers == ["25 to 30 minutes", "10 min"]
+      assert c.next_label == "Last step"
+      refute Map.has_key?(c, :next)
+    end
+
+    test "a short next step is shown whole" do
+      assert card("get_recipe", %{}, cook(2)).next == "Stir the eggs into the ricotta."
+    end
+  end
+
   describe "robustness" do
     test "unknown tools and non-map results are not cards" do
       assert card("home_control", %{}, %{ok: true}) == nil
@@ -529,6 +936,12 @@ defmodule App.CardsTest do
       assert card("get_calendar_events", @today, %{events: [%{start: 12, summary: nil}]}) == nil
       assert card("list_reminders", %{}, %{reminders: [%{body: "x", due_at: "soon"}]}) == nil
       assert card("read_list", %{}, %{list: "X", items: [:not_a_map]}) == nil
+
+      assert card("get_tracker_entries", %{}, %{tracker: "x", stats: %{count: 2}, entries: :no}) ==
+               nil
+
+      assert card("get_recipe", %{}, %{title: "X", ingredients: "flour", steps: nil}) == nil
+      assert card("get_recipe", %{}, %{title: "X", steps: [], current_step: 1}) == nil
     end
   end
 end

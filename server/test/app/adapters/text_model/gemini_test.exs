@@ -560,6 +560,26 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.with_card_note(plain, "set_timer", %{}, %{ok: true}) == plain
   end
 
+  test "a cook-mode step on screen is still read aloud: the cook's hands are busy" do
+    recipe =
+      App.Tools.Recipes.recipe_view(%App.Recipes.Recipe{
+        title: "Lasagna",
+        household: true,
+        ingredients: ["noodles"],
+        steps: ["Boil the noodles.", "Bake 25 minutes."]
+      })
+
+    step = Map.put(recipe, :current_step, 2)
+    noted = Gemini.with_card_note(%{result: step}, "get_recipe", %{"step" => 2}, step)
+    assert noted.display =~ "screen"
+    assert noted.display =~ "still read the step aloud"
+    refute noted.display =~ "Don't recite"
+
+    # the plain recipe lookup keeps the ordinary note
+    overview = Gemini.with_card_note(%{result: recipe}, "get_recipe", %{}, recipe)
+    assert overview.display =~ "Don't recite"
+  end
+
   test "a routine with an extra dependent lookup still finishes with tools (routine hop refund)" do
     # run → index+calendar → find → act → answer: one hop past the plain cap, absorbed by the
     # refund the first run_routine earns.
