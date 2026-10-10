@@ -144,9 +144,26 @@ defmodule AppWeb.CollectionFormatTest do
       assert row.axis_to == "Today"
 
       oct8 = Enum.at(row.series, 27)
-      assert oct8 == %{label: "Oct 8", count: 2, value: 8, peak: "8"}
-      assert List.last(row.series) == %{label: "Oct 10", count: 1, value: 4, peak: nil}
-      assert Enum.at(row.series, 28) == %{label: "Oct 9", count: 0, value: nil, peak: nil}
+
+      assert oct8 == %{
+               label: "Oct 8",
+               count: 2,
+               value: 8,
+               peak: "8",
+               tip: "Thu, Oct 8 · up to 8 · 2 entries"
+             }
+
+      assert List.last(row.series) ==
+               %{label: "Oct 10", count: 1, value: 4, peak: nil, tip: "Today · 4"}
+
+      assert Enum.at(row.series, 28) ==
+               %{
+                 label: "Oct 9",
+                 count: 0,
+                 value: nil,
+                 peak: nil,
+                 tip: "Yesterday · Nothing logged"
+               }
 
       assert row.stats == [
                %{label: "Average", value: "5"},
@@ -175,7 +192,16 @@ defmodule AppWeb.CollectionFormatTest do
                %{label: "Best streak", value: "3 days"}
              ]
 
-      assert Enum.at(row.series, 28) == %{label: "Oct 9", count: 2, value: nil, peak: nil}
+      assert Enum.at(row.series, 28) ==
+               %{label: "Oct 9", count: 2, value: nil, peak: nil, tip: "Yesterday · 2 entries"}
+
+      assert Enum.at(row.series, 27).tip == "Thu, Oct 8 · 1 entry"
+    end
+
+    test "a single valued entry's tip carries a short unit" do
+      es = [entry(~N[2026-10-07 08:00:00], %{value: 182.4})]
+      row = F.tracker(tracker_row(es, unit: "lb"), es, @now, @tz)
+      assert Enum.at(row.series, 26).tip == "Wed, Oct 7 · 182.4 lb"
     end
 
     test "top tags carry a tally only when it is more than one" do

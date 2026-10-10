@@ -125,7 +125,7 @@ defmodule AppWeb.CollectionFormat do
       count: count(total, "entry", "entries"),
       last: last_line(last, unit, today, tz),
       range: "Last #{@window_days} days",
-      series: series(window, from, today, tz),
+      series: series(window, from, today, tz, unit),
       axis_from: Calendar.strftime(from, "%b %-d"),
       axis_to: "Today",
       stats: if(window == [], do: [], else: stats_rows(stats, unit)),
@@ -154,23 +154,47 @@ defmodule AppWeb.CollectionFormat do
 
   # One point per local day, oldest first: `count` entries that day and `value`, the day's
   # worst (max) when any entry carried one. The highest day (the latest on a tie) carries its
-  # value as `peak` for the chart to call out.
-  defp series(window, from, today, tz) do
+  # value as `peak` for the chart to call out. `tip` is what the chart reads out when that day
+  # is touched.
+  defp series(window, from, today, tz, unit) do
     by_day = Enum.group_by(window, &Trackers.local_date(&1.recorded_at, tz))
 
     Date.range(from, today)
     |> Enum.map(fn date ->
       day = Map.get(by_day, date, [])
       values = for %{value: v} <- day, is_number(v), do: v
+      worst = if values != [], do: Trackers.display_number(Enum.max(values))
 
       %{
         label: Calendar.strftime(date, "%b %-d"),
         count: length(day),
-        value: if(values != [], do: Trackers.display_number(Enum.max(values))),
-        peak: nil
+        value: worst,
+        peak: nil,
+        tip: tip(date, today, length(day), worst, unit)
       }
     end)
     |> mark_peak()
+  end
+
+  # "Sat, Oct 10 · 6" / "Yesterday · up to 8 · 2 entries" / "Today · 1 entry" / "… · Nothing logged"
+  defp tip(date, today, n, worst, unit) do
+    day =
+      case Date.diff(today, date) do
+        0 -> "Today"
+        1 -> "Yesterday"
+        _ -> Calendar.strftime(date, "%a, %b %-d")
+      end
+
+    what =
+      case {n, worst} do
+        {0, _} -> "Nothing logged"
+        {1, nil} -> "1 entry"
+        {n, nil} -> "#{n} entries"
+        {1, v} -> value(v, unit)
+        {n, v} -> "up to #{value(v, unit)} · #{n} entries"
+      end
+
+    "#{day} · #{what}"
   end
 
   defp mark_peak(points) do
