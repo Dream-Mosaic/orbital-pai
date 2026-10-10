@@ -1,5 +1,6 @@
 defmodule App.ListsTest do
   use App.DataCase, async: false
+  import Ecto.Query
   alias App.Lists
   alias App.Lists.{List, Item}
   alias App.Users
@@ -65,6 +66,30 @@ defmodule App.ListsTest do
       assert list.name == "Plants"
       assert list.user_id == d
       assert list.household == false
+    end
+
+    test "duplicate same-name books (left by the old parallel-add race) are merged into the oldest",
+         %{d: d} do
+      lists =
+        for _ <- 1..3 do
+          {:ok, l} =
+            %List{}
+            |> List.changeset(%{user_id: d, name: "groceries", household: true})
+            |> Repo.insert()
+
+          l
+        end
+
+      for {l, item} <- Enum.zip(lists, ~w(milk eggs bread)),
+          do: {:ok, _} = Lists.add_item(l, item)
+
+      keeper = Lists.find_or_create_list(%{user_id: d, household: true}, "Groceries")
+      assert keeper.id == hd(lists).id
+
+      assert keeper |> Lists.with_items() |> Map.get(:items) |> Enum.map(& &1.text) |> Enum.sort() ==
+               ~w(bread eggs milk)
+
+      assert Repo.aggregate(from(l in List, where: l.name == "groceries"), :count) == 1
     end
 
     test "finds an existing list case-insensitively instead of creating a duplicate", %{d: d} do

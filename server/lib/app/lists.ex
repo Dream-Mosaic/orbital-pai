@@ -19,27 +19,47 @@ defmodule App.Lists do
   def find_or_create_list(%{user_id: uid, household: household}, name) do
     down = String.downcase(name)
 
-    # Scope the lookup to the RESOLVED owner: a household owner → any household list of that name
-    # (shared); a personal owner ("my X") → that user's OWN list — so "add to my groceries" can't
-    # get hijacked by an existing household "Groceries".
-    match =
-      List
-      |> owner_scope(uid, household)
-      |> Repo.all()
-      |> Enum.find(&(String.downcase(&1.name) == down))
+    # IMMEDIATE: find-then-create must be one writer at a time. The brain runs parallel tool
+    # calls ("add milk", "add eggs" in one round), and each used to find nothing and create its
+    # own "groceries" — four duplicate books, the panel showing only one of them.
+    {:ok, list} =
+      Repo.transaction(
+        fn ->
+          # Scope the lookup to the RESOLVED owner: a household owner → any household list of that
+          # name (shared); a personal owner ("my X") → that user's OWN list — so "add to my
+          # groceries" can't get hijacked by an existing household "Groceries".
+          matches =
+            List
+            |> owner_scope(uid, household)
+            |> Repo.all()
+            |> Enum.filter(&(String.downcase(&1.name) == down))
+            |> Enum.sort_by(& &1.id)
 
-    case match do
-      nil ->
-        {:ok, list} =
-          %List{}
-          |> List.changeset(%{user_id: uid, household: household, name: name})
-          |> Repo.insert()
+          case matches do
+            [] ->
+              %List{}
+              |> List.changeset(%{user_id: uid, household: household, name: name})
+              |> Repo.insert!()
 
-        list
+            [keeper | dups] ->
+              merge_duplicates(keeper, dups)
+          end
+        end,
+        mode: :immediate
+      )
 
-      list ->
-        list
-    end
+    list
+  end
+
+  # Heal what the old race left behind: fold any duplicate same-name lists' items into the
+  # oldest one and drop the empties, so every path converges on ONE book.
+  defp merge_duplicates(keeper, []), do: keeper
+
+  defp merge_duplicates(keeper, dups) do
+    ids = Enum.map(dups, & &1.id)
+    Repo.update_all(from(i in Item, where: i.list_id in ^ids), set: [list_id: keeper.id])
+    Repo.delete_all(from(l in List, where: l.id in ^ids))
+    keeper
   end
 
   defp owner_scope(query, _uid, true), do: where(query, [l], l.household == true)
