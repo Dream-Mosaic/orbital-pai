@@ -65,6 +65,56 @@ defmodule App.Cards do
 
   defp build(_name, _args, _result, _ctx), do: nil
 
+  # ---- history replay ----
+
+  @history_cards 4
+  @history_bytes 16 * 1024
+
+  @doc """
+  The cards a persisted turn keeps for history replay, from the cards it showed (oldest
+  first): at most #{@history_cards}, sharing a budget of #{@history_bytes} bytes of JSON. A card
+  that would overflow either limit is dropped (a later, smaller one can still fit), at debug —
+  a card is decoration, so a dropped one costs the replay, never the turn. `nil` when nothing
+  survives, so a card-less turn stores NULL rather than `[]`.
+  """
+  @spec for_history([map()] | nil) :: [map()] | nil
+  def for_history(cards) when cards in [nil, []], do: nil
+
+  def for_history(cards) when is_list(cards) do
+    {kept, _left} =
+      Enum.reduce(cards, {[], @history_bytes}, fn card, {kept, left} ->
+        size = json_size(card)
+
+        cond do
+          length(kept) >= @history_cards ->
+            Logger.debug("[cards] history keeps #{@history_cards} cards; dropped #{card[:type]}")
+            {kept, left}
+
+          is_nil(size) or size > left ->
+            Logger.debug(
+              "[cards] #{card[:type]} card (#{inspect(size)}B) over the history budget"
+            )
+
+            {kept, left}
+
+          true ->
+            {[card | kept], left - size}
+        end
+      end)
+
+    case kept do
+      [] -> nil
+      kept -> Enum.reverse(kept)
+    end
+  end
+
+  defp json_size(card) do
+    case Jason.encode(card) do
+      {:ok, json} -> byte_size(json)
+      {:error, _} -> nil
+    end
+  end
+
   # ---- weather ----
 
   defp weather(r, cur) do

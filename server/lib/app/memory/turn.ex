@@ -13,6 +13,10 @@ defmodule App.Memory.Turn do
     field :ttfa_ms, :integer
     field :ttb_ms, :integer
     field :embedded_at, :utc_datetime_usec
+    # The cards the user saw this turn (App.Cards, capped by App.Cards.for_history/1), for
+    # history replay only. Loaded back with string keys, exactly as the channel sends them.
+    # Nothing that feeds a model or an index reads it.
+    field :cards, {:array, :map}
     timestamps(type: :utc_datetime)
   end
 
@@ -24,7 +28,8 @@ defmodule App.Memory.Turn do
     :reflex_ms,
     :brain_ms,
     :ttfa_ms,
-    :ttb_ms
+    :ttb_ms,
+    :cards
   ]
 
   def changeset(turn, attrs) do
