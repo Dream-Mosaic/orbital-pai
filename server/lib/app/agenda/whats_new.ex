@@ -36,7 +36,7 @@ defmodule App.Agenda.WhatsNew do
       canned: true,
       deliver: :after_next_turn,
       lead_idle: "Oh — quick one —",
-      lead_interjected: "Oh — before you go —",
+      lead_interjected: "By the way —",
       prompt: notes(other_name(user)),
       persist_as: "(what's new in Henry)",
       ack: {__MODULE__, :mark_seen, [user.id]}

@@ -2557,7 +2557,7 @@ defmodule App.Conversations.ConversationTest do
       # the user's own turn answers first…
       assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 3000
       # …then the note interjects
-      assert_receive {:to_client, {:speak_start, :news, "Oh — before you go —"}}, 3000
+      assert_receive {:to_client, {:speak_start, :news, "By the way —"}}, 3000
       assert_receive {:to_client, {:speak_start, :brain, notes}}, 2000
       assert notes =~ "kitchen timers"
 
