@@ -50,6 +50,7 @@ defmodule App.Tools.RecipesTest do
 
       assert decls["save_recipe"].parameters.required == ["title", "ingredients", "steps"]
       assert decls["get_recipe"].parameters.required == ["name"]
+      assert decls["get_recipe"].parameters.properties.step.type == "integer"
       assert decls["list_recipes"].parameters.required == []
       assert decls["edit_recipe"].parameters.required == ["name"]
       assert decls["delete_recipe"].parameters.required == ["name"]
@@ -65,6 +66,8 @@ defmodule App.Tools.RecipesTest do
       end
 
       assert prompt =~ ~r/one step/i
+      # cook mode names the step it is about to read, so its card can show that step
+      assert prompt =~ "get_recipe with `step`"
       assert App.Tools.prompt_block(App.Config.default()) =~ prompt
     end
 
@@ -87,14 +90,16 @@ defmodule App.Tools.RecipesTest do
     test "saves to the household by default and reads back the counts", %{user: u, other: o} do
       assert {:ok, result} = Tool.execute("save_recipe", @lasagna, ctx(u))
 
-      assert json!(result) == %{
+      assert %{
                "saved" => true,
                "replaced" => false,
                "title" => "Grandma's Lasagna",
                "personal" => false,
                "ingredient_count" => 3,
-               "step_count" => 4
-             }
+               "step_count" => 4,
+               # the saved recipe itself, in get_recipe's shape: what its card shows
+               "recipe" => %{"title" => "Grandma's Lasagna", "steps" => [_, _, _, _]}
+             } = json!(result)
 
       assert [%{title: "Grandma's Lasagna"}] = Recipes.list(o.id)
     end
@@ -225,6 +230,31 @@ defmodule App.Tools.RecipesTest do
 
     test "a name is required", %{user: u} do
       assert Tool.execute("get_recipe", %{}, ctx(u)) == {:error, :missing_args}
+    end
+
+    test "cook mode: `step` names the step being read, clamped to the recipe", %{user: u} do
+      save!(u)
+
+      get = fn step ->
+        Tool.execute("get_recipe", %{"name" => "lasagna", "step" => step}, ctx(u))
+      end
+
+      assert {:ok, %{current_step: 3, step_count: 4, steps: [_, _, _, _]}} = get.(3)
+      assert {:ok, %{current_step: 4}} = get.(9)
+      assert {:ok, %{current_step: 1}} = get.(0)
+      assert {:ok, %{current_step: 1}} = get.(-2)
+      # JSON numbers can arrive as floats, and a model sometimes quotes them
+      assert {:ok, %{current_step: 2}} = get.(2.0)
+      assert {:ok, %{current_step: 2}} = get.(" 2 ")
+
+      # anything else is not a step: the plain recipe, no cook-mode marker
+      for junk <- ["next", "", nil, true, 2.5, %{}] do
+        assert {:ok, result} = get.(junk)
+        refute Map.has_key?(result, :current_step), inspect(junk)
+      end
+
+      assert {:ok, result} = Tool.execute("get_recipe", %{"name" => "lasagna"}, ctx(u))
+      refute Map.has_key?(result, :current_step)
     end
   end
 

@@ -13,7 +13,8 @@ defmodule App.Tools.Recipes do
 
   Tool results do not survive between turns (history is just the spoken text), so cook mode
   re-fetches the recipe each turn — it's a local DB read — and keys off the step number it
-  last said.
+  last said, passing the one it's about to read as `step`: the result then carries
+  `current_step`, which `App.Cards` shows as that single step, large, for the kitchen.
   """
   @behaviour App.Tools.Tool
 
@@ -33,9 +34,10 @@ defmodule App.Tools.Recipes do
       "every ingredient in `items`, leaving out pantry staples only if they say so. COOK " <>
       "MODE (\"walk me through it\", \"let's make X\"): speak ONE step per turn, plainly and " <>
       "briefly, starting with its number (\"Step 3 — …\"), then wait for \"next\"/\"okay\"; " <>
-      "recipe results don't carry over between turns, so call get_recipe again each turn " <>
-      "and continue from the step number you last said — \"repeat that\" is the same step, " <>
-      "and \"what temperature\"/\"how long\" is answered from the recipe. When a step has " <>
+      "recipe results don't carry over between turns, so call get_recipe with `step` = the " <>
+      "step you're about to read EVERY turn (1 to start, the last number you said + 1 on " <>
+      "\"next\", the same number on \"repeat that\") — it puts that step on their screen; " <>
+      "\"what temperature\"/\"how long\" is answered from the recipe. When a step has " <>
       "durations, offer a timer (\"bake 25 minutes — want a timer?\") and call set_timer " <>
       "only on a yes; call delete_recipe only after they confirm."
   end
@@ -104,7 +106,14 @@ defmodule App.Tools.Recipes do
           type: "object",
           properties: %{
             name: %{type: "string", description: "Which recipe, e.g. \"lasagna\"."},
-            personal: personal_param()
+            personal: personal_param(),
+            step: %{
+              type: "integer",
+              description:
+                "COOK MODE only: the step number you are about to read aloud (1 to start, " <>
+                  "+1 on \"next\", the same on \"repeat\"). Shows that step on their screen. " <>
+                  "Omit when just looking the recipe up."
+            }
           },
           required: ["name"]
         }
@@ -213,7 +222,7 @@ defmodule App.Tools.Recipes do
 
   def execute("get_recipe", %{"name" => name} = args, %{user_id: uid}) when is_binary(name) do
     case Recipes.get(uid, name, scope(args)) do
-      {:ok, recipe} -> {:ok, recipe_view(recipe)}
+      {:ok, recipe} -> {:ok, recipe |> recipe_view() |> put_current_step(args["step"])}
       error -> miss(error, name, uid)
     end
   end
@@ -282,7 +291,9 @@ defmodule App.Tools.Recipes do
            title: recipe.title,
            personal: not recipe.household,
            ingredient_count: length(recipe.ingredients),
-           step_count: length(recipe.steps)
+           step_count: length(recipe.steps),
+           # the saved recipe in get_recipe's shape, so it shows as a card (App.Cards)
+           recipe: recipe_view(recipe)
          }}
 
       error ->
@@ -343,6 +354,30 @@ defmodule App.Tools.Recipes do
         |> Enum.map(fn {text, n} -> %{number: n, text: text, durations: durations(text)} end)
     }
   end
+
+  # Cook mode: the step the brain is about to read, clamped onto the recipe (a "next" past the
+  # end stays on the last step). Anything that isn't a whole number is no step at all — the
+  # plain recipe, with no cook-mode marker. App.Cards shows a marked result as that one step.
+  defp put_current_step(%{step_count: count} = view, step) when count > 0 do
+    case whole_number(step) do
+      nil -> view
+      n -> Map.put(view, :current_step, n |> max(1) |> min(count))
+    end
+  end
+
+  defp put_current_step(view, _step), do: view
+
+  defp whole_number(n) when is_integer(n), do: n
+  defp whole_number(n) when is_float(n) and n == trunc(n), do: trunc(n)
+
+  defp whole_number(s) when is_binary(s) do
+    case Integer.parse(String.trim(s)) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp whole_number(_), do: nil
 
   defp summary_view(recipe) do
     %{
