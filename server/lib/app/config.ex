@@ -56,7 +56,8 @@ defmodule App.Config do
               App.Tools.Gmail,
               App.Tools.Recall,
               App.Tools.Trackers,
-              App.Tools.Routines
+              App.Tools.Routines,
+              App.Tools.Messages
             ],
             # Google-Search grounding on the brain request (web search). Toggle off if the model
             # ever rejects googleSearch alongside function tools.
