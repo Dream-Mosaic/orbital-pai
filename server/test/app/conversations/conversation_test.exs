@@ -2498,6 +2498,25 @@ defmodule App.Conversations.ConversationTest do
       refute_received {:to_client, {:audio, :brain, _}}
     end
 
+    test "an interrupted request's already-run tools ride along so the next brain doesn't redo them" do
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Process.register(self(), :fake_brain_observer)
+
+      pid = start_conv()
+      Conversation.endpoint(pid, "set a pasta timer for ten minutes")
+      assert_receive {:fake_brain_transcript, _}, 1000
+      send(pid, {:brain_tool_result, "set_timer", %{"duration_seconds" => 600}, %{ok: true}})
+
+      # interrupted before the answer: the request carries forward WITH what already happened
+      Conversation.typed(pid, "and what's the weather")
+      assert_receive {:fake_brain_transcript, carried}, 1000
+      assert carried =~ "set a pasta timer for ten minutes"
+      assert carried =~ ~s(ALREADY run: set_timer {"duration_seconds":600})
+      assert carried =~ "what's the weather"
+    end
+
     test "a claim mid-turn stops playback on the device that was PLAYING, not the claimer" do
       Application.put_env(:app, :fake_brain_done_ms, 5_000)
       on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)

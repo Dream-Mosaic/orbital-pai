@@ -183,6 +183,10 @@ defmodule App.Conversations.Conversation do
       # once :flush_brain releases it and one dropped with an aborted turn never does), newest
       # first. Persisted with the turn for history replay; reset with the turn fields.
       turn_cards: [],
+      # Tools that SUCCEEDED this turn, newest first: {name, args}. If the turn is aborted before
+      # it answers, its request is carried forward — and without this the next brain would run
+      # them again (interrupt "set a pasta timer" and two timers ring).
+      turn_actions: [],
       # The FINAL answer, held for the same reason and released by the same :flush_brain,
       # when the brain finishes generating before the reflex has been spoken. Pushing it
       # at {:brain_done, _} time (as we used to) put the answer on screen ahead of the
@@ -742,6 +746,8 @@ defmodule App.Conversations.Conversation do
         %{policy: %{phase: phase}} = data
       )
       when phase != :listening do
+    data = %{data | turn_actions: [{name, args} | data.turn_actions]}
+
     case App.Cards.from_tool(name, args, result) do
       nil ->
         {:keep_state, data}
@@ -1989,6 +1995,7 @@ defmodule App.Conversations.Conversation do
          caption_buffer: [],
          card_buffer: [],
          turn_cards: [],
+         turn_actions: [],
          pending_answer: nil,
          agenda_turn: nil,
          quiet_turn: false,
@@ -2362,9 +2369,23 @@ defmodule App.Conversations.Conversation do
 
   defp on_barge_in(%{agenda_turn: nil, transcript: t} = data)
        when is_binary(t) and t != "",
-       do: %{data | pending_request: t}
+       do: %{data | pending_request: t <> already_done_note(data.turn_actions)}
 
   defp on_barge_in(data), do: data
+
+  defp already_done_note([]), do: ""
+
+  defp already_done_note(actions) do
+    done =
+      actions
+      |> Enum.reverse()
+      |> Enum.map_join("; ", fn {name, args} ->
+        "#{name} #{args |> Jason.encode!() |> String.slice(0, 160)}"
+      end)
+
+    " (Before the interruption you had ALREADY run: #{done}. Those happened — don't run " <>
+      "them again; just confirm them if they matter.)"
+  end
 
   # Fold any carried-forward unanswered request in front of the new utterance (for the brain only).
   defp with_pending(%{pending_request: req}, t) when is_binary(req) and req != "",
@@ -2457,6 +2478,7 @@ defmodule App.Conversations.Conversation do
         caption_buffer: [],
         card_buffer: [],
         turn_cards: [],
+        turn_actions: [],
         pending_answer: nil,
         audio_until: nil,
         brain_fallback: false,
