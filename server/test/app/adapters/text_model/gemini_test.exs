@@ -498,6 +498,35 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.memory_block(%{user_name: nil, profile: "", summary: ""}) == ""
   end
 
+  test "a find-then-act routine fits the tool-hop cap with zero slack (run → find → act → answer)" do
+    # Routines' hop budget: run_routine spends a hop before any step runs, and Home Assistant
+    # is find-then-act, so lights + thermostat + calendar uses all 3 tool hops. One more
+    # dependent lookup (e.g. home_index first) reaches the forced tools-off answer instead.
+    parent = self()
+
+    Process.put(:script, [
+      [call("run_routine")],
+      [call("home_find"), call("home_find"), call("get_calendar_events")],
+      [call("home_control"), call("home_control")],
+      []
+    ])
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      send(parent, {:round, tools?})
+      [calls | rest] = Process.get(:script)
+      Process.put(:script, rest)
+      {:ok, calls}
+    end
+
+    cfg = %Config{tools: [], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, self(), 0, round_fun)
+
+    for _ <- 1..4, do: assert_received({:round, true})
+    refute_received {:round, _}
+    assert_received {:gemini_done}
+  end
+
   test "routines_block lists each routine's name and triggers so a match goes to run_routine" do
     block =
       Gemini.routines_block(%{

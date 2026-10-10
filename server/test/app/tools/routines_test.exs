@@ -95,6 +95,19 @@ defmodule App.Tools.RoutinesTest do
       assert r.note =~ "lock up"
     end
 
+    test "a swallowed NAME still saves (it's the identity) but is flagged", %{user: user} do
+      assert {:ok, r} =
+               Tool.execute(
+                 "save_routine",
+                 %{"name" => "lock up", "triggers" => ["night mode"], "steps" => "Lock up."},
+                 ctx(user)
+               )
+
+      assert r.saved == "lock up"
+      assert r.triggers == ["night mode"]
+      assert r.unreachable == ["lock up"]
+    end
+
     test "'good night' is NOT swallowed by the sleep/stop words" do
       cfg = App.Config.default()
       assert Tool.swallowed("good night", cfg) == nil

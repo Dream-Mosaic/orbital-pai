@@ -203,7 +203,7 @@ defmodule App.Tools.Routines do
       note:
         "#{quoted} can't run this by voice: said after your name, a phrase that starts with " <>
           "a stop or sleep word (stop, wait, lock, sleep…) halts or locks you before it " <>
-          "reaches you, so it isn't kept as a trigger. Suggest the user pick a different phrase."
+          "reaches you, so such triggers were dropped. Suggest the user pick a different phrase."
     })
   end
 
