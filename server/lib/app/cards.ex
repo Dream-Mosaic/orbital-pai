@@ -55,7 +55,7 @@ defmodule App.Cards do
     do: reminders_card("Reminder set", [r], ctx)
 
   defp build("create_followup", _args, %{body: _, due_at: _} = r, ctx),
-    do: reminders_card("Follow-up set", [Map.put(r, :kind, "followup")], ctx)
+    do: reminders_card("Follow-up set", [r], ctx)
 
   defp build("search_email", args, %{messages: [_ | _] = msgs} = r, ctx),
     do: email_card(args, msgs, r, ctx)

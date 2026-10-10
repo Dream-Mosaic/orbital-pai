@@ -400,6 +400,14 @@ defmodule App.CardsTest do
              ]
     end
 
+    test "create_followup: titled as one, so the row needs no Follow-up tag" do
+      result = %{body: "check whether Bob replied", due_at: "2026-10-12T15:00:00Z"}
+      c = card("create_followup", %{}, result)
+
+      assert c.title == "Follow-up set"
+      assert c.items == [%{text: "Check whether Bob replied", when: "Mon, 10:00 AM"}]
+    end
+
     test "create_reminder for someone else is tagged for them" do
       result = %{
         body: "pick up the kids",
