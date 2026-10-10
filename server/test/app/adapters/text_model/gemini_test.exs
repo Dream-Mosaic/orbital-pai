@@ -485,6 +485,16 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.home_block(%App.Config{}) == ""
   end
 
+  test "memory_block names the rest of the household after the speaker" do
+    block =
+      Gemini.memory_block(%{user_name: "David", household: ["Tanya"], profile: "", summary: ""})
+
+    assert block == "\n\nYou're speaking with David. Also in the household: Tanya."
+
+    assert Gemini.memory_block(%{user_name: "David", household: [], profile: "", summary: ""}) ==
+             "\n\nYou're speaking with David."
+  end
+
   test "memory_block leads with identity, with or without notes" do
     with_notes =
       Gemini.memory_block(%{user_name: "David", profile: "- likes drones", summary: ""})

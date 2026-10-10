@@ -38,7 +38,7 @@ defmodule App.Memory do
   def context(session_id, opts \\ []) do
     case App.Users.id_from_session(session_id) do
       nil ->
-        %{profile: "", summary: "", recent: [], user_name: nil, routines: []}
+        %{profile: "", summary: "", recent: [], user_name: nil, routines: [], household: []}
 
       user_id ->
         facts = list_facts(user_id)
@@ -51,9 +51,16 @@ defmodule App.Memory do
           recent: recent,
           user_name: user && user.name,
           # name + triggers only (one query) — the brain knows them without a tool round
-          routines: App.Routines.brief(user_id)
+          routines: App.Routines.brief(user_id),
+          # the OTHER allowlisted people in the house, by name — so "tell my wife…" or
+          # "remind Tanya…" can resolve without the brain guessing who lives here
+          household: household_names(user_id)
         }
     end
+  end
+
+  defp household_names(user_id) do
+    for u <- App.Users.list(), u.id != user_id, App.Users.allowed?(u.email), do: u.name
   end
 
   defp fact_line(%ProfileFact{category: nil, content: c}), do: "- #{c}"

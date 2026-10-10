@@ -127,6 +127,12 @@ defmodule App.MemoryTest do
     assert ctx.user_name == user.name
   end
 
+  test "context names the OTHER household members, never the speaker", %{d: d, t: t} do
+    assert Memory.context(to_string(d)).household == ["Bob"]
+    assert Memory.context(to_string(t)).household == ["Alice"]
+    assert Memory.context("nope").household == []
+  end
+
   test "sessionless context has no user_name" do
     assert Memory.context("nope").user_name == nil
   end

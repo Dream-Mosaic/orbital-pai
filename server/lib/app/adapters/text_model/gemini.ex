@@ -415,10 +415,17 @@ defmodule App.Adapters.TextModel.Gemini do
   # Identity + background notes. Identity renders even with empty notes — cold-start Henry
   # must know who he's talking to without waiting for a fact to be extracted.
   def memory_block(%{user_name: name} = ctx) when is_binary(name) and name != "" do
-    "\n\nYou're speaking with #{name}." <> notes_block(ctx)
+    "\n\nYou're speaking with #{name}." <> household_line(ctx) <> notes_block(ctx)
   end
 
   def memory_block(ctx), do: notes_block(ctx)
+
+  # Who else lives here, so a relationship word ("my wife", "my husband") or a first name
+  # resolves to a real household member for messages, shared reminders and lists.
+  defp household_line(%{household: [_ | _] = names}),
+    do: " Also in the household: #{Enum.join(names, ", ")}."
+
+  defp household_line(_), do: ""
 
   defp notes_block(%{profile: p, summary: s}) when is_binary(p) or is_binary(s) do
     case String.trim("#{p || ""}\n#{s || ""}") do
