@@ -19,6 +19,8 @@ import 'meridian/settings_drawer_host.dart';
 import 'meridian/tokens.dart';
 import 'meridian/voice_screen.dart';
 import 'meridian/orientation_lock.dart';
+import 'notify/background_notices.dart';
+import 'notify/notifier.dart';
 import 'panels/badges_client.dart';
 import 'panels/books_client.dart';
 import 'panels/connectors_client.dart';
@@ -68,6 +70,7 @@ class HenryHome extends StatefulWidget {
     this.auth,
     this.session,
     this.buildConnection,
+    this.notifier,
   });
 
   /// The one connection, injectable so a test can build the REAL home — and
@@ -110,6 +113,11 @@ class HenryHome extends StatefulWidget {
   final AppConnection Function(String token, Future<void> Function()? onRejected)?
       buildConnection;
 
+  /// Where background notifications go. Null (production) is the real
+  /// [PlatformNotifier]; a test hands in a fake to see what the wired shell
+  /// actually posts.
+  final Notifier? notifier;
+
   @override
   State<HenryHome> createState() => _HenryHomeState();
 }
@@ -128,6 +136,7 @@ class _HenryHomeState extends State<HenryHome> {
   VoiceLockClient? _voiceLock;
   ConnectorsClient? _connectors;
   BooksClient? _books;
+  BackgroundNotices? _notices;
 
   /// Null exactly when [widget.connection] was supplied directly — that path
   /// (every drawer/routing test) has no sign-in state machine to speak of.
@@ -205,9 +214,11 @@ class _HenryHomeState extends State<HenryHome> {
     _reminders?.dispose();
     _badges?.dispose();
     _vc?.dispose();
+    _notices?.dispose();
     _conn?.dispose();
     _conn = null;
     _vc = null;
+    _notices = null;
     _badges = null;
     _reminders = null;
     _settings = null;
@@ -228,8 +239,20 @@ class _HenryHomeState extends State<HenryHome> {
     // construction to build()'s first read, which runs AFTER connect() below
     // — so the controller would adopt an already-joined connection instead of
     // joining alongside it.
-    final vc = VoiceController(connection: conn);
+    // Notifications while backgrounded: built with the shell, so a sign-out
+    // takes the last user's notifications down with it.
+    final notices = BackgroundNotices(
+      notifier: widget.notifier ?? PlatformNotifier(),
+      binding: WidgetsBinding.instance,
+    );
+    _notices = notices;
+    final vc = VoiceController(connection: conn, notices: notices);
     _vc = vc;
+    // Asked once the voice screen is up (and at most once per install — the
+    // platform side remembers); a "no" only means no notifications.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (identical(_notices, notices)) unawaited(notices.requestPermission());
+    });
     // Registered before connect() so the first sweep opens the badges topic
     // alongside the conversation, rather than as a second round trip.
     _badges = BadgesClient(connection: conn);

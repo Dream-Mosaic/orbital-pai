@@ -12,6 +12,7 @@ import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
+import '../notify/background_notices.dart';
 import 'glance.dart';
 import 'mic_state.dart';
 import 'timers_model.dart';
@@ -32,7 +33,9 @@ class VoiceController extends ChangeNotifier {
     DeviceId? deviceId,
     AlarmSound? alarm,
     MonoClock? timerClock,
+    BackgroundNotices? notices,
   })  : _connection = connection,
+        _notices = notices,
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer(),
         _spotter = spotter ?? SherpaWakeSpotter(),
@@ -82,6 +85,11 @@ class VoiceController extends ChangeNotifier {
   }
 
   static const String _topic = 'voice:henry';
+
+  /// Local notifications while the app is backgrounded: every JSON push is
+  /// offered to it after the router below has handled it. Null (tests, and
+  /// any shell that does not want them) notifies nothing. Owned by the shell.
+  final BackgroundNotices? _notices;
 
   /// Resolved once and injected, never read directly elsewhere: everything
   /// this controller knows about "which device am I" lives in the join
@@ -642,6 +650,7 @@ class VoiceController extends ChangeNotifier {
   void dismissTimer(int id) {
     _live?.push('dismiss_timer', {'id': id});
     _timers.silence(id);
+    _notices?.timerDismissed(id);
     _safeNotify();
   }
 
@@ -1161,6 +1170,7 @@ class VoiceController extends ChangeNotifier {
       default:
         _log('event: ${m.event} $p');
     }
+    _notices?.onEvent(m.event, p);
     _safeNotify();
   }
 
