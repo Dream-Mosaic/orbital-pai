@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/meridian/composer.dart';
 import 'package:orbital_pai/meridian/header.dart';
 import 'package:orbital_pai/meridian/hold_to_talk.dart';
 import 'package:orbital_pai/meridian/hero_icon.dart';
@@ -36,6 +37,18 @@ class _ClearSpy extends VoiceController {
 
   @override
   void clearThread() => localClears++;
+}
+
+/// Records what the composer handed the controller, without a joined socket.
+class _TextSpy extends VoiceController {
+  _TextSpy({required super.connection})
+      : super(mic: FakeMic(), player: FakePlayer());
+  final List<String> sent = <String>[];
+  @override
+  bool sendText(String text) {
+    sent.add(text);
+    return true;
+  }
 }
 
 void main() {
@@ -155,6 +168,58 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(tester.takeException(), isNull,
         reason: 'the thread is the only flexible row — it must absorb the growth');
+  });
+
+  // Type to Henry (spec 2026-10-10 household wave 1, F1).
+  testWidgets('a typed message goes to the controller', (tester) async {
+    phone(tester);
+    final vc = _TextSpy(connection: conn);
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.pump();
+
+    // The orb animates forever, so pumpAndSettle would never return.
+    await tester.tap(find.byKey(ComposerDock.keyboardKey));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byKey(ComposerDock.fieldKey), 'is it raining');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+
+    expect(vc.sent, ['is it raining']);
+  });
+
+  testWidgets(
+      'with the soft keyboard up the composer rides above it and nothing overflows',
+      (tester) async {
+    phone(tester); // 360 x 800 logical
+    final vc = VoiceController(connection: conn, mic: FakeMic(), player: FakePlayer());
+    addTearDown(vc.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+      home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+    ));
+    await tester.tap(find.byKey(ComposerDock.keyboardKey));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // No Scaffold hosts this screen, so nothing else would make room for it.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 900); // 300 logical
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(tester.takeException(), isNull);
+    expect(tester.getBottomLeft(find.byKey(ComposerDock.fieldKey)).dy,
+        lessThanOrEqualTo(800 - 300));
+    expect(find.byType(MeridianNav), findsNothing,
+        reason: 'the nav steps aside while the keyboard is up');
+    expect(tester.getSize(find.byType(Thread)).height, greaterThan(120),
+        reason: 'the conversation has to stay readable above the keyboard');
+
+    tester.view.viewInsets = FakeViewPadding.zero;
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(MeridianNav), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(

@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import '../connection/app_connection.dart';
 import '../panels/badges_client.dart';
 import '../voice/voice_controller.dart';
+import 'composer.dart';
 import 'header.dart';
-import 'hold_to_talk.dart';
 import 'meridian_surface.dart';
 import 'nav.dart';
 import 'orb_bezel.dart';
@@ -172,6 +172,11 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         final orb = vc.orbState;
         final glow = paletteFor(orb).glow;
         _scheduleAnchor();
+        // The soft keyboard (Type to Henry). No Scaffold hosts this screen, so
+        // nothing else makes room for it: the column is lifted by its height,
+        // and while it is up the nav steps aside and the orb gives way.
+        final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+        final typing = keyboard > 0;
 
         return MeridianSurface(
           state: orb,
@@ -186,7 +191,8 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: M.maxWidth),
                   child: Padding(
-                    padding: const EdgeInsets.all(M.pagePad),
+                    padding: EdgeInsets.fromLTRB(
+                        M.pagePad, M.pagePad, M.pagePad, M.pagePad + keyboard),
                     child: Column(
                       children: [
                         MeridianHeader(
@@ -196,7 +202,8 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                           userName: widget.userName,
                         ),
                         const SizedBox(height: M.columnGap),
-                        _orbPane(vc, glow),
+                        _orbPane(vc, glow,
+                            maxDiameter: typing ? _orbRoomWhileTyping(context) : null),
                         const SizedBox(height: M.columnGap),
                         Expanded(
                           child: NotificationListener<ScrollNotification>(
@@ -210,17 +217,20 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                           ),
                         ),
                         const SizedBox(height: M.columnGap),
-                        HoldToTalkBar(
-                          enabled: vc.pttEnabled,
-                          held: vc.pttHeld,
-                          onPress: vc.pttPress,
-                          onRelease: vc.pttRelease,
+                        ComposerDock(
+                          pttEnabled: vc.pttEnabled,
+                          pttHeld: vc.pttHeld,
+                          onPttPress: vc.pttPress,
+                          onPttRelease: vc.pttRelease,
+                          onSend: vc.sendText,
                         ),
-                        const SizedBox(height: M.columnGap),
-                        MeridianNav(
-                          hasDue: widget.badges?.hasDue ?? false,
-                          onTap: (tab) => widget.onOpenPanel?.call(tab),
-                        ),
+                        if (!typing) ...[
+                          const SizedBox(height: M.columnGap),
+                          MeridianNav(
+                            hasDue: widget.badges?.hasDue ?? false,
+                            onTap: (tab) => widget.onOpenPanel?.call(tab),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -233,15 +243,38 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
     );
   }
 
-  Widget _orbPane(VoiceController vc, Color glow) {
+  /// What the column holds besides the orb while the keyboard is up: header,
+  /// three gaps, the elbow, a one-line composer, and enough thread to read.
+  static const double _reservedWhileTyping =
+      M.headerMinHeight + 3 * M.columnGap + 24 + 44 + 150;
+
+  /// Below this the bezel's detents crowd the glass.
+  static const double _minOrbWhileTyping = 96;
+
+  /// The largest orb that still leaves the conversation readable above the
+  /// keyboard. Derived from the height the column actually gets, so it tracks
+  /// the keyboard's own slide frame by frame — the orb gives way only as much
+  /// as the keyboard takes, and not at all where there is room.
+  double _orbRoomWhileTyping(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final column = mq.size.height -
+        mq.padding.vertical -
+        mq.viewInsets.bottom -
+        2 * M.pagePad;
+    return (column - _reservedWhileTyping)
+        .clamp(_minOrbWhileTyping, M.bezelMaxWidth);
+  }
+
+  Widget _orbPane(VoiceController vc, Color glow, {double? maxDiameter}) {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: M.orbPaneMaxWidth),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // .bezel { width: min(272px, 74%) }
+            // .bezel { width: min(272px, 74%) } — and smaller still while the
+            // keyboard is up, if that is what it takes (see _orbRoomWhileTyping).
             final d = math.min(
-              M.bezelMaxWidth,
+              maxDiameter ?? M.bezelMaxWidth, // never above bezelMaxWidth
               constraints.maxWidth * M.bezelPaneFraction,
             );
             return Column(

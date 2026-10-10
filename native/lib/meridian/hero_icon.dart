@@ -11,6 +11,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 enum HeroIcon {
   bell,
   bookOpen,
+  chatBubbleBottomCenterText,
   check,
   chevronLeft,
   clipboardDocumentList,
@@ -19,6 +20,7 @@ enum HeroIcon {
   link,
   magnifyingGlass,
   microphone,
+  paperAirplane,
   power,
   shoppingCart,
   sun,
@@ -29,6 +31,7 @@ enum HeroIcon {
   String get asset => switch (this) {
         HeroIcon.bell => 'bell',
         HeroIcon.bookOpen => 'book-open',
+        HeroIcon.chatBubbleBottomCenterText => 'chat-bubble-bottom-center-text',
         HeroIcon.check => 'check',
         HeroIcon.chevronLeft => 'chevron-left',
         HeroIcon.clipboardDocumentList => 'clipboard-document-list',
@@ -37,6 +40,7 @@ enum HeroIcon {
         HeroIcon.link => 'link',
         HeroIcon.magnifyingGlass => 'magnifying-glass',
         HeroIcon.microphone => 'microphone',
+        HeroIcon.paperAirplane => 'paper-airplane',
         HeroIcon.power => 'power',
         HeroIcon.shoppingCart => 'shopping-cart',
         HeroIcon.sun => 'sun',
