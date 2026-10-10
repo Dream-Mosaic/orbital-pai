@@ -194,8 +194,9 @@ defmodule App.Cards do
 
   defp agenda(args, events, r, ctx) do
     {title, subtitle, multi_day?} = agenda_title(args, events, ctx)
-    accounts = r[:accounts_read] || events |> Enum.map(& &1[:account]) |> Enum.uniq()
-    multi_account? = length(accounts) > 1
+    # Label rows with their account only when the SHOWN events actually come from more than
+    # one calendar: three connected accounts with every event on one of them is noise per row.
+    multi_account? = events |> Enum.map(& &1[:account]) |> Enum.uniq() |> length() > 1
     cap = if multi_day?, do: @agenda_cap_range, else: @agenda_cap_day
 
     compact(%{
@@ -365,9 +366,8 @@ defmodule App.Cards do
 
   # ---- email ----
 
-  defp email_card(args, msgs, r, ctx) do
-    accounts = r[:accounts_read] || msgs |> Enum.map(& &1[:account]) |> Enum.uniq()
-    multi_account? = length(accounts) > 1
+  defp email_card(args, msgs, _r, ctx) do
+    multi_account? = msgs |> Enum.map(& &1[:account]) |> Enum.uniq() |> length() > 1
     query = blank_to_nil(args["query"])
 
     compact(%{

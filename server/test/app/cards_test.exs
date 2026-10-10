@@ -202,7 +202,7 @@ defmodule App.CardsTest do
                ["acme-corp.com", "davidclausen2051", "Family"]
     end
 
-    test "account labels only appear when more than one account was read" do
+    test "account labels only appear when the shown events span more than one account" do
       result = %{
         events: [event("Standup", "2026-10-10T14:00:00Z")],
         errors: [],
@@ -211,6 +211,18 @@ defmodule App.CardsTest do
 
       c = card("get_calendar_events", @today, result)
       refute Map.has_key?(hd(c.events), :account)
+
+      # three accounts read, but every event is on one of them: no per-row label
+      same = %{
+        events: [event("A", "2026-10-10T14:00:00Z"), event("B", "2026-10-10T16:00:00Z")],
+        errors: [],
+        accounts_read: ["Personal", "Work", "Family"]
+      }
+
+      refute Enum.any?(
+               card("get_calendar_events", @today, same).events,
+               &Map.has_key?(&1, :account)
+             )
     end
 
     test "tomorrow, a later day, this week, next week and an arbitrary range" do
