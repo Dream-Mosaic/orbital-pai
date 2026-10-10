@@ -14,10 +14,18 @@ class MeridianSurface extends StatefulWidget {
     super.key,
     required this.state,
     required this.child,
+    this.bleedCentre = defaultBleedCentre,
   });
 
   final OrbState state;
   final Widget child;
+
+  /// Where the orb sits, so the light pools under it. The CSS seats it at
+  /// (50%, 27%) — the phone column's orb. The wall layouts move the orb, and
+  /// pass where they put it.
+  final Alignment bleedCentre;
+
+  static const Alignment defaultBleedCentre = Alignment(0.0, -0.46);
 
   @override
   State<MeridianSurface> createState() => _MeridianSurfaceState();
@@ -111,11 +119,11 @@ class _MeridianSurfaceState extends State<MeridianSurface>
                       final s = reduceMotion ? 1.0 : _scale.value;
                       return Transform.scale(
                         scale: s,
-                        alignment: const Alignment(0.0, -0.46), // (50%, 27%)
+                        alignment: widget.bleedCentre, // (50%, 27%) by default
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: RadialGradient(
-                              center: const Alignment(0.0, -0.46),
+                              center: widget.bleedCentre,
                               radius: 1.28, // ~ the -28% inset overscan
                               colors: [
                                 pal.glow.withValues(alpha: 0.20),

@@ -26,6 +26,7 @@ class Thread extends StatelessWidget {
     this.scrollController,
     this.onAck,
     this.onStartTimer,
+    this.joinsAbove = true,
   });
 
   final List<ThreadItem> items;
@@ -38,6 +39,19 @@ class Thread extends StatelessWidget {
 
   /// A card's tappable timer (a cook-mode step's "8 minutes" pill).
   final bool Function(int seconds, String label)? onStartTimer;
+
+  /// Whether something above lights the spine — the single column's elbow
+  /// (and the timer strip's rail segment) bridging down from the orb. Then
+  /// the spine reaches up into the gap to meet it, glow first. In the wall's
+  /// two panes nothing comes from above: the spine starts at the thread's own
+  /// top and fades in there, rather than being cut off mid-glow.
+  final bool joinsAbove;
+
+  /// The widest a card gets. The cards were designed for Henry's column at
+  /// phone-to-tablet widths (184-416dp); on a wall display his column is far
+  /// wider, and a weather card stretched to fill it reads as a banner. Below
+  /// this nothing changes.
+  static const double maxCardWidth = 460;
 
   static const double _railFraction = 0.36; // --rail
   static const double _logPadX = 4.0; // #voice .log padding: 0 4px
@@ -64,11 +78,12 @@ class Thread extends StatelessWidget {
                 // CSS measures from `.log`'s border box; this Stack starts one
                 // padding in.
                 left: railSpine + 8 - _logPadX,
-                top: -12,
+                top: joinsAbove ? -12 : 0,
                 bottom: 4,
                 width: 1.5,
                 child: IgnorePointer(
-                  child: _Spine(key: const ValueKey('spine'), glow: glow),
+                  child: _Spine(
+                      key: const ValueKey('spine'), glow: glow, fadeIn: !joinsAbove),
                 ),
               ),
               ShaderMask(
@@ -94,7 +109,7 @@ class Thread extends StatelessWidget {
                     ),
                     child: KeyedSubtree(
                       key: ValueKey('item-$i'),
-                      child: _item(items[i], railLine),
+                      child: _item(items[i], railLine, logContent - 2 * _scrollerPadX),
                     ),
                   ),
                 ),
@@ -106,7 +121,8 @@ class Thread extends StatelessWidget {
     );
   }
 
-  Widget _item(ThreadItem item, double rail) => switch (item) {
+  /// [row] is the width every item is laid out at (the scroller's content box).
+  Widget _item(ThreadItem item, double rail, double row) => switch (item) {
         ThreadDivider() => Center(
             child: Text(
               '— earlier —',
@@ -133,9 +149,15 @@ class Thread extends StatelessWidget {
           ),
         ThreadLine() =>
           item.kind == LineKind.you ? _youLine(item, rail) : _fieldLine(item, rail),
-        // A visual answer sits in Henry's column, its left edge on his text.
+        // A visual answer sits in Henry's column, its left edge on his text,
+        // and stops at [maxCardWidth]. The cap is taken up as right padding so
+        // the card is still handed a TIGHT width — below the cap it gets the
+        // exact width it always did.
         ThreadCard() => Padding(
-            padding: EdgeInsets.only(left: rail + 18),
+            padding: EdgeInsets.only(
+              left: rail + 18,
+              right: math.max(0.0, row - (rail + 18) - maxCardWidth),
+            ),
             child: ThreadCardView(card: item, onStartTimer: onStartTimer),
           ),
       };
@@ -320,9 +342,13 @@ class _Dot extends StatelessWidget {
 /// The glowing rail. A decorative SIBLING of the scroller, not a child, so it
 /// stays put while the transcript scrolls past it.
 class _Spine extends StatelessWidget {
-  const _Spine({super.key, required this.glow});
+  const _Spine({super.key, required this.glow, this.fadeIn = false});
 
   final Color glow;
+
+  /// Rise out of nothing over the first few percent instead of starting at
+  /// full glow — for a spine with no elbow above it to carry the light in.
+  final bool fadeIn;
 
   @override
   Widget build(BuildContext context) {
@@ -332,12 +358,13 @@ class _Spine extends StatelessWidget {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
+            if (fadeIn) glow.withValues(alpha: 0.0),
             glow.withValues(alpha: 0.65),
             const Color(0x17FFFFFF), // rgba(255,255,255,0.09)
             const Color(0x17FFFFFF),
             const Color(0x00FFFFFF),
           ],
-          stops: const [0.0, 0.30, 0.88, 1.0],
+          stops: [if (fadeIn) 0.0, fadeIn ? 0.07 : 0.0, 0.30, 0.88, 1.0],
         ),
       ),
     );

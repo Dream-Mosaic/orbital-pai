@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -76,6 +77,9 @@ class _OrbFaceState extends State<OrbFace> {
     super.dispose();
   }
 
+  /// The widest caption box a phone's bezel produces, with room to spare.
+  static const double _phoneBox = 210;
+
   static const _days = [
     'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY',
     'SUNDAY' //
@@ -97,9 +101,14 @@ class _OrbFaceState extends State<OrbFace> {
         '${_days[now.weekday - 1]} · ${_months[now.month - 1]} ${now.day}';
 
     final w = widget.width;
-    final timeSize = (w * 0.30).clamp(28.0, 64.0);
-    final small = (w * 0.058).clamp(8.0, 11.0);
-    final body = (w * 0.068).clamp(10.0, 13.5);
+    // The ceilings were set for a phone's glass. A wall tablet's is twice the
+    // size, and a phone-sized clock in it reads as a small island in empty
+    // glass — so above a phone's box they rise with it, in proportion, and the
+    // face keeps its shape at any size. At and below [_phoneBox] nothing moves.
+    final grow = math.max(1.0, w / _phoneBox);
+    final timeSize = (w * 0.30).clamp(28.0, 64.0 * grow);
+    final small = (w * 0.058).clamp(8.0, 11.0 * grow);
+    final body = (w * 0.068).clamp(10.0, 13.5 * grow);
     final fade = widget.dimmed ? 0.45 : 1.0;
 
     final weather = widget.glance.weather;

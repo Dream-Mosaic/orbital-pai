@@ -30,6 +30,7 @@ class TimerStrip extends StatefulWidget {
     required this.glow,
     this.onDismiss,
     this.onCancel,
+    this.railed = true,
   });
 
   final List<TimerEntry> timers;
@@ -42,6 +43,12 @@ class TimerStrip extends StatefulWidget {
   final Color glow;
   final void Function(int id)? onDismiss;
   final void Function(int id)? onCancel;
+
+  /// Hung off the meridian (the single column, where the strip sits between
+  /// the orb's elbow and the thread's spine), or free-standing and centred —
+  /// the wall's orb pane, where no spine runs past it and a rail segment
+  /// would lead nowhere.
+  final bool railed;
 
   @override
   State<TimerStrip> createState() => _TimerStripState();
@@ -119,6 +126,42 @@ class _TimerStripState extends State<TimerStrip>
   Widget build(BuildContext context) {
     if (widget.timers.isEmpty) return const SizedBox.shrink();
     final now = widget.clock();
+    final chips = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final (i, t) in widget.timers.indexed) ...[
+          if (i > 0) const SizedBox(width: 8),
+          _TimerChip(
+            key: ValueKey('timer-${t.id}'),
+            entry: t,
+            now: now,
+            pulse: _pulse,
+            onDismiss: widget.onDismiss,
+            onCancel: widget.onCancel,
+          ),
+        ],
+      ],
+    );
+
+    if (!widget.railed) {
+      // Centred while the chips fit; once they don't, they scroll from the
+      // left edge like the railed strip does.
+      return Padding(
+        padding: const EdgeInsets.only(bottom: M.columnGap),
+        child: Center(
+          child: ClipRect(
+            // Room on every side: centred chips have their glow's width of
+            // pane to either side, and the right one rings too.
+            clipper: const _GlowRoom(right: _GlowRoom.bleed),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              clipBehavior: Clip.none,
+              child: chips,
+            ),
+          ),
+        ),
+      );
+    }
 
     return LayoutBuilder(builder: (context, constraints) {
       final w = constraints.maxWidth;
@@ -171,22 +214,7 @@ class _TimerStripState extends State<TimerStrip>
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     clipBehavior: Clip.none,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final (i, t) in widget.timers.indexed) ...[
-                          if (i > 0) const SizedBox(width: 8),
-                          _TimerChip(
-                            key: ValueKey('timer-${t.id}'),
-                            entry: t,
-                            now: now,
-                            pulse: _pulse,
-                            onDismiss: widget.onDismiss,
-                            onCancel: widget.onCancel,
-                          ),
-                        ],
-                      ],
-                    ),
+                    child: chips,
                   ),
                 ),
               ),
@@ -201,16 +229,19 @@ class _TimerStripState extends State<TimerStrip>
 /// The chips' clip: exact at the right (the column edge), generous elsewhere,
 /// so the ringing glow is not sliced off while overflow still is.
 class _GlowRoom extends CustomClipper<Rect> {
-  const _GlowRoom();
+  const _GlowRoom({this.right = 0});
 
-  static const double _bleed = 20;
+  static const double bleed = 20;
+
+  /// Room past the right edge; zero where that edge is the column's.
+  final double right;
 
   @override
   Rect getClip(Size size) =>
-      Rect.fromLTRB(-_bleed, -_bleed, size.width, size.height + _bleed);
+      Rect.fromLTRB(-bleed, -bleed, size.width + right, size.height + bleed);
 
   @override
-  bool shouldReclip(_GlowRoom oldClipper) => false;
+  bool shouldReclip(_GlowRoom oldClipper) => oldClipper.right != right;
 }
 
 /// The strip's node on the spine — a thread line's filled dot, in coral.
