@@ -1103,6 +1103,24 @@ defmodule App.Conversations.Conversation do
      }, [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
   end
 
+  # An abort kills the brain, but whatever it already SENT is still in our mailbox, and brain
+  # messages carry no turn identity: a {:brain_done, "Your pasta timer is up."} queued before a
+  # typed barge-in would otherwise be read by the NEXT turn as its answer. Every brain message
+  # queued at abort time belongs to the brain just killed — the next one hasn't started yet
+  # (this runs inside the same handler, before any new turn begins).
+  defp flush_dead_brain_messages do
+    receive do
+      {:brain_text, _} -> flush_dead_brain_messages()
+      {:brain_audio, _} -> flush_dead_brain_messages()
+      {:brain_done, _} -> flush_dead_brain_messages()
+      {:brain_error, _} -> flush_dead_brain_messages()
+      {:brain_tool_call, _} -> flush_dead_brain_messages()
+      {:brain_tool_result, _, _, _} -> flush_dead_brain_messages()
+    after
+      0 -> :ok
+    end
+  end
+
   defp discard_prewarm(%{prewarm_brain: {pid, ref}} = data) do
     Process.demonitor(ref, [:flush])
     if Process.alive?(pid), do: Process.exit(pid, :shutdown)
@@ -1343,8 +1361,7 @@ defmodule App.Conversations.Conversation do
                   "all right",
                   "thank you",
                   "shut up",
-                  "timer off",
-                  "turn it off"
+                  "timer off"
                 ]
 
   defp alarm_ack?(t) when is_binary(t) do
@@ -1360,12 +1377,18 @@ defmodule App.Conversations.Conversation do
 
   defp alarm_ack?(_), do: false
 
-  # Dismiss this user's ringing timers. True if anything was ringing. Never raises — a DB hiccup
-  # must not turn a "stop" into a crash.
+  # Dismiss this user's ringing timers. True if anything was ringing. The check is a cheap READ
+  # here; the dismiss WRITES run in a task, so a busy SQLite writer (backup, memory updater) can
+  # never stall the conversation for the busy_timeout. Never raises — a DB hiccup must not turn a
+  # "stop" into a crash.
   defp silence_timers(%{session_id: sid}) do
     with uid when is_integer(uid) <- App.Users.id_from_session(sid),
-         n when n > 0 <- App.Timers.silence_ringing(uid) do
-      Logger.info("[timers] #{n} ringing timer(s) silenced by voice")
+         true <- App.Timers.any_ringing?(uid) do
+      Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+        n = App.Timers.silence_ringing(uid)
+        Logger.info("[timers] #{n} ringing timer(s) silenced by voice")
+      end)
+
       true
     else
       _ -> false
@@ -1373,6 +1396,12 @@ defmodule App.Conversations.Conversation do
   rescue
     _ -> false
   end
+
+  # A bare "okay" from anyone mustn't silence an alarm on a device whose owner turned Voice Lock
+  # to enforce — those words would skip the speaker gate. "Henry, stop" still works (the wake
+  # path), as the stop commands always have.
+  defp voice_lock_enforced?(%{voice_lock: %{mode: :enforce}}), do: true
+  defp voice_lock_enforced?(_), do: false
 
   defp safety_stop?(t, cfg) do
     case WakeWord.match(t, cfg) do
@@ -1399,7 +1428,8 @@ defmodule App.Conversations.Conversation do
       # An alarm is ringing and you said "stop" / "okay" / "got it": that's for the alarm, not a
       # question for the brain. Only while awake (a locked device's gate isn't streaming anyway;
       # "Henry, stop" goes through the wake path below), and only if something actually rang.
-      not data.locked and alarm_ack?(t) and silence_timers(data) ->
+      not data.locked and alarm_ack?(t) and not voice_lock_enforced?(data) and
+          silence_timers(data) ->
         {:keep_state, %{data | expecting_finalize: false, holding: false}}
 
       data.voice_activation ->
@@ -2065,6 +2095,7 @@ defmodule App.Conversations.Conversation do
     # timer so a stale expiry can't unduck a later turn. Clean completion routes through
     # :turn_complete instead (no :cancel_brain) and lets its still-armed timer heal any residual duck.
     data = data |> clear_brain() |> cancel_reflex_tasks() |> unduck()
+    flush_dead_brain_messages()
 
     {%{
        data

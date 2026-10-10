@@ -22,7 +22,7 @@ defmodule App.Lists do
     # IMMEDIATE: find-then-create must be one writer at a time. The brain runs parallel tool
     # calls ("add milk", "add eggs" in one round), and each used to find nothing and create its
     # own "groceries" — four duplicate books, the panel showing only one of them.
-    {:ok, list} =
+    {:ok, {list, merged?}} =
       Repo.transaction(
         fn ->
           # Scope the lookup to the RESOLVED owner: a household owner → any household list of that
@@ -37,16 +37,23 @@ defmodule App.Lists do
 
           case matches do
             [] ->
-              %List{}
-              |> List.changeset(%{user_id: uid, household: household, name: name})
-              |> Repo.insert!()
+              list =
+                %List{}
+                |> List.changeset(%{user_id: uid, household: household, name: name})
+                |> Repo.insert!()
+
+              {list, false}
 
             [keeper | dups] ->
-              merge_duplicates(keeper, dups)
+              {merge_duplicates(keeper, dups), dups != []}
           end
         end,
         mode: :immediate
       )
+
+    # After the commit, so an open panel re-reads the merged state, not the pre-merge one: the
+    # deleted duplicates must disappear from its book picker.
+    if merged?, do: broadcast_changed(list.user_id, list.household)
 
     list
   end

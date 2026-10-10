@@ -92,6 +92,24 @@ defmodule App.ListsTest do
       assert Repo.aggregate(from(l in List, where: l.name == "groceries"), :count) == 1
     end
 
+    test "a heal tells open panels (after the commit), so deleted duplicates leave the picker",
+         %{d: d} do
+      for _ <- 1..2,
+          do:
+            {:ok, _} =
+              %List{}
+              |> List.changeset(%{user_id: d, name: "pantry", household: true})
+              |> Repo.insert()
+
+      Phoenix.PubSub.subscribe(App.PubSub, "lists:household")
+      Lists.find_or_create_list(%{user_id: d, household: true}, "pantry")
+      assert_receive {:lists_changed}
+
+      # nothing to heal → nothing to say
+      Lists.find_or_create_list(%{user_id: d, household: true}, "pantry")
+      refute_receive {:lists_changed}, 100
+    end
+
     test "finds an existing list case-insensitively instead of creating a duplicate", %{d: d} do
       {:ok, existing} =
         %List{}

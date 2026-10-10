@@ -2561,6 +2561,27 @@ defmodule App.Conversations.ConversationTest do
       refute next =~ "pasta timer"
     end
 
+    test "a reply the dead brain had ALREADY queued is flushed by the abort" do
+      Application.put_env(:app, :fake_brain_done_ms, 1_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      pid = start_conv()
+      Conversation.endpoint(pid, "tell me a story")
+      assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+
+      # stage the race exactly: the typed cast and the old brain's done are BOTH queued before
+      # the FSM runs either
+      :sys.suspend(pid)
+      Conversation.typed(pid, "different question")
+      send(pid, {:brain_done, "stale story ending"})
+      send(pid, {:brain_audio, <<0, 0>>})
+      :sys.resume(pid)
+
+      assert_receive {:to_client, {:speak_start, :brain, answer}}, 3000
+      refute answer == "stale story ending"
+    end
+
     test "a claim mid-turn stops playback on the device that was PLAYING, not the claimer" do
       Application.put_env(:app, :fake_brain_done_ms, 5_000)
       on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)

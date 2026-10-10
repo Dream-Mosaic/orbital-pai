@@ -257,6 +257,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('fresh basil'), findsOneWidget);
 
+      // Another device switched the shared current book to groceries: the push arrives with NO
+      // recipes body. Not told is not deleted — the open recipe stays.
+      fake.ctrl.foreign.sink.add(shelfFrame(shelfState('groceries')));
+      await tester.pumpAndSettle();
+      expect(find.text('fresh basil'), findsOneWidget);
+      expect(find.text(RecipeDetailView.goneText), findsNothing);
+
       // Deleted by the other person.
       fake.ctrl.foreign.sink.add(shelfFrame(shelfState('recipes', recipes: emptyRecipes)));
       await tester.pumpAndSettle();

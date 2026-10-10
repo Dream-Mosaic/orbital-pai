@@ -53,6 +53,25 @@ class _BooksDrawerHostState extends State<BooksDrawerHost> {
 
   void _back() => setState(() => _detail = null);
 
+  // The last row each open detail saw. The server sends a collection's body only while it is the
+  // CURRENT book, and "current" is a pref every device shares: another device picking Groceries
+  // makes the next push here arrive with no recipes at all. An ABSENT body is "not told", not
+  // "deleted" — keep showing what we had; only a present body without the row means it's gone.
+  RecipeRow? _lastRecipe;
+  TrackerRow? _lastTracker;
+
+  RecipeRow? _recipeFor(int id) {
+    final rows = widget.client.state?.recipes;
+    if (rows == null) return _lastRecipe?.id == id ? _lastRecipe : null;
+    return _lastRecipe = rows.find(id);
+  }
+
+  TrackerRow? _trackerFor(int id) {
+    final rows = widget.client.state?.trackers;
+    if (rows == null) return _lastTracker?.id == id ? _lastTracker : null;
+    return _lastTracker = rows.find(id);
+  }
+
   /// The detail layer's title: the book's own label, as the channel sent it.
   String _bookLabel(String kind, String fallback) {
     for (final b in widget.client.state?.books ?? const <BookRef>[]) {
@@ -93,7 +112,7 @@ class _BooksDrawerHostState extends State<BooksDrawerHost> {
                 onOpenTracker: (id) => _open(_Kind.tracker, id),
               ),
             _Kind.recipe => RecipeDetailView(
-                recipe: widget.client.state?.recipes?.find(detail!.id),
+                recipe: _recipeFor(detail!.id),
                 onDelete: (id) {
                   widget.client.deleteRecipe(id);
                   // Back to the book at once: the next push drops the row,
@@ -102,7 +121,7 @@ class _BooksDrawerHostState extends State<BooksDrawerHost> {
                 },
               ),
             _Kind.tracker => TrackerDetailView(
-                tracker: widget.client.state?.trackers?.find(detail!.id),
+                tracker: _trackerFor(detail!.id),
               ),
           },
         ),

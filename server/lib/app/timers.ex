@@ -158,6 +158,11 @@ defmodule App.Timers do
     end)
   end
 
+  @doc "Is any of the user's timers ringing right now? (a read — cheap enough for the FSM)"
+  def any_ringing?(user_id) when is_integer(user_id) do
+    Timer |> where([t], t.user_id == ^user_id and t.state == "ringing") |> Repo.exists?()
+  end
+
   @doc """
   Silence every RINGING timer of the user (→ done) — "Henry, stop" / "okay" while the alarm
   sounds. Returns how many were silenced (0 = nothing was ringing).
