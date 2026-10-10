@@ -1108,7 +1108,7 @@ defmodule App.Conversations.Conversation do
     quiet? = data.quiet_turn
     me = self()
 
-    Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+    track_brain_task(data, fn ->
       ctx = if sid, do: App.Memory.context(sid), else: %{}
       opts = [tier: :brain, config: cfg, thinking: cfg.brain_thinking]
 
@@ -1123,8 +1123,15 @@ defmodule App.Conversations.Conversation do
           send(me, {:brain_error, :fallback_failed})
       end
     end)
+  end
 
-    data
+  # The batch fallback and the canned line run in a task that IS the turn's brain: monitored and
+  # held in brain_pid/brain_ref like a BrainStream, so an abort's clear_brain kills it. Untracked,
+  # it outlived the turn it belonged to — a timer announcement still synthesizing when you typed
+  # landed in the TYPED turn as its answer (its {:brain_done, _} is indistinguishable by phase).
+  defp track_brain_task(data, fun) do
+    {:ok, pid} = Task.Supervisor.start_child(App.Conversations.TaskSup, fun)
+    %{data | brain_pid: pid, brain_ref: Process.monitor(pid)}
   end
 
   # Speak a fixed canned line as the brain reply (no model call): synthesize audio then re-enter
@@ -1135,13 +1142,11 @@ defmodule App.Conversations.Conversation do
     quiet? = data.quiet_turn
     me = self()
 
-    Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+    track_brain_task(data, fn ->
       # a quiet (typed) turn shows the line without speaking it
       unless quiet?, do: speak_brain_audio(me, text, cfg)
       send(me, {:brain_done, text})
     end)
-
-    data
   end
 
   # Synthesize `text` and hand it back as brain audio; a TTS failure is silently text-only.
@@ -1842,6 +1847,11 @@ defmodule App.Conversations.Conversation do
   # A claim (wake / ptt) carries only the sender, so recover its device id from the join it
   # made earlier — a standby device is a joined device.
   defp claim(data, from) do
+    # Mid-turn, the device being displaced is the one PLAYING. Stop it now, before the rebind:
+    # afterwards every push — including the abort's own :stop_playback — goes to the claimer, and
+    # the displaced device only hears {:bound, false}, which closes its mic gate but leaves its
+    # buffered answer talking over the new device.
+    if data.policy.phase != :listening, do: emit(data, :stop_playback)
     data = rebind(data, from, Map.get(data.device_ids, from))
     notify_bound(data, true)
     data

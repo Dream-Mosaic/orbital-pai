@@ -6,7 +6,16 @@ defmodule App.Test.Fakes do
     @behaviour App.Adapters.Tts
 
     @impl true
-    def synthesize(_text, _opts), do: {:ok, :binary.copy(<<0, 0>>, 160)}
+    def synthesize(text, _opts) do
+      # `:fake_tts_slow` = {text, ms}: synthesizing exactly that line takes ms — lets a test land
+      # an abort while one specific line (e.g. a canned announcement) is still in flight.
+      case Application.get_env(:app, :fake_tts_slow) do
+        {^text, ms} -> Process.sleep(ms)
+        _ -> :ok
+      end
+
+      {:ok, :binary.copy(<<0, 0>>, 160)}
+    end
   end
 
   defmodule Verifier do

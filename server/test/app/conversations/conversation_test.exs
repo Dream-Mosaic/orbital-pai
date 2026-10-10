@@ -2461,6 +2461,61 @@ defmodule App.Conversations.ConversationTest do
 
   # Spec 2026-10-10-household-jarvis-wave1 F1: a TYPED message is explicit intent, answered
   # quietly in text — no reflex, no TTS, no audio — and it gets through every voice gate.
+  describe "turns don't leak into each other (review 2026-10-10)" do
+    alias App.Agenda.Item
+
+    test "typing while a canned announcement is still synthesizing: the announcement can't answer the typed turn" do
+      Application.put_env(:app, :fake_tts_slow, {"Your pasta timer is up.", 400})
+      # the typed turn's brain is still working when the stale announcement's TTS finishes
+      Application.put_env(:app, :fake_brain_done_ms, 1_000)
+
+      on_exit(fn ->
+        Application.delete_env(:app, :fake_tts_slow)
+        Application.put_env(:app, :fake_brain_done_ms, 0)
+      end)
+
+      pid = start_conv()
+
+      send(
+        pid,
+        {:agenda_due,
+         %Item{
+           kind: :timer,
+           canned: true,
+           prompt: "Your pasta timer is up.",
+           lead_idle: "Timer —"
+         }}
+      )
+
+      assert_receive {:to_client, {:speak_start, :timer, "Timer —"}}, 1000
+      # the canned body is mid-TTS now; a typed message aborts the turn and starts its own
+      Conversation.typed(pid, "what's two plus two")
+
+      assert_receive {:to_client, {:speak_start, :brain, answer}}, 3000
+      refute answer == "Your pasta timer is up."
+      # and the dead announcement never surfaces afterwards either
+      refute_receive {:to_client, {:speak_start, :brain, "Your pasta timer is up."}}, 700
+      refute_received {:to_client, {:audio, :brain, _}}
+    end
+
+    test "a claim mid-turn stops playback on the device that was PLAYING, not the claimer" do
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+
+      pid = start_conv()
+      phone = spawn_client_proxy(self(), :phone)
+      :gen_statem.cast(pid, {:join, phone, "phone"})
+
+      Conversation.endpoint(pid, "tell me a long story")
+      # this test process is the bound tablet; its reflex audio proves the turn is live
+      assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+
+      :gen_statem.cast(pid, {:typed, "stop, different question", phone})
+      assert_receive {:to_client, :stop_playback}, 1000
+    end
+  end
+
   describe "typed (quiet) turns" do
     setup do
       on_exit(fn ->
