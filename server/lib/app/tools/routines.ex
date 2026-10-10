@@ -87,10 +87,10 @@ defmodule App.Tools.Routines do
       "(\"when I say good night, turn off the downstairs lights…\"), read the steps back in one " <>
       "sentence and call save_routine only after the user confirms, writing steps as clear " <>
       "imperative instructions to yourself. When what the user says matches one of their " <>
-      "routines' names or triggers (listed at the end of this prompt), call run_routine FIRST, " <>
-      "then carry out every step with your tools in the same turn — independent steps as " <>
-      "parallel calls — and finish with ONE short summary. Never invent or skip steps; if a " <>
-      "step needs something you can't do, say so in the summary."
+      "routines' names or triggers (listed below), call run_routine FIRST, then carry out " <>
+      "every step with your tools in the same turn — independent steps as parallel calls — " <>
+      "and finish with ONE short summary. Never invent or skip steps; if a step needs " <>
+      "something you can't do, say so in the summary."
   end
 
   @impl true

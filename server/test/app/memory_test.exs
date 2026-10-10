@@ -131,6 +131,24 @@ defmodule App.MemoryTest do
     assert Memory.context("nope").user_name == nil
   end
 
+  test "context/2 carries the user's routines — name + triggers, never steps", %{d: d, t: t} do
+    {:ok, _} =
+      App.Routines.save(d, %{name: "good night", triggers: ["bedtime"], steps: "Lights off."})
+
+    assert Memory.context(to_string(d)).routines == [
+             %{name: "good night", triggers: ["bedtime"]}
+           ]
+
+    # per-user, and present (empty) even when recent turns are skipped
+    assert Memory.context(to_string(t)).routines == []
+    assert Memory.context(to_string(d), recent: false).routines != []
+  end
+
+  test "a non-user session's context has no routines" do
+    assert Memory.context("nope").routines == []
+    assert Memory.context(nil).routines == []
+  end
+
   test "ProfileFact changeset requires content + user_id and validates source", %{d: d} do
     alias App.Memory.ProfileFact
 

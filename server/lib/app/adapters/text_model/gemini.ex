@@ -375,7 +375,9 @@ defmodule App.Adapters.TextModel.Gemini do
   defp system_for(:reflex, cfg, _ctx), do: reflex_prompt(cfg.name)
 
   defp system_for(:brain, cfg, ctx),
-    do: brain_prompt(cfg.name) <> home_block(cfg) <> tools_prompt(cfg) <> memory_block(ctx)
+    do:
+      brain_prompt(cfg.name) <>
+        home_block(cfg) <> tools_prompt(cfg) <> memory_block(ctx) <> routines_block(ctx)
 
   defp system_for(:memory, _cfg, _ctx),
     do: "You maintain a concise rolling memory of a user and conversation."
@@ -431,6 +433,26 @@ defmodule App.Adapters.TextModel.Gemini do
   end
 
   defp notes_block(_), do: ""
+
+  @doc false
+  # The user's routines — name + triggers, never steps (App.Memory.context/2) — so an utterance
+  # that matches one goes straight to run_routine instead of a list round first. "" when none.
+  def routines_block(%{routines: [_ | _] = routines}) do
+    entries =
+      Enum.map_join(routines, "; ", fn %{name: name, triggers: triggers} ->
+        case triggers do
+          [] -> quote_phrase(name)
+          ts -> "#{quote_phrase(name)} (or: #{Enum.map_join(ts, ", ", &quote_phrase/1)})"
+        end
+      end)
+
+    "\n\nThe user's saved routines — when they say one of these names or phrases, call " <>
+      "run_routine with it: " <> entries <> "."
+  end
+
+  def routines_block(_ctx), do: ""
+
+  defp quote_phrase(s), do: ~s|"#{String.replace(s, "\"", "")}"|
 
   # Trimmed — for the whole batch response.
   defp extract_text(resp), do: resp |> raw_text() |> String.trim()

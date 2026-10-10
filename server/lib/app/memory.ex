@@ -38,7 +38,7 @@ defmodule App.Memory do
   def context(session_id, opts \\ []) do
     case App.Users.id_from_session(session_id) do
       nil ->
-        %{profile: "", summary: "", recent: [], user_name: nil}
+        %{profile: "", summary: "", recent: [], user_name: nil, routines: []}
 
       user_id ->
         facts = list_facts(user_id)
@@ -49,7 +49,9 @@ defmodule App.Memory do
           profile: facts |> Enum.map(&fact_line/1) |> Enum.join("\n"),
           summary: get_summary(user_id).content,
           recent: recent,
-          user_name: user && user.name
+          user_name: user && user.name,
+          # name + triggers only (one query) — the brain knows them without a tool round
+          routines: App.Routines.brief(user_id)
         }
     end
   end

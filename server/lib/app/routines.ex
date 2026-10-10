@@ -56,15 +56,19 @@ defmodule App.Routines do
 
   @doc """
   Name + triggers (never steps) of `user_id`'s routines, alphabetical — the cheap shape the
-  brain's system prompt lists so it knows a routine exists without a tool round.
+  brain's system prompt lists so it knows a routine exists without a tool round. Triggers that
+  merely repeat the name are dropped (the name already runs it).
   """
   def brief(user_id) do
     from(r in Routine,
       where: r.user_id == ^user_id,
-      select: %{name: r.label, triggers: r.triggers}
+      select: %{key: r.name, name: r.label, triggers: r.triggers}
     )
     |> Repo.all()
     |> Enum.sort_by(&String.downcase(&1.name))
+    |> Enum.map(fn %{key: key, name: name, triggers: triggers} ->
+      %{name: name, triggers: Enum.reject(triggers, &(match_key(&1) == key))}
+    end)
   end
 
   @doc """

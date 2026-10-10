@@ -497,4 +497,29 @@ defmodule App.Adapters.TextModel.GeminiTest do
 
     assert Gemini.memory_block(%{user_name: nil, profile: "", summary: ""}) == ""
   end
+
+  test "routines_block lists each routine's name and triggers so a match goes to run_routine" do
+    block =
+      Gemini.routines_block(%{
+        routines: [
+          %{name: "good night", triggers: ["bedtime", "lights out"]},
+          %{name: "leaving", triggers: []}
+        ]
+      })
+
+    assert block =~ "run_routine"
+    assert block =~ ~s|"good night" (or: "bedtime", "lights out")|
+    assert block =~ ~s|"leaving"|
+    refute block =~ ~s|"leaving" (|
+  end
+
+  test "routines_block is empty when the user has none (or the ctx has no routines)" do
+    assert Gemini.routines_block(%{routines: []}) == ""
+    assert Gemini.routines_block(%{}) == ""
+  end
+
+  test "routines_block strips double quotes so a phrase can't break the quoting" do
+    block = Gemini.routines_block(%{routines: [%{name: ~s|the "big" one|, triggers: []}]})
+    assert block =~ ~s|"the big one"|
+  end
 end

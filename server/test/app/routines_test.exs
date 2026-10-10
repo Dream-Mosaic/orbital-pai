@@ -141,10 +141,11 @@ defmodule App.RoutinesTest do
     assert ["Morning"] = t |> Routines.list() |> Enum.map(& &1.label)
   end
 
-  test "brief/1 is name + triggers only (no steps) for the brain prompt", %{d: d} do
+  test "brief/1 is name + triggers only (no steps), minus triggers that just repeat the name",
+       %{d: d} do
     {:ok, _} = Routines.save(d, good_night())
 
-    assert Routines.brief(d) == [%{name: "Good night", triggers: ["good night", "bedtime"]}]
+    assert Routines.brief(d) == [%{name: "Good night", triggers: ["bedtime"]}]
     assert Routines.brief(-1) == []
   end
 
