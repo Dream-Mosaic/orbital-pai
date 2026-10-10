@@ -208,7 +208,7 @@ defmodule App.Recipes do
     recipe |> Recipe.changeset(fields) |> Repo.update() |> tag(:replaced)
   end
 
-  defp tag({:ok, recipe}, how), do: {:ok, recipe, how}
+  defp tag({:ok, recipe}, how), do: {:ok, broadcast_changed(recipe), how}
   defp tag(error, _how), do: error
 
   @doc """
@@ -248,7 +248,7 @@ defmodule App.Recipes do
     with {:ok, recipe} <- get_for_write(user_id, name, scope),
          {:ok, changes, report} <- edits(recipe, attrs) do
       case recipe |> Recipe.changeset(changes) |> Repo.update() do
-        {:ok, updated} -> {:ok, updated, report}
+        {:ok, updated} -> {:ok, broadcast_changed(updated), report}
         error -> error
       end
     end
@@ -339,7 +339,24 @@ defmodule App.Recipes do
 
   @doc "Delete a recipe the caller can see (`get/3` resolution). `{:ok, recipe}` or `get/3`'s errors."
   def delete(user_id, name, scope \\ :any) do
-    with {:ok, recipe} <- get_for_write(user_id, name, scope), do: Repo.delete(recipe)
+    with {:ok, recipe} <- get_for_write(user_id, name, scope),
+         {:ok, deleted} <- Repo.delete(recipe),
+         do: {:ok, broadcast_changed(deleted)}
+  end
+
+  @doc """
+  Tell an open Books panel the recipe book changed; returns `recipe`. A household recipe
+  notifies `"recipes:household"` (every member's panel shows it); a private one notifies only
+  its owner's `"recipes:<user_id>"`, so the other person never learns it changed.
+  """
+  def broadcast_changed(%Recipe{household: true} = recipe) do
+    Phoenix.PubSub.broadcast(App.PubSub, "recipes:household", {:recipes_changed})
+    recipe
+  end
+
+  def broadcast_changed(%Recipe{user_id: uid} = recipe) do
+    Phoenix.PubSub.broadcast(App.PubSub, "recipes:#{uid}", {:recipes_changed})
+    recipe
   end
 
   # Reads may prefer the household copy when a name exists in both scopes; WRITES may not. "Delete

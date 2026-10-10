@@ -156,8 +156,22 @@ defmodule App.Trackers do
           end,
           mode: :immediate
         )
+        |> notify(user_id)
     end
   end
+
+  @doc """
+  Tell `user_id`'s open Books panel their trackers changed (`"trackers:<user_id>"` — private,
+  so never a household topic).
+  """
+  def broadcast_changed(user_id),
+    do: Phoenix.PubSub.broadcast(App.PubSub, "trackers:#{user_id}", {:trackers_changed})
+
+  # After the commit, never inside the transaction: a subscriber re-reads on the message, and a
+  # read racing an uncommitted write would render the old state.
+  defp notify({:ok, _} = ok, user_id), do: tap(ok, fn _ -> broadcast_changed(user_id) end)
+  defp notify({:ok, _, _} = ok, user_id), do: tap(ok, fn _ -> broadcast_changed(user_id) end)
+  defp notify(other, _user_id), do: other
 
   defp clean_name(name) when is_binary(name), do: clean(name)
   defp clean_name(_), do: nil
@@ -222,7 +236,7 @@ defmodule App.Trackers do
     with %Tracker{} = tracker <- find(user_id, name) || {:error, :not_found},
          %Entry{} = entry <- last_logged(tracker) || {:error, :empty},
          {:ok, deleted} <- Repo.delete(entry) do
-      {:ok, tracker, deleted}
+      notify({:ok, tracker, deleted}, user_id)
     end
   end
 
@@ -242,7 +256,7 @@ defmodule App.Trackers do
     with %Tracker{} = tracker <- find(user_id, name) || {:error, :not_found} do
       count = count_entries(tracker)
       {:ok, deleted} = Repo.delete(tracker)
-      {:ok, deleted, count}
+      notify({:ok, deleted, count}, user_id)
     end
   end
 

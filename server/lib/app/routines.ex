@@ -42,6 +42,7 @@ defmodule App.Routines do
           steps: attrs |> attr(:steps) |> clean()
         })
         |> Repo.insert_or_update()
+        |> notify()
       end
     end
   end
@@ -92,7 +93,7 @@ defmodule App.Routines do
   def delete(user_id, phrase) do
     case get(user_id, phrase) do
       nil -> {:error, :not_found}
-      routine -> Repo.delete(routine)
+      routine -> routine |> Repo.delete() |> notify()
     end
   end
 
@@ -101,7 +102,18 @@ defmodule App.Routines do
     routine
     |> Routine.changeset(%{last_run_at: DateTime.utc_now() |> DateTime.truncate(:second)})
     |> Repo.update()
+    |> notify()
   end
+
+  @doc """
+  Tell `user_id`'s open Books panel their routines changed (`"routines:<user_id>"` — routines
+  are per-user, so never a household topic).
+  """
+  def broadcast_changed(user_id),
+    do: Phoenix.PubSub.broadcast(App.PubSub, "routines:#{user_id}", {:routines_changed})
+
+  defp notify({:ok, %Routine{user_id: uid}} = ok), do: tap(ok, fn _ -> broadcast_changed(uid) end)
+  defp notify(other), do: other
 
   @doc false
   # The identity a routine is matched and replaced by: lowercase, apostrophes dropped, every
