@@ -19,6 +19,20 @@ defmodule App.ToolsTest do
     assert [%{name: "echo"}] = decls
   end
 
+  defmodule PromptTool do
+    @behaviour App.Tools.Tool
+    def declarations, do: [%{name: "p", description: "p", parameters: %{type: "object"}}]
+    def execute(_n, _a, _c), do: {:ok, %{}}
+    def prompt, do: "Use p for p-things."
+  end
+
+  test "prompt_block/1 joins the enabled tools' own prompt fragments; none -> empty" do
+    assert App.Tools.prompt_block(%Config{tools: [FakeTool, PromptTool]}) ==
+             " Use p for p-things."
+
+    assert App.Tools.prompt_block(%Config{tools: [FakeTool]}) == ""
+  end
+
   test "execute/3 dispatches a call by name to the owning module" do
     assert {:ok, %{echoed: "hi"}} = App.Tools.execute("echo", %{"msg" => "hi"}, ctx([FakeTool]))
   end

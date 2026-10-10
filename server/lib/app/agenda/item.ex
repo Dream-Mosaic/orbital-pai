@@ -25,7 +25,11 @@ defmodule App.Agenda.Item do
             ack: nil,
             # the source reminder's id, when this item delivers a persisted reminder — lets the
             # client offer an inline "Ack" chip that acknowledges exactly this reminder. nil = no chip.
-            reminder_id: nil
+            reminder_id: nil,
+            # true = `prompt` is spoken VERBATIM in the brain slot (TTS only, no model call) —
+            # for items whose words are already known (a timer going off, a relayed household
+            # message), where a brain round-trip would only add latency and paraphrase.
+            canned: false
 
   @type t :: %__MODULE__{}
 end

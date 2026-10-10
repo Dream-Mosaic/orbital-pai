@@ -49,5 +49,14 @@ defmodule App.Tools.Tool do
   TTS context is kept alive meanwhile (see BrainStream keepalive). Not implementing it = the default.
   """
   @callback timeout(name :: String.t()) :: non_neg_integer()
-  @optional_callbacks cache_ttl: 1, cache_invalidates: 1, cache_key: 2, timeout: 1
+
+  @doc """
+  Optional: a sentence or two appended to the brain's system prompt, teaching it WHEN and HOW
+  to use this module's functions. Rendered only while the module is enabled (so a disabled tool
+  is never advertised), and owned by the tool rather than the one giant prompt string in
+  `Gemini.brain_prompt/1` — a new tool is one new module, not an edit to a shared paragraph.
+  Start it with a space-free sentence; the registry joins fragments with a single space.
+  """
+  @callback prompt() :: String.t()
+  @optional_callbacks cache_ttl: 1, cache_invalidates: 1, cache_key: 2, timeout: 1, prompt: 0
 end

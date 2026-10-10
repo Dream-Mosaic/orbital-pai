@@ -375,7 +375,7 @@ defmodule App.Adapters.TextModel.Gemini do
   defp system_for(:reflex, cfg, _ctx), do: reflex_prompt(cfg.name)
 
   defp system_for(:brain, cfg, ctx),
-    do: brain_prompt(cfg.name) <> home_block(cfg) <> memory_block(ctx)
+    do: brain_prompt(cfg.name) <> home_block(cfg) <> tools_prompt(cfg) <> memory_block(ctx)
 
   defp system_for(:memory, _cfg, _ctx),
     do: "You maintain a concise rolling memory of a user and conversation."
@@ -403,6 +403,11 @@ defmodule App.Adapters.TextModel.Gemini do
   end
 
   def home_block(_), do: ""
+
+  # Per-tool prompt fragments (App.Tools.Tool.prompt/0). Guarded like home_block: a bare map
+  # config (some tests) has no tools to advertise.
+  defp tools_prompt(%App.Config{} = cfg), do: App.Tools.prompt_block(cfg)
+  defp tools_prompt(_), do: ""
 
   @doc false
   # Identity + background notes. Identity renders even with empty notes — cold-start Henry

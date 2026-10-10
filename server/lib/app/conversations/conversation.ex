@@ -926,6 +926,23 @@ defmodule App.Conversations.Conversation do
   defp rate_limited?({:http, 429, _body}), do: true
   defp rate_limited?(_), do: false
 
+  # A canned agenda item: its prompt IS the answer — speak it (TTS only), no brain stream.
+  # brain_fallback: true so a blank TTS result can't trigger the canned "lost that one" line.
+  defp start_brain_now(%{agenda_turn: {%Item{canned: true} = item, _mode}} = data, acts) do
+    data = discard_prewarm(data)
+
+    data = %{
+      data
+      | brain_buffer: [],
+        audio_until: nil,
+        brain_text: nil,
+        brain_fallback: true
+    }
+
+    {spawn_canned_brain(item.prompt, data),
+     [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
+  end
+
   # Start the streaming brain now. Adopts a live pre-warm (BrainStream.begin/3) or cold-starts.
   defp start_brain_now(data, acts) do
     emit(data, :thinking)
@@ -966,6 +983,14 @@ defmodule App.Conversations.Conversation do
          brain_fallback: false
      }, [{{:timeout, :prewarm_ttl}, :infinity, :cancel} | acts]}
   end
+
+  defp discard_prewarm(%{prewarm_brain: {pid, ref}} = data) do
+    Process.demonitor(ref, [:flush])
+    if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+    %{data | prewarm_brain: nil}
+  end
+
+  defp discard_prewarm(data), do: data
 
   # Start a fresh BrainStream with a transcript already in hand (no prewarm to adopt, or the
   # prewarm was unusable/refused). Mirrors what run_effect({:start_brain, _}, _) used to do

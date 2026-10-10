@@ -22,6 +22,12 @@ abstract final class M {
   /// oklch(0.75 0.12 300) — `.who-followup .who` (app.css:729).
   static const Color followup = Color(0xFFBA9CEF);
 
+  /// A timer going off — a warm coral, distinct from the reminder amber.
+  static const Color timer = Color(0xFFF0806A);
+
+  /// A household message relayed from the other person — a soft rose.
+  static const Color message = Color(0xFFE88FB8);
+
   /// daisyUI dark `--color-success` = oklch(0.60 0.118 184.704) — the power
   /// detent's icon while ON (`setPower()` toggles Tailwind's `.text-success`).
   ///

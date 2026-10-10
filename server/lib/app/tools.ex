@@ -11,6 +11,24 @@ defmodule App.Tools do
   @doc "Enabled tool modules for this config."
   def enabled(%{tools: tools}), do: tools
 
+  @doc """
+  Every enabled tool's own prompt fragment (`c:App.Tools.Tool.prompt/0`), joined into one
+  block for the brain's system prompt. "" when no enabled tool contributes one.
+  """
+  def prompt_block(config) do
+    config
+    |> enabled()
+    |> Enum.filter(fn mod ->
+      Code.ensure_loaded?(mod) and function_exported?(mod, :prompt, 0)
+    end)
+    |> Enum.map(& &1.prompt())
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> case do
+      [] -> ""
+      parts -> " " <> Enum.join(parts, " ")
+    end
+  end
+
   @doc "The `tools` block for the Gemini request body (flatten every module's declarations)."
   def declarations(config) do
     [%{functionDeclarations: Enum.flat_map(enabled(config), & &1.declarations())}]

@@ -17,9 +17,9 @@ const Map<String, String> kToolLabels = {
 String toolLabel(String name) => kToolLabels[name] ?? name.replaceAll('_', ' ');
 
 /// The speakers the server actually emits: `speak_start`'s `source` is one of
-/// brain / reflex / reminder / briefing / followup (conversation.ex:544, 552,
-/// 1287, 1516 + reflex_source/1), and the history backfill adds `you`.
-enum LineKind { you, brain, reflex, reminder, briefing, followup }
+/// brain / reflex / reminder / briefing / followup / timer / message (an agenda
+/// item's `kind` via reflex_source/1), and the history backfill adds `you`.
+enum LineKind { you, brain, reflex, reminder, briefing, followup, timer, message }
 
 LineKind? lineKindFromSource(String source) => switch (source) {
       'you' => LineKind.you,
@@ -28,6 +28,8 @@ LineKind? lineKindFromSource(String source) => switch (source) {
       'reminder' => LineKind.reminder,
       'briefing' => LineKind.briefing,
       'followup' => LineKind.followup,
+      'timer' => LineKind.timer,
+      'message' => LineKind.message,
       _ => null,
     };
 

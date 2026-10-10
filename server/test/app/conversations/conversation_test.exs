@@ -1684,6 +1684,25 @@ defmodule App.Conversations.ConversationTest do
       assert Enum.any?(turns, &(&1.user_text == "(morning briefing)" and &1.brain_text == answer))
     end
 
+    test "a canned item speaks its prompt verbatim in the brain slot — no brain stream starts" do
+      Process.register(self(), :fake_brain_observer)
+      pid = start_conv()
+
+      item = %Item{
+        kind: :timer,
+        prompt: "Your pasta timer is done.",
+        canned: true,
+        lead_idle: "Timer —"
+      }
+
+      send(pid, {:agenda_due, item})
+      assert_receive {:to_client, {:speak_start, :timer, "Timer —"}}, 1000
+      assert_receive {:to_client, {:speak_start, :brain, "Your pasta timer is done."}}, 2000
+      refute_received {:fake_brain_transcript, _}
+      # the turn completes normally (drain) and the session is back to listening
+      assert_receive {:to_client, :listening}, 2000
+    end
+
     test "a briefing is de-duped: a second :agenda_due while one is pending doesn't double-speak" do
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
       pid = start_conv()
