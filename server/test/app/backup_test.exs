@@ -41,6 +41,16 @@ defmodule App.BackupTest do
     assert File.exists?(Path.join(dir, "notes.txt"))
   end
 
+  test "latest/1 reports the newest snapshot's date and size; nil when there is none", %{
+    dir: dir
+  } do
+    assert App.Backup.latest(dir) == nil
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "app-2026-01-02.db"), "12345")
+    File.write!(Path.join(dir, "app-2026-01-01.db"), "1")
+    assert App.Backup.latest(dir) == %{date: ~D[2026-01-02], bytes: 5}
+  end
+
   test "list/1 of a missing directory is empty" do
     assert App.Backup.list("/nonexistent/henry/backups") == []
   end

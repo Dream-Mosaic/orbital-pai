@@ -452,6 +452,7 @@ defmodule AppWeb.DashboardPanels do
 
   attr :user, :map, required: true
   attr :app_version, :string, required: true
+  attr :last_backup, :string, default: nil
 
   def settings_panel(assigns) do
     ~H"""
@@ -474,6 +475,9 @@ defmodule AppWeb.DashboardPanels do
       <section class="space-y-1.5">
         <.heading title="About" />
         <p class="font-mono text-xs text-base-content/60">P.A.I v{@app_version}</p>
+        <p id="last-backup" class="text-xs text-base-content/60">
+          Last backup: {@last_backup || "none yet"}
+        </p>
       </section>
       <p class="text-xs text-base-content/50">Change these in the app.</p>
     </div>

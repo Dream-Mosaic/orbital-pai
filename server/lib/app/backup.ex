@@ -88,6 +88,19 @@ defmodule App.Backup do
     end
   end
 
+  @doc "The newest snapshot as `%{date: Date.t(), bytes: integer}`, or nil when there is none."
+  @spec latest(Path.t()) :: %{date: Date.t(), bytes: non_neg_integer()} | nil
+  def latest(dir \\ default_dir()) do
+    with [path | _] <- list(dir),
+         "app-" <> rest <- Path.basename(path),
+         {:ok, date} <- Date.from_iso8601(String.trim_trailing(rest, ".db")),
+         {:ok, %{size: bytes}} <- File.stat(path) do
+      %{date: date, bytes: bytes}
+    else
+      _ -> nil
+    end
+  end
+
   defp prune(dir, keep) do
     dir |> list() |> Enum.drop(keep) |> Enum.each(&File.rm/1)
   end

@@ -291,6 +291,8 @@ defmodule AppWeb.ConversationLiveTest do
       html = lv |> element(~s(#inspector [phx-value-tab="settings"])) |> render_click()
       assert html =~ "06:45"
       assert html =~ user.email
+      # the nightly snapshot line is always present (test env takes none -> "none yet" or a date)
+      assert has_element?(lv, "#last-backup", "Last backup:")
     end
 
     test "voice lock: mode and enrollment count", %{conn: conn} do

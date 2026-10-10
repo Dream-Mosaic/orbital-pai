@@ -159,6 +159,17 @@ defmodule AppWeb.ConversationLive do
     end
   end
 
+  # The nightly snapshot (App.Backup) — read on render of the Settings tab, a single dir listing.
+  defp backup_label do
+    case App.Backup.latest() do
+      %{date: date, bytes: bytes} -> "#{Date.to_iso8601(date)} (#{format_bytes(bytes)})"
+      nil -> nil
+    end
+  end
+
+  defp format_bytes(b) when b >= 1_048_576, do: "#{Float.round(b / 1_048_576, 1)} MB"
+  defp format_bytes(b), do: "#{max(div(b, 1024), 1)} KB"
+
   defp present_list do
     AppWeb.Presence.list("presence:voice")
     |> Enum.map(fn {_id, %{metas: [m | _]}} -> %{name: m.name, kiosk: m.kiosk} end)
@@ -337,7 +348,12 @@ defmodule AppWeb.ConversationLive do
             <.memory_panel :if={@tab == "memory"} facts={@facts} summary={@summary} />
             <.connectors_panel :if={@tab == "connectors"} google_accounts={@google_accounts} />
             <.voice_lock_panel :if={@tab == "voice_lock"} vl={@voice_lock} />
-            <.settings_panel :if={@tab == "settings"} user={@current_user} app_version={@app_version} />
+            <.settings_panel
+              :if={@tab == "settings"}
+              user={@current_user}
+              app_version={@app_version}
+              last_backup={backup_label()}
+            />
           </div>
         </aside>
       </main>
