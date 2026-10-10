@@ -192,10 +192,36 @@ defmodule AppWeb.VoiceChannel do
     # directly (no Conversation involvement). Subscribe BEFORE reading, so a change landing
     # in between still re-pushes.
     Phoenix.PubSub.subscribe(App.PubSub, "timers:#{socket.assigns.user_id}")
+    send(self(), :refresh_glance)
     {:noreply, push_timers(socket)}
   end
 
   def handle_info({:timers_changed, _user_id}, socket), do: {:noreply, push_timers(socket)}
+
+  # The idle orb's weather + next event (App.Glance). Built OFF the channel process — it runs
+  # real tools (weather, a multi-account calendar fan-out) — and refreshed on a slow cadence;
+  # the tool cache makes a refresh that lands inside a TTL free. Off in test (`:glance`).
+  @glance_refresh_ms 15 * 60 * 1000
+
+  def handle_info(:refresh_glance, socket) do
+    if Application.get_env(:app, :glance, true) do
+      me = self()
+      uid = socket.assigns.user_id
+
+      Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+        send(me, {:glance, App.Glance.build(uid)})
+      end)
+
+      Process.send_after(self(), :refresh_glance, @glance_refresh_ms)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:glance, glance}, socket) do
+    push(socket, "glance", glance)
+    {:noreply, socket}
+  end
 
   # Tracked via handle_info (not inline in join/3) so join returns fast; Presence auto-untracks
   # on channel death, so no terminate change is needed.
