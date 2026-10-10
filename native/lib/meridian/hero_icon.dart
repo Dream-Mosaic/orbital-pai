@@ -10,10 +10,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 /// 1.5 stroke and `stroke="currentColor"`, so the tint is applied here.
 enum HeroIcon {
   bell,
+  bolt,
   bookOpen,
+  cake,
+  chartBar,
   chatBubbleBottomCenterText,
   check,
   chevronLeft,
+  chevronRight,
   clipboardDocumentList,
   cog6Tooth,
   handRaised,
@@ -30,10 +34,14 @@ enum HeroIcon {
   /// The heroicons file name, which is also the web's `hero-<name>` class.
   String get asset => switch (this) {
         HeroIcon.bell => 'bell',
+        HeroIcon.bolt => 'bolt',
         HeroIcon.bookOpen => 'book-open',
+        HeroIcon.cake => 'cake',
+        HeroIcon.chartBar => 'chart-bar',
         HeroIcon.chatBubbleBottomCenterText => 'chat-bubble-bottom-center-text',
         HeroIcon.check => 'check',
         HeroIcon.chevronLeft => 'chevron-left',
+        HeroIcon.chevronRight => 'chevron-right',
         HeroIcon.clipboardDocumentList => 'clipboard-document-list',
         HeroIcon.cog6Tooth => 'cog-6-tooth',
         HeroIcon.handRaised => 'hand-raised',
