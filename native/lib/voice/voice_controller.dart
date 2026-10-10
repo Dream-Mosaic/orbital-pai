@@ -678,6 +678,22 @@ class VoiceController extends ChangeNotifier {
     _syncOrb();
   }
 
+  /// Type to Henry: a quiet turn, answered in text and never spoken. Explicit
+  /// intent, so the server lets it through the wake lock, PTT mode and Voice
+  /// Lock, and it interrupts a turn in flight.
+  ///
+  /// No optimistic thread line — the server's `transcript` echo adds the "you"
+  /// line, exactly once, on every device of the user. Returns false, pushing
+  /// nothing, for a blank message or while not joined, so the composer can
+  /// keep a draft that never left the device.
+  bool sendText(String text) {
+    final ch = _live;
+    final message = text.trim();
+    if (ch == null || message.isEmpty) return false;
+    ch.push('text', {'text': message});
+    return true;
+  }
+
   /// The user flipped the allow-barge-in switch; same settling rule as [setPtt].
   void setAllowInterruptions(bool enabled) {
     _prefsSettled = true;
