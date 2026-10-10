@@ -72,6 +72,20 @@ defmodule AppWeb.VoiceChannelTimersTest do
       assert [%{label: "Lasagna"}] = Timers.list_active(alice.id)
     end
 
+    test "a second tap on the same pill within two minutes doesn't start a twin", %{alice: alice} do
+      channel = join_voice(alice)
+      ref = push(channel, "start_timer", %{"seconds" => 480, "label" => "lasagna"})
+      assert_reply ref, :ok
+      ref = push(channel, "start_timer", %{"seconds" => 480, "label" => "lasagna"})
+      assert_reply ref, :ok
+      assert [%{label: "lasagna"}] = Timers.list_active(alice.id)
+
+      # a DIFFERENT duration (the step's other pill) is its own timer
+      ref = push(channel, "start_timer", %{"seconds" => 600, "label" => "lasagna"})
+      assert_reply ref, :ok
+      assert length(Timers.list_active(alice.id)) == 2
+    end
+
     test "a bad duration or an off-shape payload is refused", %{alice: alice} do
       channel = join_voice(alice)
       ref = push(channel, "start_timer", %{"seconds" => 0})

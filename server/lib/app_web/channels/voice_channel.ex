@@ -195,8 +195,10 @@ defmodule AppWeb.VoiceChannel do
   # App.Timers path the set_timer tool takes, so every device's strip shows it.
   def handle_in("start_timer", %{"seconds" => secs} = payload, socket) when is_integer(secs) do
     label = if is_binary(payload["label"]), do: String.slice(payload["label"], 0, 60)
+    uid = socket.assigns.user_id
 
-    case App.Timers.create(socket.assigns.user_id, secs, label) do
+    case App.Timers.recent_twin(uid, secs, label) || App.Timers.create(uid, secs, label) do
+      %App.Timers.Timer{} -> {:reply, :ok, socket}
       {:ok, _timer} -> {:reply, :ok, socket}
       {:error, _} -> {:reply, {:error, %{reason: "invalid_duration"}}, socket}
     end

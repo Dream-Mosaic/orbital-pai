@@ -184,6 +184,32 @@ void main() {
       expect(started, hasLength(1));
     });
 
+    testWidgets('a rebuilt card remembers its started pill (no twin timer)', (tester) async {
+      final started = <int>[];
+      final remembered = <String>{};
+      final data = {...cookStepCard, 'timer_seconds': [1500, 0]};
+      Widget card(Key key) => host(ThreadCardView(
+            key: key,
+            card: ThreadCard(type: 'cook_step', data: data),
+            startedPills: remembered,
+            onStartTimer: (s, _) {
+              started.add(s);
+              return true;
+            },
+          ));
+
+      await tester.pumpWidget(card(const ValueKey('a')));
+      await tester.tap(find.text('25 minutes'));
+      await tester.pump();
+
+      // the thread recycled it: a brand-new card widget, same session set
+      await tester.pumpWidget(card(const ValueKey('b')));
+      expect(find.text('Started · 25 minutes'), findsOneWidget);
+      await tester.tap(find.text('Started · 25 minutes'));
+      await tester.pump();
+      expect(started, [1500]);
+    });
+
     testWidgets('without a callback (or seconds) the pills are display-only', (tester) async {
       await tester.pumpWidget(view('cook_step', cookStepCard));
       await tester.tap(find.text('25 minutes'));

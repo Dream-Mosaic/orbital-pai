@@ -33,6 +33,17 @@ defmodule App.ToolsTest do
     assert App.Tools.prompt_block(%Config{tools: [FakeTool]}) == ""
   end
 
+  test "read_only?/1 tells lookups from tools that change something" do
+    for name <-
+          ~w(get_weather get_calendar_events list_timers read_list search_email read_email
+                   recall_memory home_find home_index check_household_messages run_routine get_recipe),
+        do: assert(App.Tools.read_only?(name), name)
+
+    for name <- ~w(set_timer add_to_list check_off create_reminder send_email
+                   send_household_message log_tracker_entry home_control play_music save_recipe),
+        do: refute(App.Tools.read_only?(name), name)
+  end
+
   test "execute/3 dispatches a call by name to the owning module" do
     assert {:ok, %{echoed: "hi"}} = App.Tools.execute("echo", %{"msg" => "hi"}, ctx([FakeTool]))
   end

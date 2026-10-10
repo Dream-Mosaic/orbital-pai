@@ -30,6 +30,8 @@ void main() {
   setUp(() {
     notifier = FakeNotifier();
     notices = BackgroundNotices(notifier: notifier);
+    // the start-up clear (its own test below) is not what these tests count
+    notifier.cancelAlls = 0;
   });
   tearDown(() => notices.dispose());
 
@@ -42,6 +44,13 @@ void main() {
       notices.onEvent('speak_start', speak('brain', "Dinner's ready."));
       notices.onEvent('timers', timers([timer(1, state: 'ringing')]));
       expect(notifier.shown, isEmpty);
+    });
+
+    test('a fresh start clears what a killed process left in the shade (ids restart at 1)', () {
+      final fresh = FakeNotifier();
+      final n = BackgroundNotices(notifier: fresh);
+      expect(fresh.cancelAlls, 1);
+      n.dispose();
     });
 
     test('a fresh controller assumes it is in front (no binding to ask)', () {
@@ -283,6 +292,7 @@ void main() {
     testWidgets('dispose cancels what it posted (a sign-out leaves no stale notice)',
         (tester) async {
       final mine = BackgroundNotices(notifier: notifier);
+      notifier.cancelAlls = 0; // its start-up clear is tested on its own
       mine.didChangeAppLifecycleState(AppLifecycleState.paused);
       mine.onEvent('speak_start', speak('reminder', 'Quick one —'));
       mine.dispose();

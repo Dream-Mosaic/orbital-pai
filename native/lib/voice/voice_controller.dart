@@ -668,6 +668,11 @@ class VoiceController extends ChangeNotifier {
     return true;
   }
 
+  /// Which cook-mode pills this session already started, by the card's pill key. Lives here, not
+  /// in the pill: the thread recycles off-screen items and rebuilds on a claim, and a pill that
+  /// forgot it was "Started" would happily start a second timer.
+  final Set<String> startedPills = <String>{};
+
   // ---- controls ----
 
   /// The native twin of index.js's startTalking()/stopTalking().

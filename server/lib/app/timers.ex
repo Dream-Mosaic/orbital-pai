@@ -143,6 +143,22 @@ defmodule App.Timers do
   def stop_one(%Timer{state: state} = t), do: transition(t.id, state, stop_state(state))
 
   @doc """
+  An active timer of the user's with this label and duration started in the last `window_s`
+  seconds, or nil — so a second tap on the same cook-mode pill (another device, a rebuilt card)
+  returns the first timer instead of starting a twin.
+  """
+  def recent_twin(user_id, seconds, label, window_s \\ 120) when is_integer(user_id) do
+    since = DateTime.add(DateTime.utc_now(), -window_s, :second)
+    ms = seconds * 1000
+
+    user_id
+    |> list_active()
+    |> Enum.find(fn t ->
+      t.duration_ms == ms and t.label == label and DateTime.compare(t.inserted_at, since) == :gt
+    end)
+  end
+
+  @doc """
   Silence every RINGING timer of the user (→ done) — "Henry, stop" / "okay" while the alarm
   sounds. Returns how many were silenced (0 = nothing was ringing).
   """

@@ -752,7 +752,12 @@ defmodule App.Conversations.Conversation do
         %{policy: %{phase: phase}} = data
       )
       when phase != :listening do
-    data = %{data | turn_actions: [{name, args} | data.turn_actions]}
+    # Only tools that CHANGED something: a lookup's result dies with the aborted turn, so telling
+    # the next brain "don't run it again" would leave it answering from nothing.
+    data =
+      if App.Tools.read_only?(name),
+        do: data,
+        else: %{data | turn_actions: [{name, args} | data.turn_actions]}
 
     case App.Cards.from_tool(name, args, result) do
       nil ->
@@ -1217,7 +1222,7 @@ defmodule App.Conversations.Conversation do
         Logger.info(~s|[wake] sleep: "#{t}"|)
         # halt + re-lock (vs the safety stop below, which halts but stays awake).
         data = lock_now(%{data | interrupt_pending?: false})
-        barge_in_feed(%{on_barge_in(data) | pending_request: nil})
+        barge_in_feed(%{on_barge_in(data) | pending_request: nil, pending_note: nil})
 
       safety_stop?(t, data.config) ->
         Logger.info(~s|[wake] safety stop: "#{t}"|)
@@ -1228,7 +1233,7 @@ defmodule App.Conversations.Conversation do
         data = if data.locked, do: unlock(data), else: data
         # A stop is a discard, not a follow-up: null any carried-forward request so it can't fold
         # into the next turn's brain prompt. (Normal ABI barge-in carry-forward is untouched.)
-        barge_in_feed(%{on_barge_in(data) | pending_request: nil})
+        barge_in_feed(%{on_barge_in(data) | pending_request: nil, pending_note: nil})
 
       data.locked ->
         :keep_state_and_data
@@ -1671,10 +1676,11 @@ defmodule App.Conversations.Conversation do
 
   # Re-lock (the SLEEP command): go silent until the next "wake up Henry". If already locked,
   # just clear wake_hit (no redundant notify). A sleep is a discard, so drop any pending request.
-  defp lock_now(%{locked: true} = data), do: %{data | wake_hit: false, pending_request: nil}
+  defp lock_now(%{locked: true} = data),
+    do: %{data | wake_hit: false, pending_request: nil, pending_note: nil}
 
   defp lock_now(data) do
-    data = %{data | locked: true, wake_hit: false, pending_request: nil}
+    data = %{data | locked: true, wake_hit: false, pending_request: nil, pending_note: nil}
     notify_locked(data)
     data
   end
@@ -2449,7 +2455,13 @@ defmodule App.Conversations.Conversation do
 
   defp on_barge_in(%{agenda_turn: nil, transcript: t} = data)
        when is_binary(t) and t != "",
-       do: %{data | pending_request: t, pending_note: already_done_note(data.turn_actions)}
+       do: %{
+         data
+         | pending_request: t,
+           # carry the note this turn already had (a second interruption must not drop the
+           # first one's actions) plus whatever THIS turn changed
+           pending_note: data.brain_note <> already_done_note(data.turn_actions)
+       }
 
   defp on_barge_in(data), do: data
 

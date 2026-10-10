@@ -29,6 +29,22 @@ defmodule App.Tools do
     end
   end
 
+  # run_routine only RETURNS the steps (their own write tools are what get recorded);
+  # check_household_messages is a read despite check_off being a write — hence no check_ prefix.
+  @read_only ~w(home_index home_find recall_memory check_household_messages run_routine)
+  @read_prefixes ~w(get_ list_ read_ search_)
+
+  @doc """
+  Does calling `name` only LOOK at something (weather, calendar, a list, email…)? Used where a
+  repeat is harmless but a write would double (an interrupted request's carried-forward note).
+  Read tools follow the get_/list_/read_/search_ naming (plus a few named ones); anything else counts as a write —
+  the safe side, since a missed write repeats an action and a missed read only re-reads.
+  """
+  def read_only?(name) when is_binary(name),
+    do: name in @read_only or String.starts_with?(name, @read_prefixes)
+
+  def read_only?(_), do: false
+
   @doc "The `tools` block for the Gemini request body (flatten every module's declarations)."
   def declarations(config) do
     [%{functionDeclarations: Enum.flat_map(enabled(config), & &1.declarations())}]

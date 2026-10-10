@@ -38,6 +38,11 @@ class BackgroundNotices with WidgetsBindingObserver {
       _foreground = state == null || state == AppLifecycleState.resumed;
       b.addObserver(this);
     }
+    // A fresh start owns the shade from here. Ids restart at 1 every process, and a stale
+    // notification left by a killed process would otherwise be REPLACED silently by the first new
+    // one (same id + setOnlyAlertOnce = no sound, no heads-up). The app is in front at this
+    // point, which is exactly when everything Henry posted is cleared anyway.
+    unawaited(_notifier.cancelAll());
   }
 
   final Notifier _notifier;

@@ -10,12 +10,15 @@ import 'card_frame.dart';
 /// the counter: where you are in the recipe, the step itself as large as the
 /// column allows, its times as timer suggestions, and a glance at what's next.
 class CookStepCard extends StatelessWidget {
-  const CookStepCard({super.key, required this.data, this.onStartTimer});
+  const CookStepCard({super.key, required this.data, this.onStartTimer, this.startedPills});
 
   final Map<String, dynamic> data;
 
   /// Starts a pill's timer — hands in the dough, one tap, no voice round.
   final bool Function(int seconds, String label)? onStartTimer;
+
+  /// Pills already started (survives this card being rebuilt); null = remember nothing.
+  final Set<String>? startedPills;
 
   static const Color accent = M.recipe;
 
@@ -76,8 +79,13 @@ class CookStepCard extends StatelessWidget {
                 for (var i = 0; i < timers.length; i++)
                   TimerPill(
                     timers[i],
+                    started: startedPills?.contains('$title|$step|$i') ?? false,
                     onTap: onStartTimer != null && secs[i] > 0
-                        ? () => onStartTimer!(secs[i], title.toLowerCase())
+                        ? () {
+                            final sent = onStartTimer!(secs[i], title.toLowerCase());
+                            if (sent) startedPills?.add('$title|$step|$i');
+                            return sent;
+                          }
                         : null,
                   ),
               ],
@@ -175,12 +183,15 @@ class _ProgressPainter extends CustomPainter {
 
 /// A step's time, offered as a timer: a coral pill with a small stopwatch.
 class TimerPill extends StatefulWidget {
-  const TimerPill(this.text, {super.key, this.onTap});
+  const TimerPill(this.text, {super.key, this.onTap, this.started = false});
 
   final String text;
 
   /// Starts the timer; null = display only. Returns whether it was sent.
   final bool Function()? onTap;
+
+  /// Already started (remembered outside this widget, which the thread may rebuild).
+  final bool started;
 
   static const Color colour = M.timer;
 
@@ -191,7 +202,13 @@ class TimerPill extends StatefulWidget {
 class _TimerPillState extends State<TimerPill> {
   /// Set once a tap has started it: the pill reads "Started" so a second tap
   /// can't quietly start a second timer for the same step.
-  bool _started = false;
+  late bool _started = widget.started;
+
+  @override
+  void didUpdateWidget(TimerPill old) {
+    super.didUpdateWidget(old);
+    if (widget.started && !_started) _started = true;
+  }
 
   void _tap() {
     final sent = widget.onTap?.call() ?? false;

@@ -2517,6 +2517,50 @@ defmodule App.Conversations.ConversationTest do
       assert carried =~ "what's the weather"
     end
 
+    test "lookups aren't 'already run'; a second interruption keeps the first one's actions" do
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Process.register(self(), :fake_brain_observer)
+
+      pid = start_conv()
+      Conversation.endpoint(pid, "set a pasta timer and check my calendar")
+      assert_receive {:fake_brain_transcript, _}, 1000
+      send(pid, {:brain_tool_result, "set_timer", %{"duration_seconds" => 600}, %{ok: true}})
+      send(pid, {:brain_tool_result, "get_calendar_events", %{}, %{events: []}})
+
+      Conversation.typed(pid, "and the weather")
+      assert_receive {:fake_brain_transcript, second}, 1000
+      assert second =~ "ALREADY run: set_timer"
+      refute second =~ "get_calendar_events", "a lookup's result died with the turn — redo it"
+
+      # interrupted AGAIN before this one answers: the first turn's set_timer must still ride along
+      Conversation.typed(pid, "also tomorrow")
+      assert_receive {:fake_brain_transcript, third}, 1000
+      assert third =~ "set_timer"
+      assert third =~ "also tomorrow"
+    end
+
+    test "'Henry stop' discards the request AND its note — the next turn starts clean" do
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Process.register(self(), :fake_brain_observer)
+
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      Conversation.endpoint(pid, "Henry, set a pasta timer")
+      assert_receive {:fake_brain_transcript, _}, 1000
+      send(pid, {:brain_tool_result, "set_timer", %{"duration_seconds" => 600}, %{ok: true}})
+
+      Conversation.partial(pid, "Henry stop")
+      Process.sleep(100)
+      Conversation.typed(pid, "what's the weather")
+      assert_receive {:fake_brain_transcript, next}, 1000
+      refute next =~ "ALREADY run"
+      refute next =~ "pasta timer"
+    end
+
     test "a claim mid-turn stops playback on the device that was PLAYING, not the claimer" do
       Application.put_env(:app, :fake_brain_done_ms, 5_000)
       on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)

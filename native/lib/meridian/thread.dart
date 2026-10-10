@@ -26,6 +26,7 @@ class Thread extends StatelessWidget {
     this.scrollController,
     this.onAck,
     this.onStartTimer,
+    this.startedPills,
     this.joinsAbove = true,
   });
 
@@ -39,6 +40,9 @@ class Thread extends StatelessWidget {
 
   /// A card's tappable timer (a cook-mode step's "8 minutes" pill).
   final bool Function(int seconds, String label)? onStartTimer;
+
+  /// Pill keys already started this session (owned by the controller).
+  final Set<String>? startedPills;
 
   /// Whether something above lights the spine — the single column's elbow
   /// (and the timer strip's rail segment) bridging down from the orb. Then
@@ -158,7 +162,7 @@ class Thread extends StatelessWidget {
               left: rail + 18,
               right: math.max(0.0, row - (rail + 18) - maxCardWidth),
             ),
-            child: ThreadCardView(card: item, onStartTimer: onStartTimer),
+            child: ThreadCardView(card: item, onStartTimer: onStartTimer, startedPills: startedPills),
           ),
       };
 
