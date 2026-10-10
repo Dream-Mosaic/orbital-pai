@@ -487,6 +487,23 @@ class VoiceController extends ChangeNotifier {
     ));
   }
 
+  /// One persisted turn from a `history` push. Its cards go between the
+  /// question and the answer — where they appeared live, since a card arrives
+  /// before the answer text — through the same filter as the live `card` push.
+  void _addHistoryTurn(Map<String, dynamic> turn) {
+    final you = turn['you'] as String?;
+    final assistant = turn['assistant'] as String?;
+    if (you != null) _addLine('you', you);
+    final cards = turn['cards'];
+    if (cards is List) {
+      for (final raw in cards) {
+        final card = ThreadCard.fromWire(raw);
+        if (card != null) _thread.add(card);
+      }
+    }
+    if (assistant != null) _addLine('brain', assistant);
+  }
+
   void _showThinking() {
     if (_thinkingIndex != null) return;
     _thread.add(const ThreadLine(
@@ -973,11 +990,7 @@ class VoiceController extends ChangeNotifier {
           _thinkingIndex = null;
           _toolChipIndexes.clear();
           for (final t in turns) {
-            final turn = (t as Map).cast<String, dynamic>();
-            final you = turn['you'] as String?;
-            final assistant = turn['assistant'] as String?;
-            if (you != null) _addLine('you', you);
-            if (assistant != null) _addLine('brain', assistant);
+            _addHistoryTurn((t as Map).cast<String, dynamic>());
           }
           _thread.add(const ThreadDivider());
           // Leave the one-shot guard set so a later plain (unflagged) history push
@@ -987,11 +1000,7 @@ class VoiceController extends ChangeNotifier {
           // One-shot: a plain rebind re-pushes history and must not duplicate lines.
           _historyBackfilled = true;
           for (final t in turns) {
-            final turn = (t as Map).cast<String, dynamic>();
-            final you = turn['you'] as String?;
-            final assistant = turn['assistant'] as String?;
-            if (you != null) _addLine('you', you);
-            if (assistant != null) _addLine('brain', assistant);
+            _addHistoryTurn((t as Map).cast<String, dynamic>());
           }
           _thread.add(const ThreadDivider());
         }
@@ -1059,14 +1068,8 @@ class VoiceController extends ChangeNotifier {
         // A visual answer (App.Cards), appended in arrival order. It holds no
         // handle, so the index bookkeeping above is untouched. Unknown types
         // are dropped rather than guessed at.
-        final card = p['card'];
-        if (card is Map) {
-          final data = card.cast<String, dynamic>();
-          final type = data['type'];
-          if (type is String && ThreadCard.knownTypes.contains(type)) {
-            _thread.add(ThreadCard(type: type, data: data));
-          }
-        }
+        final card = ThreadCard.fromWire(p['card']);
+        if (card != null) _thread.add(card);
       case 'metrics':
         final metrics = ThreadMetrics(
           ttfaMs: (p['ttfa'] as num?)?.round(),

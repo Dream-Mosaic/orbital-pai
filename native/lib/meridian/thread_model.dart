@@ -220,6 +220,19 @@ class ThreadCard extends ThreadItem {
     'email',
   };
 
+  /// A card as the channel sends it (the live `card` push and each history
+  /// turn's `cards`), or null when it is not a map or its type is not one
+  /// this build can lay out.
+  static ThreadCard? fromWire(Object? raw) {
+    if (raw is! Map) return null;
+    final data = raw.cast<String, dynamic>();
+    final type = data['type'];
+    if (type is String && knownTypes.contains(type)) {
+      return ThreadCard(type: type, data: data);
+    }
+    return null;
+  }
+
   /// Tighter than a line's rhythm against the tool chip above it; the
   /// collapse rule still gives the answer line below its own 16.8.
   @override
