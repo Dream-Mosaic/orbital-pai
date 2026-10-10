@@ -59,7 +59,7 @@ defmodule App.Adapters.TextModel.Gemini do
     tool_ctx = %{session_id: sid, user_id: App.Users.id_from_session(sid), config: cfg}
 
     system = system_for(:brain, cfg, ctx)
-    contents = build_contents(ctx, time_note(cfg) <> transcript)
+    contents = build_contents(ctx, time_note(cfg) <> quiet_note(opts) <> transcript)
     run_rounds(contents, system, cfg, thinking, tool_ctx, target, 0)
   end
 
@@ -260,6 +260,17 @@ defmodule App.Adapters.TextModel.Gemini do
 
     "(Current time: #{DateTime.to_iso8601(local)} (#{cfg.timezone}). In UTC that is " <>
       "#{DateTime.to_iso8601(utc)}.)\n"
+  end
+
+  @doc false
+  # A typed (quiet) turn: the reply is read on screen, never spoken. Rides the final user
+  # message beside time_note for the same prefix-cache reason; voice turns get nothing.
+  def quiet_note(opts) do
+    if Keyword.get(opts, :quiet, false),
+      do:
+        "(The user TYPED this and will read your reply on screen — it won't be spoken; " <>
+          "light markdown is fine.)\n",
+      else: ""
   end
 
   defp error_string(reason) when is_binary(reason), do: reason

@@ -84,4 +84,66 @@ defmodule App.Conversations.BrainStreamTest do
     assert_received {:brain_done, "the answer"}
     assert new_state.context_seq == 1, "no rotation once the brain is genuinely done"
   end
+
+  # ---- tts: false — a quiet (typed) turn: the reply is read, never spoken, so there is no
+  # Cartesia socket at all. Same owner-message contract as the spoken path. ----
+  describe "tts: false" do
+    # No transcript: nothing calls Gemini, so the process can be driven by hand exactly the
+    # way its Gemini task would drive it.
+    defp start_quiet do
+      {:ok, pid} = BrainStream.start(owner: self(), config: %Config{}, tts: false)
+      on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+      pid
+    end
+
+    test "never connects to Cartesia and is ready at once" do
+      pid = start_quiet()
+      state = :sys.get_state(pid)
+
+      assert state.ready
+      assert state.conn == nil
+      assert state.websocket == nil
+    end
+
+    test "deltas reach the owner as brain_text, and done carries the accumulated answer" do
+      pid = start_quiet()
+      send(pid, {:gemini_delta, "it's "})
+      send(pid, {:gemini_delta, "sunny"})
+      send(pid, {:gemini_done})
+
+      assert_receive {:brain_text, "it's "}, 500
+      assert_receive {:brain_text, "sunny"}, 500
+      assert_receive {:brain_done, "it's sunny"}, 500
+      # stays alive like the spoken done path: the owner clears + terminates us
+      assert Process.alive?(pid)
+    end
+
+    test "a bridge filler is dropped (nothing to speak it with) and never reaches the answer" do
+      pid = start_quiet()
+      send(pid, {:gemini_bridge, "one sec"})
+      send(pid, {:gemini_delta, "done"})
+      send(pid, {:gemini_done})
+
+      assert_receive {:brain_done, "done"}, 500
+      refute_received {:brain_text, "one sec"}
+    end
+
+    test "tool calls are still relayed, and an empty answer still finishes" do
+      pid = start_quiet()
+      send(pid, {:gemini_tool_call, "get_weather"})
+      send(pid, {:gemini_done})
+
+      assert_receive {:brain_tool_call, "get_weather"}, 500
+      assert_receive {:brain_done, ""}, 500
+    end
+
+    test "a gemini error is reported as brain_error" do
+      pid = start_quiet()
+      ref = Process.monitor(pid)
+      send(pid, {:gemini_error, {:http, 500}})
+
+      assert_receive {:brain_error, {:http, 500}}, 500
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    end
+  end
 end

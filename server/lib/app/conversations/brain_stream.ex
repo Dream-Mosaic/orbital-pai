@@ -9,6 +9,11 @@ defmodule App.Conversations.BrainStream do
   audio chunks are forwarded to the owner as `{:brain_audio, pcm}`. When Cartesia signals
   done we send the owner `{:brain_done}` and stop. Any failure sends `{:brain_error, reason}`.
 
+  `tts: false` is a **quiet** (typed) turn: the reply is read on screen, never spoken, so
+  there is no Cartesia socket at all — the stream is ready at once, bridge fillers are
+  dropped, and `{:brain_done, text}` follows Gemini's own done. The owner-message contract is
+  otherwise identical, and the brain is told the reply will be read (`quiet: true`).
+
   Run it under a Task.Supervisor-style lifecycle (the Conversation starts/kills it per turn).
   """
   use GenServer
@@ -53,6 +58,8 @@ defmodule App.Conversations.BrainStream do
       # fired reminder is fulfilled in isolation (no conversation bleed / repetition).
       recent_context: Keyword.get(opts, :recent_context, true),
       config: Keyword.fetch!(opts, :config),
+      # false = a quiet (typed) turn: text only, no Cartesia socket (see the moduledoc)
+      tts: Keyword.get(opts, :tts, true),
       # Cartesia context base + a sequence we bump on each expiry. A context auto-expires 1s after
       # its last AUDIO output (Cartesia docs), so a long tool round (silent bridge→answer gap) kills
       # the bridge's context before the answer arrives. We can't keep it alive (no keepalive exists,
@@ -79,6 +86,12 @@ defmodule App.Conversations.BrainStream do
   end
 
   @impl true
+  def handle_continue(:connect, %{tts: false} = state) do
+    # Nothing to speak, so nothing to connect: ready the moment we exist.
+    state = %{state | ready: true}
+    {:noreply, if(state.transcript, do: start_gemini(state), else: state)}
+  end
+
   def handle_continue(:connect, state) do
     case connect(state) do
       {:ok, state} -> {:noreply, state}
@@ -102,7 +115,22 @@ defmodule App.Conversations.BrainStream do
   end
 
   # ---- Gemini task messages ----
+  # A quiet turn (tts: false) never touches Cartesia: deltas go to the owner (and the answer),
+  # bridge fillers have no voice to speak them, and the answer is complete the moment Gemini
+  # is. Stays alive after done like the spoken path — the owner clears + terminates us.
   @impl true
+  def handle_info({:gemini_delta, text}, %{tts: false} = state) do
+    send(state.owner, {:brain_text, text})
+    {:noreply, %{state | text: state.text <> text}}
+  end
+
+  def handle_info({:gemini_bridge, _text}, %{tts: false} = state), do: {:noreply, state}
+
+  def handle_info({:gemini_done}, %{tts: false} = state) do
+    send(state.owner, {:brain_done, state.text})
+    {:noreply, %{state | gemini_done: true}}
+  end
+
   def handle_info({:gemini_delta, text}, %{ready: false} = state) do
     send(state.owner, {:brain_text, text})
     {:noreply, %{state | pending: [text | state.pending], text: state.text <> text}}
@@ -220,6 +248,7 @@ defmodule App.Conversations.BrainStream do
       sid = state.session_id
       cfg = state.config
       recent? = state.recent_context
+      quiet? = not state.tts
 
       {:ok, task} =
         Task.start_link(fn ->
@@ -235,7 +264,7 @@ defmodule App.Conversations.BrainStream do
           Gemini.stream_brain(
             transcript,
             ctx,
-            [config: cfg, thinking: cfg.brain_thinking, session_id: sid],
+            [config: cfg, thinking: cfg.brain_thinking, session_id: sid, quiet: quiet?],
             pid
           )
         end)

@@ -401,6 +401,16 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert String.ends_with?(note, "\n")
   end
 
+  test "quiet_note/1 tells the brain a typed turn is read, not heard; a voice turn gets nothing" do
+    note = Gemini.quiet_note(quiet: true)
+    assert note =~ "TYPED"
+    assert note =~ "won't be spoken"
+    assert String.ends_with?(note, "\n")
+
+    assert Gemini.quiet_note([]) == ""
+    assert Gemini.quiet_note(quiet: false) == ""
+  end
+
   test "brain prompt teaches the follow-up offer" do
     prompt = Gemini.brain_prompt("Henry")
     assert prompt =~ "follow-up"
