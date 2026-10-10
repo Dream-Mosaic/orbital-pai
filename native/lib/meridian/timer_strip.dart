@@ -122,65 +122,71 @@ class _TimerStripState extends State<TimerStrip>
       final spineX = w * 0.36 + 8;
       final fieldX = 6 + (w - 12) * 0.36 + 18;
 
+      // Full column width, ALWAYS: the voice screen's Column centres loose
+      // children, so a Stack left to shrink-wrap its chips would be centred
+      // too — and its rail would land right of the thread's spine.
       return Padding(
         padding: const EdgeInsets.only(bottom: M.columnGap),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // Up into the gap above to meet the elbow; down to where the
-            // thread's own spine (which reaches 12px above the thread) takes over.
-            Positioned(
-              left: spineX,
-              width: 1.5,
-              top: -M.columnGap,
-              bottom: 0,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: widget.glow.withValues(alpha: 0.6),
-                    boxShadow: [
-                      BoxShadow(
-                          color: widget.glow.withValues(alpha: 0.35),
-                          blurRadius: 5),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: spineX + 0.75 - 3.5,
-              top: _TimerChip._padTop + 2,
-              child: const _Node(),
-            ),
-            Padding(
-              padding: EdgeInsets.only(left: fieldX),
-              // Overflowing chips stop at the column edge; a ringing chip's glow
-              // still gets room above, below and to its left.
-              child: ClipRect(
-                clipper: const _GlowRoom(),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  clipBehavior: Clip.none,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final (i, t) in widget.timers.indexed) ...[
-                        if (i > 0) const SizedBox(width: 8),
-                        _TimerChip(
-                          key: ValueKey('timer-${t.id}'),
-                          entry: t,
-                          now: now,
-                          pulse: _pulse,
-                          onDismiss: widget.onDismiss,
-                          onCancel: widget.onCancel,
-                        ),
+        child: SizedBox(
+          width: w,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // Up into the gap above to meet the elbow; down to where the
+              // thread's own spine (which reaches 12px above the thread) takes over.
+              Positioned(
+                left: spineX,
+                width: 1.5,
+                top: -M.columnGap,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: widget.glow.withValues(alpha: 0.6),
+                      boxShadow: [
+                        BoxShadow(
+                            color: widget.glow.withValues(alpha: 0.35),
+                            blurRadius: 5),
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+              Positioned(
+                left: spineX + 0.75 - 3.5,
+                top: _TimerChip._padTop + 2,
+                child: const _Node(),
+              ),
+              Padding(
+                padding: EdgeInsets.only(left: fieldX),
+                // Overflowing chips stop at the column edge; a ringing chip's glow
+                // still gets room above, below and to its left.
+                child: ClipRect(
+                  clipper: const _GlowRoom(),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    clipBehavior: Clip.none,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final (i, t) in widget.timers.indexed) ...[
+                          if (i > 0) const SizedBox(width: 8),
+                          _TimerChip(
+                            key: ValueKey('timer-${t.id}'),
+                            entry: t,
+                            now: now,
+                            pulse: _pulse,
+                            onDismiss: widget.onDismiss,
+                            onCancel: widget.onCancel,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     });
