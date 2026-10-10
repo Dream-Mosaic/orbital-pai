@@ -235,10 +235,6 @@ class _HenryHomeState extends State<HenryHome> {
   /// settles to signedIn.
   void _buildShell(AppConnection conn) {
     _conn = conn;
-    // NOT `late final ... = VoiceController(...)`: that lazy form would defer
-    // construction to build()'s first read, which runs AFTER connect() below
-    // — so the controller would adopt an already-joined connection instead of
-    // joining alongside it.
     // Notifications while backgrounded: built with the shell, so a sign-out
     // takes the last user's notifications down with it.
     final notices = BackgroundNotices(
@@ -246,6 +242,10 @@ class _HenryHomeState extends State<HenryHome> {
       binding: WidgetsBinding.instance,
     );
     _notices = notices;
+    // NOT `late final ... = VoiceController(...)`: that lazy form would defer
+    // construction to build()'s first read, which runs AFTER connect() below
+    // — so the controller would adopt an already-joined connection instead of
+    // joining alongside it.
     final vc = VoiceController(connection: conn, notices: notices);
     _vc = vc;
     // Asked once the voice screen is up (and at most once per install — the
