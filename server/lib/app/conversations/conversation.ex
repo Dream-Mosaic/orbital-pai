@@ -179,6 +179,10 @@ defmodule App.Conversations.Conversation do
       # Visual cards (App.Cards) held behind the reflex for the same reason, newest first;
       # released by :flush_brain right after the caption, dropped with it on an abort.
       card_buffer: [],
+      # Every card this turn actually SHOWED (collected at emit time, so a held card counts
+      # once :flush_brain releases it and one dropped with an aborted turn never does), newest
+      # first. Persisted with the turn for history replay; reset with the turn fields.
+      turn_cards: [],
       # The FINAL answer, held for the same reason and released by the same :flush_brain,
       # when the brain finishes generating before the reflex has been spoken. Pushing it
       # at {:brain_done, _} time (as we used to) put the answer on screen ahead of the
@@ -744,8 +748,7 @@ defmodule App.Conversations.Conversation do
 
       card ->
         if data.policy.reflex_sent do
-          emit(data, {:card, card})
-          {:keep_state, data}
+          {:keep_state, emit_card(data, card)}
         else
           {:keep_state, %{data | card_buffer: [card | data.card_buffer]}}
         end
@@ -1931,7 +1934,7 @@ defmodule App.Conversations.Conversation do
         emit(data, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()})
     end
 
-    data.card_buffer |> Enum.reverse() |> Enum.each(&emit(data, {:card, &1}))
+    data = data.card_buffer |> Enum.reverse() |> Enum.reduce(data, &emit_card(&2, &1))
 
     data =
       data.brain_buffer
@@ -1975,6 +1978,7 @@ defmodule App.Conversations.Conversation do
          # would render the barged turn's caption/answer against the new utterance.
          caption_buffer: [],
          card_buffer: [],
+         turn_cards: [],
          pending_answer: nil,
          agenda_turn: nil,
          quiet_turn: false,
@@ -2277,7 +2281,8 @@ defmodule App.Conversations.Conversation do
           reflex_text: data.reflex_text,
           brain_text: data.brain_text,
           ttfa_ms: data.ttfa,
-          ttb_ms: data.ttb
+          ttb_ms: data.ttb,
+          cards: shown_cards(data)
         }
 
         Task.Supervisor.start_child(App.Conversations.TaskSup, fn -> persist_turn(attrs) end)
@@ -2299,7 +2304,8 @@ defmodule App.Conversations.Conversation do
           reflex_text: data.reflex_text,
           brain_text: data.brain_text,
           ttfa_ms: data.ttfa,
-          ttb_ms: data.ttb
+          ttb_ms: data.ttb,
+          cards: shown_cards(data)
         }
 
         # Persist first, then the updater (so the rolling summary actually sees this turn —
@@ -2325,6 +2331,15 @@ defmodule App.Conversations.Conversation do
       {:error, reason} -> Logger.warning("[memory] persist failed: #{inspect(reason)}")
     end
   end
+
+  # Show a card, and remember it for the turn's persisted row: what replays is what was seen.
+  defp emit_card(data, card) do
+    emit(data, {:card, card})
+    %{data | turn_cards: [card | data.turn_cards]}
+  end
+
+  # The cards the turn showed, oldest first and capped for the row (App.Cards.for_history/1).
+  defp shown_cards(data), do: data.turn_cards |> Enum.reverse() |> App.Cards.for_history()
 
   # What to do with the turn the user just interrupted:
   #   * the brain ALREADY answered (brain_text set, e.g. barged during draining) → a complete
@@ -2360,13 +2375,17 @@ defmodule App.Conversations.Conversation do
       user_id ->
         data = flush_interrupt_persist(data, :full)
 
+        # An answered turn keeps the cards it showed (they were on screen), even though its
+        # answer may be truncated to what was heard. The unanswered/carried-forward path never
+        # gets here: :cancel_brain drops its cards, and the next turn persists its own.
         attrs = %{
           user_id: user_id,
           user_text: t,
           reflex_text: data.reflex_text,
           brain_text: data.brain_text,
           ttfa_ms: data.ttfa,
-          ttb_ms: data.ttb
+          ttb_ms: data.ttb,
+          cards: shown_cards(data)
         }
 
         %{data | pending_interrupt_persist: {attrs, data.reflex_ms, data.brain_ms}}
@@ -2427,6 +2446,7 @@ defmodule App.Conversations.Conversation do
       | brain_buffer: [],
         caption_buffer: [],
         card_buffer: [],
+        turn_cards: [],
         pending_answer: nil,
         audio_until: nil,
         brain_fallback: false,
