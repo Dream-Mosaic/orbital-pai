@@ -49,6 +49,27 @@ defmodule App.Tools.Timers do
         parameters: %{type: "object", properties: %{}}
       },
       %{
+        name: "add_to_timer",
+        description:
+          "Add time to a timer: \"add 2 minutes to the pasta\", or, while one is ringing, " <>
+            "\"give it 5 more minutes\" (it starts counting again). Label picks one; omit it " <>
+            "for the ringing timer or the only one.",
+        parameters: %{
+          type: "object",
+          properties: %{
+            seconds: %{
+              type: "integer",
+              description: "How much to add, in seconds (2 minutes = 120)."
+            },
+            label: %{
+              type: "string",
+              description: "The timer's name (\"pasta\"), if they gave one."
+            }
+          },
+          required: ["seconds"]
+        }
+      },
+      %{
         name: "cancel_timer",
         description:
           "Cancel a running timer, or silence one that is ringing. Pass the label to pick one, " <>
@@ -74,7 +95,8 @@ defmodule App.Tools.Timers do
       "countdown, so confirm in a few words (\"Pasta timer, 10 minutes.\") without reading " <>
       "back the end time unless asked. \"How long left?\" is list_timers. \"Cancel\" or " <>
       "\"stop\" the timer is cancel_timer — it also silences a ringing one; pass the label when " <>
-      "they name one, all=true for all of them, and neither when there's just one."
+      "they name one, all=true for all of them, and neither when there's just one. \"Add 2 " <>
+      "minutes to the pasta\" or, while it rings, \"give it 5 more minutes\" is add_to_timer."
   end
 
   @impl true
@@ -98,6 +120,34 @@ defmodule App.Tools.Timers do
     else
       {:error, :invalid_duration} -> {:error, @range_error}
       {:error, _changeset} -> {:error, "couldn't save that timer"}
+    end
+  end
+
+  def execute("add_to_timer", args, ctx) do
+    with {:ok, seconds} <- seconds_arg(args["seconds"]),
+         {:ok, %Timer{} = t} <- Timers.extend(ctx.user_id, args["label"], seconds) do
+      {:ok,
+       %{
+         extended: true,
+         label: t.label,
+         added: human_ms(seconds * 1000),
+         remaining: human_ms(Timers.remaining_ms(t, DateTime.utc_now())),
+         ends_at_local: local_clock(t.ends_at)
+       }}
+    else
+      {:error, :invalid_duration} ->
+        {:error, @range_error}
+
+      {:error, :not_found} ->
+        {:ok, %{extended: false, note: "no timer by that name is running"}}
+
+      {:error, {:ambiguous, many}} ->
+        {:ok,
+         %{
+           extended: false,
+           note: "which timer?",
+           timers: Enum.map(many, &(&1.label || "unnamed"))
+         }}
     end
   end
 

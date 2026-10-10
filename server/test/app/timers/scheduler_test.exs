@@ -45,6 +45,16 @@ defmodule App.Timers.SchedulerTest do
     assert state_of(t) == "ringing"
   end
 
+  test "an extended timer doesn't ring at its OLD end time — only at the new one", %{alice: alice} do
+    start_supervised!(Scheduler)
+    {:ok, t} = Timers.create(alice.id, 1, "pasta")
+    {:ok, _} = Timers.extend(alice.id, "pasta", 2)
+
+    refute_receive {:agenda_due, _}, 1_600
+    assert state_of(t) == "running"
+    assert_receive {:agenda_due, %App.Agenda.Item{kind: :timer}}, 2_500
+  end
+
   test "a cancelled timer never rings", %{alice: alice} do
     start_supervised!(Scheduler)
     {:ok, t} = Timers.create(alice.id, 1)

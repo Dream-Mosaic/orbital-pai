@@ -103,6 +103,20 @@ defmodule App.Timers.Scheduler do
   end
 
   defp ring(id, state) do
+    case App.Repo.get(Timer, id) do
+      # extended since this send_after was armed (Timers.extend/3): not due yet — re-arm for
+      # the new end instead of ringing at the old one
+      %Timer{state: "running", ends_at: ends_at} = t when is_struct(ends_at, DateTime) ->
+        if DateTime.diff(ends_at, DateTime.utc_now(), :millisecond) > 500,
+          do: arm(t.id, ends_at),
+          else: do_ring(id, state)
+
+      _ ->
+        do_ring(id, state)
+    end
+  end
+
+  defp do_ring(id, state) do
     case Timers.fire(id) do
       {:ok, timer} ->
         Logger.info("[timers] ##{id} ringing → agenda:#{timer.user_id}")

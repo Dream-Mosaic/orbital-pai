@@ -158,6 +158,81 @@ defmodule App.Timers do
     end)
   end
 
+  @doc """
+  Add `seconds` to one of the user's timers: by spoken label, or `nil` for the obvious one (the
+  ringing one, else the only one). A RUNNING timer's end moves out (and its total grows, so the
+  strip's progress stays honest); a RINGING one is snoozed — running again, ending `seconds`
+  from now ("give it five more minutes"). `{:ok, timer}`, `{:error, :not_found}`,
+  `{:error, {:ambiguous, timers}}` or `{:error, :invalid_duration}`.
+  """
+  def extend(user_id, target, seconds)
+      when is_integer(seconds) and seconds >= 1 and seconds <= @max_seconds do
+    with {:ok, timer} <- pick(user_id, target) do
+      now = now()
+
+      changes =
+        case timer.state do
+          "ringing" ->
+            [
+              state: "running",
+              ends_at: DateTime.add(now, seconds, :second),
+              duration_ms: seconds * 1000,
+              fired_at: nil
+            ]
+
+          "running" ->
+            [
+              ends_at: DateTime.add(timer.ends_at, seconds, :second),
+              duration_ms: timer.duration_ms + seconds * 1000
+            ]
+        end
+
+      {count, _} =
+        Timer
+        |> where([t], t.id == ^timer.id and t.state == ^timer.state)
+        |> Repo.update_all(set: changes ++ [updated_at: now])
+
+      if count == 1 do
+        extended = Repo.get!(Timer, timer.id)
+        # A RUNNING timer still has its original fire pending: the scheduler re-checks the end
+        # when it arrives and re-arms for the new one. Arming here too would leave TWO fires at
+        # the new end. A snoozed (was ringing) timer has no fire pending, so it needs one.
+        if timer.state == "ringing", do: App.Timers.Scheduler.schedule(extended)
+        broadcast(user_id)
+        {:ok, extended}
+      else
+        # it changed state under us (rang, or was dismissed) — let the caller try again
+        {:error, :not_found}
+      end
+    end
+  end
+
+  def extend(_user_id, _target, _seconds), do: {:error, :invalid_duration}
+
+  defp pick(user_id, label) when is_binary(label) and label != "" do
+    key = match_key(label)
+    active = list_active(user_id)
+
+    case Enum.filter(active, &(match_key(&1.label) == key)) do
+      [] -> Enum.filter(active, &partial_match?(&1.label, key))
+      exact -> exact
+    end
+    |> one()
+  end
+
+  defp pick(user_id, _none) do
+    active = list_active(user_id)
+
+    case Enum.filter(active, &(&1.state == "ringing")) do
+      [ringing] -> {:ok, ringing}
+      _ -> one(active)
+    end
+  end
+
+  defp one([]), do: {:error, :not_found}
+  defp one([t]), do: {:ok, t}
+  defp one(many), do: {:error, {:ambiguous, many}}
+
   @doc "Is any of the user's timers ringing right now? (a read — cheap enough for the FSM)"
   def any_ringing?(user_id) when is_integer(user_id) do
     Timer |> where([t], t.user_id == ^user_id and t.state == "ringing") |> Repo.exists?()

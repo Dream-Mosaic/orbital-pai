@@ -17,8 +17,10 @@ defmodule App.Tools.TimersTest do
 
   defp no_user, do: %{session_id: "x", user_id: nil, config: App.Config.default()}
 
-  test "declares set_timer, list_timers, cancel_timer and is registered" do
-    assert Enum.map(Tool.declarations(), & &1.name) == ~w(set_timer list_timers cancel_timer)
+  test "declares set_timer, list_timers, add_to_timer, cancel_timer and is registered" do
+    assert Enum.map(Tool.declarations(), & &1.name) ==
+             ~w(set_timer list_timers add_to_timer cancel_timer)
+
     assert Tool in App.Config.default().tools
   end
 
@@ -91,6 +93,24 @@ defmodule App.Tools.TimersTest do
     test "none running says so", %{user: user} do
       assert {:ok, %{count: 0, timers: [], note: _}} =
                Tool.execute("list_timers", %{}, ctx(user))
+    end
+  end
+
+  describe "add_to_timer" do
+    test "adds time by label and says how long is left", %{user: alice} do
+      {:ok, _} =
+        Tool.execute("set_timer", %{"duration_seconds" => 600, "label" => "pasta"}, ctx(alice))
+
+      assert {:ok, %{extended: true, label: "pasta", added: added, remaining: remaining}} =
+               Tool.execute("add_to_timer", %{"seconds" => 120, "label" => "pasta"}, ctx(alice))
+
+      assert added =~ "2 min"
+      assert remaining =~ "11 min" or remaining =~ "12 min"
+    end
+
+    test "with nothing running it says so instead of failing", %{user: alice} do
+      assert {:ok, %{extended: false}} =
+               Tool.execute("add_to_timer", %{"seconds" => 60}, ctx(alice))
     end
   end
 

@@ -150,6 +150,32 @@ defmodule App.TimersTest do
     end
   end
 
+  describe "extend/3" do
+    test "adds time to a running timer (by label, or the only one)", %{alice: alice} do
+      {:ok, t} = Timers.create(alice.id, 600, "pasta")
+      {:ok, %Timer{} = e} = Timers.extend(alice.id, "pasta", 120)
+      assert DateTime.diff(e.ends_at, t.ends_at, :second) == 120
+      assert e.duration_ms == 720_000
+      assert {:ok, _} = Timers.extend(alice.id, nil, 60)
+    end
+
+    test "on a RINGING timer it snoozes: running again, ending that far from now", %{alice: alice} do
+      {:ok, t} = Timers.create(alice.id, 60, "eggs")
+      {:ok, _} = Timers.fire(t.id)
+      {:ok, %Timer{state: "running"} = e} = Timers.extend(alice.id, "eggs", 300)
+      left = DateTime.diff(e.ends_at, DateTime.utc_now(), :second)
+      assert left in 298..300
+    end
+
+    test "nothing to extend, an ambiguous name, or a silly amount", %{alice: alice} do
+      assert {:error, :not_found} = Timers.extend(alice.id, nil, 60)
+      {:ok, _} = Timers.create(alice.id, 60, "pasta")
+      {:ok, _} = Timers.create(alice.id, 60, "rice")
+      assert {:error, {:ambiguous, _}} = Timers.extend(alice.id, nil, 60)
+      assert {:error, :invalid_duration} = Timers.extend(alice.id, "pasta", 0)
+    end
+  end
+
   describe "dismiss/2" do
     test "ringing -> done, own timers only", %{alice: alice, bob: bob} do
       {:ok, t} = Timers.create(alice.id, 60)

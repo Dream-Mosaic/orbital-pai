@@ -30,7 +30,13 @@ defmodule App.Conversations.ConversationTest do
   # owner -- exits, or an in-flight pull outlives its owner, its connection is torn down
   # mid-query, and the next test's first write sees SQLite "Database busy". (It traps exits,
   # so the test's own exit does not take it down promptly.)
-  defp stop_session(pid), do: :gen_statem.stop(pid, :normal, 2_000)
+  #
+  # Drain the persist / memory-updater / ack tasks first, while this test's Mox stubs still answer
+  # them — a background write outliving the test is the other half of the same flake (#23).
+  defp stop_session(pid) do
+    App.DataCase.drain_conversation_tasks()
+    :gen_statem.stop(pid, :normal, 2_000)
+  end
 
   describe "voice activation gate" do
     test "locked: an utterance WITHOUT the name produces no response" do

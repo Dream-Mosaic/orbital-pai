@@ -21,6 +21,7 @@ const Map<String, String> kToolLabels = {
   'set_timer': 'setting a timer',
   'list_timers': 'checking your timers',
   'cancel_timer': 'stopping a timer',
+  'add_to_timer': 'adding time to a timer',
   // reminders
   'acknowledge_reminder': 'clearing that reminder',
   'create_followup': 'setting a follow-up',
