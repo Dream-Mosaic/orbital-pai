@@ -63,6 +63,29 @@ defmodule App.Tools.RemindersTest do
     assert item.kind == "reminder"
   end
 
+  test "list_reminders items carry a repeating reminder's rule (one-shots carry none)", %{
+    user: user
+  } do
+    due = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+    rule = %{"freq" => "weekly", "interval" => 1, "byday" => ["tue"]}
+
+    {:ok, _} =
+      App.Reminders.create(%{body: "bins", due_at: due, user_id: user.id, recurrence: rule})
+
+    {:ok, _} =
+      App.Reminders.create(%{
+        body: "dentist",
+        due_at: DateTime.add(due, 60, :second),
+        user_id: user.id
+      })
+
+    assert {:ok, %{reminders: [bins, dentist]}} =
+             Tool.execute("list_reminders", %{}, ctx(user))
+
+    assert bins.recurrence == rule
+    refute Map.has_key?(dentist, :recurrence)
+  end
+
   describe "create_followup" do
     test "creates a followup-kind reminder with context", %{user: user} do
       assert {:ok, result} =

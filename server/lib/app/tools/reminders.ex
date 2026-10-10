@@ -216,14 +216,17 @@ defmodule App.Tools.Reminders do
       ctx
       |> uid()
       |> Reminders.list_upcoming()
-      |> Enum.map(
-        &%{
-          body: &1.body,
-          due_at: DateTime.to_iso8601(&1.due_at),
-          kind: &1.kind,
-          shared: &1.household
+      |> Enum.map(fn r ->
+        item = %{
+          body: r.body,
+          due_at: DateTime.to_iso8601(r.due_at),
+          kind: r.kind,
+          shared: r.household
         }
-      )
+
+        # the repeat rule, so the brain (and the reminders card's cadence) can say "every Tue"
+        if r.recurrence, do: Map.put(item, :recurrence, r.recurrence), else: item
+      end)
 
     {:ok, %{reminders: items}}
   end
