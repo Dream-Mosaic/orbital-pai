@@ -25,8 +25,8 @@ defmodule App.Conversations.ConversationTest do
     pid
   end
 
-  # A session-bound Conversation (session_id set) runs :pull_briefing / :pull_pending_reminders
-  # DB reads right after init. Stop it SYNCHRONOUSLY before the test process -- the sandbox
+  # A session-bound Conversation (session_id set) runs :pull_briefing / :pull_pending_reminders /
+  # :pull_messages DB reads right after init. Stop it SYNCHRONOUSLY before the test process -- the sandbox
   # owner -- exits, or an in-flight pull outlives its owner, its connection is torn down
   # mid-query, and the next test's first write sees SQLite "Database busy". (It traps exits,
   # so the test's own exit does not take it down promptly.)
@@ -1749,6 +1749,146 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client,
                       {:speak_start, :briefing, "Oh — and here's your morning rundown."}},
                      3000
+    end
+  end
+
+  describe "household messages" do
+    alias App.Messages
+
+    # David messages Tanya; the Conversation under test is Tanya's.
+    defp household(tanya_prefs \\ %{voice_activation: false}) do
+      Application.put_env(:app, :allowed_users, [
+        %{email: "david@x.com", name: "David"},
+        %{email: "tanya@x.com", name: "Tanya"}
+      ])
+
+      on_exit(fn -> Application.delete_env(:app, :allowed_users) end)
+      {:ok, david} = App.Users.upsert_allowed("david@x.com")
+      {:ok, tanya} = App.Users.upsert_allowed("tanya@x.com")
+      {:ok, tanya} = App.Users.update_prefs(tanya, tanya_prefs)
+      {david, tanya}
+    end
+
+    defp start_session_for(user, client \\ nil) do
+      {:ok, pid} =
+        Conversation.start_link(
+          client: client || self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(user.id)
+        )
+
+      pid
+    end
+
+    defp delivered_at(id), do: App.Repo.get!(App.Messages.Message, id).delivered_at
+
+    defp eventually(fun, tries \\ 40) do
+      cond do
+        fun.() -> true
+        tries == 0 -> false
+        true -> Process.sleep(25) && eventually(fun, tries - 1)
+      end
+    end
+
+    test "a message waiting at connect is pulled and spoken verbatim, acked and persisted — even locked" do
+      # voice activation ON (the default): like a fired reminder, a message is someone's explicit
+      # intent, so it does not wait for the wake word.
+      {david, tanya} = household(%{voice_activation: true})
+
+      {:ok, %{message: m, live?: false}} =
+        Messages.send_message(david.id, "Tanya", "dinner's ready")
+
+      pid = start_session_for(tanya)
+
+      assert_receive {:to_client, {:speak_start, :message, "Message from David —"}}, 1000
+      assert_receive {:to_client, {:speak_start, :brain, "dinner's ready."}}, 2000
+      assert_receive {:to_client, :listening}, 2000
+
+      assert eventually(fn -> delivered_at(m.id) != nil end)
+
+      assert eventually(fn ->
+               App.Memory.recent_turns(tanya.id, 5)
+               |> Enum.any?(&(&1.user_text == "(message from David: dinner's ready)"))
+             end)
+
+      stop_session(pid)
+    end
+
+    test "several waiting messages are spoken oldest first, one turn each" do
+      {david, tanya} = household()
+      {:ok, _} = Messages.send_message(david.id, "Tanya", "first")
+      {:ok, _} = Messages.send_message(david.id, "Tanya", "second")
+
+      pid = start_session_for(tanya)
+
+      assert_receive {:to_client, {:speak_start, :brain, "first."}}, 2000
+      assert_receive {:to_client, {:speak_start, :message, "Oh — a message from David —"}}, 3000
+      assert_receive {:to_client, {:speak_start, :brain, "second."}}, 2000
+      stop_session(pid)
+    end
+
+    test "the same message arriving twice (broadcast + pull racing at session start) speaks once" do
+      {david, tanya} = household()
+      pid = start_session_for(tanya)
+      # live session: the sender's broadcast reaches it...
+      {:ok, %{message: m}} = Messages.send_message(david.id, "Tanya", "come down")
+      # ...and a pull that read the row before the ack stamped it hands over the same message
+      send(pid, {:agenda_due, Messages.item(m)})
+
+      assert_receive {:to_client, {:speak_start, :message, _}}, 1000
+      assert_receive {:to_client, :listening}, 2000
+      refute_receive {:to_client, {:speak_start, :message, _}}, 400
+      stop_session(pid)
+    end
+
+    test "a duplicate is dropped while the original waits in the queue, too" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      {david, tanya} = household()
+      pid = start_session_for(tanya)
+      {:ok, m} = insert_raw_message(david, tanya, "come down")
+
+      # a user turn is in flight, so both copies would queue
+      Conversation.endpoint(pid, "what's up")
+      send(pid, {:agenda_due, Messages.item(m)})
+      send(pid, {:agenda_due, Messages.item(m)})
+
+      assert_receive {:to_client, {:speak_start, :message, "Oh — a message from David —"}}, 3000
+      assert_receive {:to_client, :listening}, 3000
+      refute_receive {:to_client, {:speak_start, :message, _}}, 400
+      stop_session(pid)
+    end
+
+    test "while the device is gone (the linger) a message waits — not spoken into the void, not acked" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      {david, tanya} = household()
+      phone = spawn_client_proxy(self(), :phone)
+      pid = start_session_for(tanya, phone)
+      Process.exit(phone, :kill)
+
+      {:ok, m} = insert_raw_message(david, tanya, "call me back")
+      send(pid, {:agenda_due, Messages.item(m)})
+      Process.sleep(300)
+      assert delivered_at(m.id) == nil
+
+      # she comes back to the same session; after her next turn the message is interjected
+      tablet = spawn_client_proxy(self(), :tablet)
+      :gen_statem.cast(pid, {:join, tablet, nil})
+      Conversation.endpoint(pid, "hello")
+
+      assert_receive {:tablet,
+                      {:to_client, {:speak_start, :message, "Oh — a message from David —"}}},
+                     3000
+
+      assert_receive {:tablet, {:to_client, {:speak_start, :brain, "call me back."}}}, 2000
+      assert eventually(fn -> delivered_at(m.id) != nil end)
+      stop_session(pid)
+    end
+
+    defp insert_raw_message(from, to, body) do
+      %App.Messages.Message{}
+      |> App.Messages.Message.changeset(%{from_user_id: from.id, to_user_id: to.id, body: body})
+      |> App.Repo.insert()
     end
   end
 

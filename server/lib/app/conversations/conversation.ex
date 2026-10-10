@@ -136,6 +136,7 @@ defmodule App.Conversations.Conversation do
       # time (the scheduler's broadcast at that time reached no one). Handled post-init.
       send(self(), :pull_briefing)
       send(self(), :pull_pending_reminders)
+      send(self(), :pull_messages)
     end
 
     data = %{
@@ -750,7 +751,12 @@ defmodule App.Conversations.Conversation do
         Logger.info("[agenda] briefing already pending/in-flight; ignoring duplicate")
         {:keep_state, data}
 
-      item.deliver == :when_idle and data.policy.phase == :listening ->
+      message_duplicate?(item, data) ->
+        Logger.info("[agenda] message already pending/in-flight; ignoring duplicate")
+        {:keep_state, data}
+
+      item.deliver == :when_idle and data.policy.phase == :listening and
+          not held_for_client?(item, data) ->
         start_agenda_turn(item, :idle, data)
 
       true ->
@@ -781,6 +787,19 @@ defmodule App.Conversations.Conversation do
     {:keep_state, data}
   end
 
+  # pull-on-connect: household messages sent while this user had no session, oldest first, each
+  # its own {:agenda_due, item}. A message sent while this session is in init can arrive BOTH
+  # ways — we subscribe to "agenda:<uid>" before this pull reads the table, and the sender inserts
+  # before it broadcasts, so a send landing between the two is broadcast to us AND read here; the
+  # ack that stamps delivered_at runs async at turn start, so it can't close that gap either.
+  # message_duplicate?/2 drops the second copy while the first is queued or in flight, which
+  # covers it: both copies reach the mailbox within moments of each other, and a message turn
+  # lasts seconds.
+  def handle_event(:info, :pull_messages, _s, %{session_id: sid} = data) do
+    Enum.each(App.Messages.pull(sid), &send(self(), {:agenda_due, &1}))
+    {:keep_state, data}
+  end
+
   # A queued item handed back after a turn completed. Idle now -> interject; a new turn
   # already started -> re-queue for the next completion.
   def handle_event(:info, {:deliver_agenda, %Item{} = item}, _s, data) do
@@ -789,7 +808,7 @@ defmodule App.Conversations.Conversation do
         Logger.info("[agenda] expired, dropped: #{item.kind}")
         {:keep_state, data}
 
-      data.policy.phase == :listening ->
+      data.policy.phase == :listening and not held_for_client?(item, data) ->
         start_agenda_turn(item, :interjected, data)
 
       true ->
@@ -1939,6 +1958,21 @@ defmodule App.Conversations.Conversation do
   end
 
   defp briefing_duplicate?(_item, _data), do: false
+
+  # The same household message (same ack = same row) already queued or being spoken. See the
+  # :pull_messages handler for how one can arrive twice.
+  defp message_duplicate?(%Item{kind: :message, ack: ack}, data) when not is_nil(ack) do
+    Enum.any?(data.pending_agenda, &(&1.ack == ack)) or
+      match?({%Item{ack: ^ack}, _}, data.agenda_turn)
+  end
+
+  defp message_duplicate?(_item, _data), do: false
+
+  # A household message is only spoken to a device that is there. While the bound client is gone
+  # (the linger window) it waits in pending_agenda, un-acked: a rebind hears it after the next
+  # turn, and if the session stops instead, the row is still undelivered for the next pull.
+  defp held_for_client?(%Item{kind: :message}, data), do: not live?(data.client)
+  defp held_for_client?(_item, _data), do: false
 
   # ---- reflex tasks ----
   defp spawn_reflex_model(t, data) do
