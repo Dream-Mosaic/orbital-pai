@@ -5,8 +5,12 @@ import 'package:flutter/foundation.dart';
 import '../connection/app_connection.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
+import 'books_collections.dart';
 
-/// One entry in the book switcher: a personal/household list, or the garden.
+export 'books_collections.dart';
+
+/// One entry in the book switcher: a personal/household list, the garden, or
+/// one of the three collections (recipes, trackers, routines).
 class BookRef {
   const BookRef({
     required this.key,
@@ -19,7 +23,8 @@ class BookRef {
   final String key;
   final String label;
 
-  /// "list" | "garden" — `Atom.to_string/1` server-side.
+  /// "list" | "garden" | "recipes" | "trackers" | "routines" —
+  /// `Atom.to_string/1` server-side.
   final String kind;
 
   /// The bare hero-icon name (server already stripped the `hero-` prefix).
@@ -201,11 +206,16 @@ class BooksState {
     this.clearConfirm = '',
     this.list,
     this.garden,
+    this.recipes,
+    this.trackers,
+    this.routines,
   });
 
   /// Server-ordered; never re-sort here.
   final List<BookRef> books;
   final String currentKey;
+
+  /// Empty for a book with no Clear (the collections): hide the control.
   final String clearConfirm;
 
   /// Non-null only when the current book is a list.
@@ -214,12 +224,20 @@ class BooksState {
   /// Non-null only when the current book is the garden.
   final GardenBody? garden;
 
+  /// Non-null only when the current book is that collection.
+  final RecipesBody? recipes;
+  final TrackersBody? trackers;
+  final RoutinesBody? routines;
+
   static BooksState fromJson(Map<String, dynamic> j) => BooksState(
         books: _books(j['books']),
         currentKey: j['current_key'] as String? ?? '',
         clearConfirm: j['clear_confirm'] as String? ?? '',
         list: _list(j['list']),
         garden: _garden(j['garden']),
+        recipes: RecipesBody.fromJson(j['recipes']),
+        trackers: TrackersBody.fromJson(j['trackers']),
+        routines: RoutinesBody.fromJson(j['routines']),
       );
 
   static List<BookRef> _books(Object? raw) => raw is List
@@ -244,7 +262,7 @@ class BooksState {
 
 /// Joined only while the Books drawer is on screen: join MEANS open.
 /// Server-authoritative: a control pushes and the UI re-renders from the next
-/// `state` — this channel rides eight of its ten writes' broadcasts and only
+/// `state` — this channel rides ten of its twelve writes' broadcasts and only
 /// re-pushes itself for `select_book`/`new_list` (see the channel's
 /// moduledoc), but that distinction is entirely server-side; every push here
 /// looks the same from the client.
@@ -314,6 +332,14 @@ class BooksClient extends ChangeNotifier {
   void archivePlant(int id) => _push('archive_plant', {'id': id});
 
   void revivePlant(int id) => _push('revive_plant', {'id': id});
+
+  /// Delete the recipe whose confirmation the user just read. The id is the
+  /// whole request: the server derives the scope (shared or private) from
+  /// the row itself, and refuses an id outside this user's visible set.
+  void deleteRecipe(int id) => _push('delete_recipe', {'id': id});
+
+  /// Delete one of this user's routines.
+  void deleteRoutine(int id) => _push('delete_routine', {'id': id});
 
   bool _push(String event, Map<String, dynamic> payload) {
     final ch = _channel;

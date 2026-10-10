@@ -246,7 +246,7 @@ void main() {
 
     // Table-driven so a silently missing (or mis-wired) method is impossible:
     // each row names its own event/payload and the loop below fails loudly if
-    // any one of the ten is missing or sends the wrong thing.
+    // any one of the twelve is missing or sends the wrong thing.
     final pushCases = <_PushCase>[
       _PushCase('selectBook', (c) => c.selectBook('list:3'), 'select_book', {'key': 'list:3'}),
       _PushCase('newList', (c) => c.newList('Snacks'), 'new_list', {'name': 'Snacks'}),
@@ -269,6 +269,8 @@ void main() {
       ),
       _PushCase('archivePlant', (c) => c.archivePlant(4), 'archive_plant', {'id': 4}),
       _PushCase('revivePlant', (c) => c.revivePlant(2), 'revive_plant', {'id': 2}),
+      _PushCase('deleteRecipe', (c) => c.deleteRecipe(12), 'delete_recipe', {'id': 12}),
+      _PushCase('deleteRoutine', (c) => c.deleteRoutine(4), 'delete_routine', {'id': 4}),
     ];
 
     for (final tc in pushCases) {
