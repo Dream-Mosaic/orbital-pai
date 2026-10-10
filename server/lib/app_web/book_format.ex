@@ -57,6 +57,9 @@ defmodule AppWeb.BookFormat do
   def clear_confirm(%{kind: :garden}),
     do: "Close out this season? Active plants move to Past seasons — nothing is deleted."
 
+  # A collection (recipes, trackers, routines) has no Clear: nil hides the control.
+  def clear_confirm(%{kind: kind}) when kind in [:recipes, :trackers, :routines], do: nil
+
   def clear_confirm(%{label: label}),
     do: "Clear everything off #{label}? The list stays, just empty."
 end

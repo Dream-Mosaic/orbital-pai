@@ -25,6 +25,8 @@ defmodule App.Books do
   alias App.Lists.List
   alias App.Garden
 
+  @collection_kinds [:recipes, :trackers, :routines]
+
   @doc """
   Every book `user` can see: their visible lists (`App.Lists.list_visible/1`, own + household) as
   `kind: :list` books, name-sorted, followed by the singleton `kind: :garden` book (always
@@ -129,5 +131,70 @@ defmodule App.Books do
     Garden.close_season(%{user_id: uid, household: false})
     Garden.close_season(%{user_id: uid, household: true})
     :ok
+  end
+
+  # A collection has nothing to Clear: emptying a recipe book or a health history in one tap
+  # is not a thing anyone means. Its panel deletes one recipe or routine at a time instead.
+  def clear(%{kind: kind}) when kind in @collection_kinds, do: {:error, :not_clearable}
+
+  # ---------------------------------------------------------------------------------------------
+  # The shelf: the collections the native panel shows after the garden
+
+  @doc """
+  The COLLECTION books: the recipe book, the user's trackers and their routines, shelved by
+  the native Books panel after the garden. They are read-mostly views over `App.Recipes`,
+  `App.Trackers` and `App.Routines`, not lists, so they carry no `id` and no `scope` (each
+  context scopes its own reads by user) and nothing to Clear.
+
+  Deliberately NOT part of `for_user/1`. The web dashboard renders `for_user/1` and has no
+  body for these, so folding them in would give it three buttons that open onto nothing.
+  `shelf/1` is the native panel's superset, and the `*_on_shelf` functions are `resolve/2`
+  and `current/1` over it. The web reading a remembered collection key through `current/1`
+  just takes its usual fallback.
+  """
+  def collections do
+    [
+      %{key: "recipes", kind: :recipes, id: nil, label: "Recipes", icon: "hero-cake", scope: nil},
+      %{
+        key: "trackers",
+        kind: :trackers,
+        id: nil,
+        label: "Trackers",
+        icon: "hero-chart-bar",
+        scope: nil
+      },
+      %{
+        key: "routines",
+        kind: :routines,
+        id: nil,
+        label: "Routines",
+        icon: "hero-bolt",
+        scope: nil
+      }
+    ]
+  end
+
+  @doc "Every book the native panel shows: `for_user/1` (lists, then the garden), then `collections/0`."
+  def shelf(user), do: for_user(user) ++ collections()
+
+  @doc "`resolve/2` over `shelf/1`: a collection key, or anything `resolve/2` resolves."
+  def resolve_on_shelf(nil, _user), do: :not_found
+
+  def resolve_on_shelf(key, user) do
+    case Enum.find(collections(), &(&1.key == key)) do
+      nil -> resolve(key, user)
+      book -> {:ok, book}
+    end
+  end
+
+  @doc """
+  `current/1` over `shelf/1`: a remembered collection key wins; anything else, including a
+  stale or nil pref, is exactly `current/1` and its fallback.
+  """
+  def current_on_shelf(user) do
+    case Enum.find(collections(), &(&1.key == user.books_last_book)) do
+      nil -> current(user)
+      book -> book
+    end
   end
 end

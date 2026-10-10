@@ -28,4 +28,12 @@ defmodule AppWeb.BookFormatTest do
       assert BookFormat.latest_note_line(%Plant{notes: []}) == "Notes"
     end
   end
+
+  describe "clear_confirm/1 for a collection book" do
+    test "is nil — recipes, trackers and routines have no Clear" do
+      for book <- App.Books.collections() do
+        assert BookFormat.clear_confirm(book) == nil
+      end
+    end
+  end
 end

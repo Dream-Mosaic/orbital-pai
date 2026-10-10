@@ -163,4 +163,69 @@ defmodule App.BooksTest do
       assert Books.clear(book) == {:error, :not_found}
     end
   end
+
+  describe "the shelf (collections after the garden)" do
+    test "shelf/1 is for_user/1 followed by recipes, trackers and routines", %{d: d} do
+      {:ok, _} = %List{} |> List.changeset(%{user_id: d.id, name: "Groceries"}) |> Repo.insert()
+
+      assert Enum.map(Books.shelf(d), & &1.key) ==
+               Enum.map(Books.for_user(d), & &1.key) ++ ["recipes", "trackers", "routines"]
+
+      assert Enum.map(Books.collections(), & &1.kind) == [:recipes, :trackers, :routines]
+
+      assert Enum.map(Books.collections(), & &1.icon) == [
+               "hero-cake",
+               "hero-chart-bar",
+               "hero-bolt"
+             ]
+    end
+
+    test "for_user/1 stays lists + garden: the web dashboard has no body for a collection",
+         %{d: d} do
+      assert Enum.map(Books.for_user(d), & &1.kind) == [:garden]
+    end
+
+    test "resolve_on_shelf/2 resolves a collection key, then anything resolve/2 does", %{d: d} do
+      {:ok, list} = %List{} |> List.changeset(%{user_id: d.id, name: "Errands"}) |> Repo.insert()
+
+      assert {:ok, %{kind: :recipes}} = Books.resolve_on_shelf("recipes", d)
+      assert {:ok, %{kind: :routines}} = Books.resolve_on_shelf("routines", d)
+      assert {:ok, %{id: id}} = Books.resolve_on_shelf("list:#{list.id}", d)
+      assert id == list.id
+      assert Books.resolve_on_shelf("bogus", d) == :not_found
+      assert Books.resolve_on_shelf(nil, d) == :not_found
+      # resolve/2 itself is untouched: the web can't land on a collection.
+      assert Books.resolve("recipes", d) == :not_found
+    end
+
+    test "current_on_shelf/1 honours a remembered collection; current/1 falls back past it",
+         %{d: d} do
+      {:ok, groceries} =
+        %List{}
+        |> List.changeset(%{user_id: d.id, name: "Groceries", household: true})
+        |> Repo.insert()
+
+      {:ok, d} = Users.update_prefs(d, %{books_last_book: "trackers"})
+
+      assert Books.current_on_shelf(d).kind == :trackers
+      # The web reads the same pref through current/1 and lands on its usual fallback.
+      assert Books.current(d).id == groceries.id
+    end
+
+    test "current_on_shelf/1 is current/1 exactly for anything that is not a collection",
+         %{d: d} do
+      {:ok, list} = %List{} |> List.changeset(%{user_id: d.id, name: "Errands"}) |> Repo.insert()
+      {:ok, d} = Users.update_prefs(d, %{books_last_book: "list:#{list.id}"})
+      assert Books.current_on_shelf(d) == Books.current(d)
+
+      {:ok, d} = Users.update_prefs(d, %{books_last_book: "list:999999"})
+      assert Books.current_on_shelf(d) == Books.current(d)
+    end
+
+    test "a collection is never clearable" do
+      for book <- Books.collections() do
+        assert Books.clear(book) == {:error, :not_clearable}
+      end
+    end
+  end
 end
