@@ -18,6 +18,10 @@ defmodule AppWeb.Panels.BooksChannelTest do
     %{socket: socket, alice: alice, bob: bob}
   end
 
+  # The three collection books (`Books.collections/0`) the shelf always ends with;
+  # books_channel_collections_test.exs covers them.
+  @collections ["Recipes", "Trackers", "Routines"]
+
   defp join!(socket, user), do: subscribe_and_join(socket, "panel:books:#{user.id}", %{})
 
   defp list!(user, name, household \\ false),
@@ -49,15 +53,16 @@ defmodule AppWeb.Panels.BooksChannelTest do
     assert_reply ref, :error, %{reason: "bad_request"}
   end
 
-  test "join pushes books name-sorted with the garden last", %{socket: socket, alice: alice} do
+  test "join pushes books name-sorted with the garden after the lists, then the collections",
+       %{socket: socket, alice: alice} do
     list!(alice, "Zucchini")
     list!(alice, "Apples")
 
     {:ok, _reply, _socket} = join!(socket, alice)
 
     assert_push "state", %{books: books}
-    assert Enum.map(books, & &1.label) == ["Apples", "Zucchini", "Garden"]
-    assert List.last(books).kind == "garden"
+    assert Enum.map(books, & &1.label) == ["Apples", "Zucchini", "Garden"] ++ @collections
+    assert Enum.at(books, 2).kind == "garden"
   end
 
   test "the icon on the wire is the bare asset name, not the hero- class",
@@ -70,7 +75,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
     assert_push "state", %{books: books}
 
     assert Enum.map(books, & &1.icon) ==
-             ["shopping-cart", "clipboard-document-list", "sun"]
+             ["shopping-cart", "clipboard-document-list", "sun", "cake", "chart-bar", "bolt"]
   end
 
   test "current_key comes from the pref", %{socket: socket, alice: alice} do
@@ -189,7 +194,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
     {:ok, _reply, _socket} = subscribe_and_join(socket, "panel:books:#{bob.id}", %{})
 
     assert_push "state", %{books: books}
-    assert Enum.map(books, & &1.label) == ["Apples", "Garden"]
+    assert Enum.map(books, & &1.label) == ["Apples", "Garden"] ++ @collections
   end
 
   test "a list change from anywhere re-pushes state through the subscription",
@@ -372,7 +377,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
       ref = push(sock, "delete_list", %{"list_id" => list.id})
       assert_reply ref, :ok
       assert_push "state", %{current_key: "garden", books: books, list: nil}
-      assert Enum.map(books, & &1.label) == ["Garden"]
+      assert Enum.map(books, & &1.label) == ["Garden"] ++ @collections
     end
 
     test "another user's list is bad_request and is NOT deleted",
@@ -679,7 +684,7 @@ defmodule AppWeb.Panels.BooksChannelTest do
       assert_push "state",
                   %{current_key: key, books: books, list: %{name: "Camping", household: false}}
 
-      assert Enum.map(books, & &1.label) == ["Camping", "Garden"]
+      assert Enum.map(books, & &1.label) == ["Camping", "Garden"] ++ @collections
       assert String.starts_with?(key, "list:")
 
       # Personal, never household (conversation_live.ex:263) — a household

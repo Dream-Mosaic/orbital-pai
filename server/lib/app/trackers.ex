@@ -333,6 +333,17 @@ defmodule App.Trackers do
     Entry |> where([e], e.tracker_id == ^id) |> select([e], count(e.id)) |> Repo.one()
   end
 
+  @doc """
+  Every entry on `tracker`, NEWEST first — by the struct, not a spoken name, for a caller
+  that already holds one of `list/1`'s trackers (the Books panel).
+  """
+  def all_entries(%Tracker{id: id}) do
+    Entry
+    |> where([e], e.tracker_id == ^id)
+    |> order_by([e], desc: e.recorded_at, desc: e.id)
+    |> Repo.all()
+  end
+
   # ---------------------------------------------------------------------------------------------
   # Stats (pure)
 
