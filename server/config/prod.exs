@@ -23,6 +23,9 @@ config :app, AppWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest
 # connect (~9s post-idle). Also logs per-host connect times. See App.Http.Warmer.
 config :app, start_pool_warmer: true
 
+# Nightly SQLite snapshots to <db dir>/backups (App.Backup) — /data/backups on the volume.
+config :app, start_backup: true
+
 # Do not print debug messages in production
 config :logger, level: :info
 

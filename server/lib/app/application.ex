@@ -43,7 +43,8 @@ defmodule App.Application do
         reminder_scheduler() ++
         briefing_scheduler() ++
         memory_consolidator() ++
-        memory_embedder() ++ source_ingester() ++ pool_warmer() ++ speaker_verifier()
+        memory_embedder() ++
+        source_ingester() ++ pool_warmer() ++ speaker_verifier() ++ backup()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -91,6 +92,13 @@ defmodule App.Application do
   defp speaker_verifier do
     if Application.get_env(:app, :start_speaker_verifier, true),
       do: [App.Speaker.Ortex],
+      else: []
+  end
+
+  # Nightly SQLite snapshots beside the database (prod only; see App.Backup).
+  defp backup do
+    if Application.get_env(:app, :start_backup, false),
+      do: [App.Backup],
       else: []
   end
 
