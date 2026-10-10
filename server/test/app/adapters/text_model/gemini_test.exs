@@ -550,10 +550,56 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.memory_block(%{user_name: nil, profile: "", summary: ""}) == ""
   end
 
-  test "a find-then-act routine fits the tool-hop cap with zero slack (run → find → act → answer)" do
+  test "a routine with an extra dependent lookup still finishes with tools (routine hop refund)" do
+    # run → index+calendar → find → act → answer: one hop past the plain cap, absorbed by the
+    # refund the first run_routine earns.
+    parent = self()
+
+    Process.put(:script, [
+      [call("run_routine")],
+      [call("home_index"), call("get_calendar_events")],
+      [call("home_find")],
+      [call("home_control")],
+      []
+    ])
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      send(parent, {:round, tools?})
+      [calls | rest] = Process.get(:script)
+      Process.put(:script, rest)
+      {:ok, calls}
+    end
+
+    cfg = %Config{tools: [], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, self(), 0, round_fun)
+
+    for _ <- 1..5, do: assert_received({:round, true})
+    refute_received {:round, false}
+    assert_received {:gemini_done}
+  end
+
+  test "the routine refund is once per turn — re-calling run_routine can't loop" do
+    parent = self()
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      send(parent, {:round, tools?})
+      if tools?, do: {:ok, [call("run_routine")]}, else: {:ok, []}
+    end
+
+    cfg = %Config{tools: [], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, self(), 0, round_fun)
+
+    # 1 refunded routine round + 3 counted rounds, then the forced tools-off answer
+    for _ <- 1..6, do: assert_received({:round, true})
+    assert_received {:round, false}
+    assert_received {:gemini_done}
+  end
+
+  test "a find-then-act routine fits the tool-hop cap (run → find → act → answer)" do
     # Routines' hop budget: run_routine spends a hop before any step runs, and Home Assistant
-    # is find-then-act, so lights + thermostat + calendar uses all 3 tool hops. One more
-    # dependent lookup (e.g. home_index first) reaches the forced tools-off answer instead.
+    # is find-then-act, so lights + thermostat + calendar is three tool rounds.
     parent = self()
 
     Process.put(:script, [

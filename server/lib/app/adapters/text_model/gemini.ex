@@ -13,6 +13,11 @@ defmodule App.Adapters.TextModel.Gemini do
 
   # Safety valve: stop looping after this many tool round-trips in one turn.
   @max_tool_hops 3
+  # A routine ("good night") spends a whole hop on run_routine before any step runs, and its
+  # steps are often find-then-act (Home Assistant). The FIRST run_routine of a turn gives back
+  # its hop plus this many, so a realistic routine has slack instead of landing exactly on the
+  # cap. Once per turn, so a model re-calling run_routine can't loop on the refund.
+  @routine_bonus_hops 2
 
   @impl true
   def generate(transcript, ctx, opts) do
@@ -146,7 +151,17 @@ defmodule App.Adapters.TextModel.Gemini do
             [%{role: "model", parts: model_call_parts(calls)}] ++
             [%{role: "user", parts: function_response_parts(calls, responses)}]
 
-        run_rounds(contents, system, cfg, thinking, tool_ctx, target, hops + 1, round_fun)
+        {next_hops, tool_ctx} = spend_hop(calls, hops, tool_ctx)
+        run_rounds(contents, system, cfg, thinking, tool_ctx, target, next_hops, round_fun)
+    end
+  end
+
+  defp spend_hop(calls, hops, tool_ctx) do
+    if not Map.get(tool_ctx, :routine_bonus_used, false) and
+         Enum.any?(calls, &(&1.name == "run_routine")) do
+      {hops + 1 - (1 + @routine_bonus_hops), Map.put(tool_ctx, :routine_bonus_used, true)}
+    else
+      {hops + 1, tool_ctx}
     end
   end
 
