@@ -90,4 +90,26 @@ defmodule App.Conversations.PolicyTest do
     s = %{Policy.initial_state() | phase: :speaking_reflex}
     assert {^s, []} = decide(s, :brain_won)
   end
+
+  describe "quiet (typed) turns" do
+    test "endpoint_quiet skips the reflex: straight to streaming with the gate already open" do
+      {state, effects} = decide(Policy.initial_state(), {:endpoint_quiet, "hi"})
+      assert state.phase == :streaming
+      assert state.transcript == "hi"
+      assert state.reflex_sent
+      refute state.brain_done
+      assert effects == [{:start_brain, "hi"}, {:arm_timer, :watchdog}]
+    end
+
+    test "endpoint_quiet mid-turn is ignored" do
+      state = %{Policy.initial_state() | phase: :draining}
+      assert {^state, []} = decide(state, {:endpoint_quiet, "again"})
+    end
+
+    test "a quiet turn finishes through the ordinary brain_done -> drained path" do
+      {s, _} = decide(Policy.initial_state(), {:endpoint_quiet, "hi"})
+      assert {%{phase: :draining} = s, [:cancel_watchdog, :arm_drain]} = decide(s, :brain_done)
+      assert {%{phase: :listening}, [:turn_complete, :cancel_timers]} = decide(s, :drained)
+    end
+  end
 end

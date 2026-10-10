@@ -8,7 +8,8 @@ defmodule App.Conversations.Policy do
   No I/O or time access here — the `Conversation` gen_statem owns the pcm buffer, the
   audio timeline, timers, and all effects.
 
-  Effects: `{:generate_reflex, t}`, `{:start_brain, t}`, `{:speak_reflex, text}`,
+  Events include `{:endpoint, t}` and `{:endpoint_quiet, t}` (a typed turn: brain only, no
+  reflex, no speech). Effects: `{:generate_reflex, t}`, `{:start_brain, t}`, `{:speak_reflex, text}`,
   `:flush_brain`, `:arm_drain`, `:turn_complete`, `:stop_playback`, `:cancel_brain`,
   `{:arm_timer, :watchdog}`, `:cancel_timers`, `:cancel_reflex`.
   """
@@ -37,6 +38,16 @@ defmodule App.Conversations.Policy do
   end
 
   def decide(s, {:endpoint, _t}, _c), do: {s, []}
+
+  # --- quiet endpoint (a TYPED message): no reflex, no speech. The gate is born open
+  # (reflex_sent: true) so brain deltas and the final answer flow straight through, and the
+  # turn then finishes on the ordinary :brain_done -> :drained path. ---
+  def decide(%{phase: :listening} = s, {:endpoint_quiet, t}, _c) do
+    {%{s | phase: :streaming, transcript: t, reflex_sent: true, brain_done: false},
+     [{:start_brain, t}, {:arm_timer, :watchdog}]}
+  end
+
+  def decide(s, {:endpoint_quiet, _t}, _c), do: {s, []}
 
   # --- reflex text ready: speak it ---
   def decide(%{phase: :awaiting_reflex} = s, {:reflex_ready, text}, _c) do
