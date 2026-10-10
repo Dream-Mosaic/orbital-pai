@@ -368,6 +368,15 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   announcement still synthesizing became the NEXT (typed) turn's answer. A claim mid-turn stops
   playback on the DISPLACED device before rebinding. An interrupted request carries the tools it
   already ran in `brain_note` (brain input only — never persisted as the user's words).
+- **Heads-ups cover calendar AND rain** (`App.Agenda.Heads`, `App.Agenda.Rain`): both only for
+  users with the `heads_up` pref on and a live device; rain polls Open-Meteo `minutely_15` every
+  10 min only when someone is listening, one alert per rain event (re-arm after 2 h dry), ≤ 3 a
+  local day, quiet 22:00–07:00. It requests `precipitation_probability` on minutely_15, which
+  works but is undocumented — if Open-Meteo ever rejects it the whole request 400s and rain
+  alerts go quiet (logged as fetch warnings).
+- **Timers can be extended / snoozed** (`Timers.extend/3`, `add_to_timer`). A running timer keeps
+  its ORIGINAL fire: the scheduler re-checks `ends_at` when it arrives and re-arms. Never arm a
+  second fire for it — the duplicate landed mid-teardown in tests and caused `Database busy`.
 - **"Henry, stop" / "okay" silence a ringing timer** (`silence_timers/1` in the safety-stop, wake
   command and — only when something actually rings — the bare-acknowledgement endpoint paths).
 - **Background notifications** (`native/lib/notify/`): only while the app isn't `resumed`;
