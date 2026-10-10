@@ -475,8 +475,10 @@ class VoiceController extends ChangeNotifier {
       _log('unknown speak_start source: $source');
       return;
     }
-    final label =
-        (kind == LineKind.brain || kind == LineKind.reflex) ? assistantName : source;
+    // Every other source labels itself; `heads_up` reads as the word heads-up.
+    final label = (kind == LineKind.brain || kind == LineKind.reflex)
+        ? assistantName
+        : source.replaceAll('_', '-');
     _thread.add(ThreadLine(
       kind: kind,
       label: label,

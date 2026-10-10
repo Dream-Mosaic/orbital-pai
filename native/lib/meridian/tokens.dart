@@ -28,6 +28,11 @@ abstract final class M {
   /// A household message relayed from the other person — a soft rose.
   static const Color message = Color(0xFFE88FB8);
 
+  /// A calendar heads-up ("Standup starts in 10 minutes") — the briefing's
+  /// blue, since both are the day's calendar talking. Its own token so the two
+  /// can part ways without touching every briefing line.
+  static const Color headsUp = briefing;
+
   /// daisyUI dark `--color-success` = oklch(0.60 0.118 184.704) — the power
   /// detent's icon while ON (`setPower()` toggles Tailwind's `.text-success`).
   ///

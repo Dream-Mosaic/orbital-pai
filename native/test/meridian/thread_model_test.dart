@@ -82,6 +82,7 @@ void main() {
     expect(lineKindFromSource('you'), LineKind.you);
     expect(lineKindFromSource('timer'), LineKind.timer);
     expect(lineKindFromSource('message'), LineKind.message);
+    expect(lineKindFromSource('heads_up'), LineKind.headsUp);
     expect(lineKindFromSource('something_new'), isNull,
         reason: 'an unknown source must be droppable, not rendered as a guess');
   });

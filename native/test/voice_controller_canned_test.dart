@@ -51,4 +51,21 @@ void main() {
       'brain: Your tea timer is up.',
     ]);
   });
+
+  test('a calendar heads-up is its own line kind, labelled heads-up', () {
+    // Exactly what a bound device receives for a canned :heads_up agenda item.
+    vc.debugHandleMessage(msg('speaking', const {}));
+    vc.debugHandleMessage(msg('speak_start', const {'source': 'heads_up', 'text': 'Heads up —'}));
+    vc.debugHandleMessage(msg(
+        'speak_start', const {'source': 'brain', 'text': 'Poke the Brain starts in 10 minutes.'}));
+    vc.debugHandleMessage(msg('listening', const {}));
+
+    expect(lines(), [
+      'headsUp: Heads up —',
+      'brain: Poke the Brain starts in 10 minutes.',
+    ]);
+    final lead = vc.thread.whereType<ThreadLine>().first;
+    expect(lead.label, 'heads-up',
+        reason: 'the speaker label reads as a word, not as the wire source heads_up');
+  });
 }

@@ -183,6 +183,7 @@ class Thread extends StatelessWidget {
       LineKind.followup => (M.followup, 14.88, M.brainBody, false, const _Dot(key: ValueKey('node'), fill: M.followup)),
       LineKind.timer => (M.timer, 14.88, M.brainBody, false, const _Dot(key: ValueKey('node'), fill: M.timer)),
       LineKind.message => (M.message, 14.88, M.brainBody, false, const _Dot(key: ValueKey('node'), fill: M.message)),
+      LineKind.headsUp => (M.headsUp, 14.88, M.brainBody, false, const _Dot(key: ValueKey('node'), fill: M.headsUp)),
       // The CSS has NO `.who-reminder` rule, so the web renders reminders with no
       // rail offset, no dot and an inherited label colour. That is a web gap, not
       // a design; the port gives them the brain geometry in the `--you` accent
