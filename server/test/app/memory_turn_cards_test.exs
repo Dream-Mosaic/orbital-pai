@@ -62,6 +62,21 @@ defmodule App.MemoryTurnCardsTest do
     refute inspect(with_cards) =~ "Lakeview"
   end
 
+  test "the dashboard's saved-history rows ignore cards (text only, no crash)", %{uid: uid} do
+    {:ok, turn} =
+      Memory.persist_turn(%{
+        user_id: uid,
+        user_text: "weather?",
+        brain_text: "Sunny.",
+        cards: [@card]
+      })
+
+    assert AppWeb.Dashboard.Mirror.history_rows(Memory.recent_turns(uid)) == [
+             %{id: "h-#{turn.id}-you", kind: :you, text: "weather?"},
+             %{id: "h-#{turn.id}-brain", kind: :brain, text: "Sunny."}
+           ]
+  end
+
   test "the embedded text and the full-text index never see card JSON", %{uid: uid} do
     {:ok, turn} =
       Memory.persist_turn(%{

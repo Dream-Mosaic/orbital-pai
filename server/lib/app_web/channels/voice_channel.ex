@@ -77,9 +77,16 @@ defmodule AppWeb.VoiceChannel do
         |> App.Memory.recent_turns(@history_turns)
         |> Enum.map(fn t ->
           %{you: t.user_text, assistant: t.brain_text, at: DateTime.to_iso8601(t.inserted_at)}
+          |> with_cards(t.cards)
         end)
     end
   end
+
+  # The cards the turn showed, in the order they were shown (the client puts them between the
+  # `you` line and the answer, where they appeared live). Omitted when there were none, so a
+  # card-less turn's payload is exactly what it always was.
+  defp with_cards(turn, [_ | _] = cards), do: Map.put(turn, :cards, cards)
+  defp with_cards(turn, _none), do: turn
 
   # ---- inbound: browser -> session ----
   @impl true
