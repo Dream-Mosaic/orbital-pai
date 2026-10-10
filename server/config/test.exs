@@ -22,6 +22,7 @@ config :logger, level: :warning
 
 # Don't run the background reminder scheduler in tests (no sandbox owner on its tick process).
 config :app, start_reminder_scheduler: false
+config :app, start_timer_scheduler: false
 config :app, start_briefing_scheduler: false
 config :app, start_memory_consolidator: false
 config :app, start_memory_embedder: false

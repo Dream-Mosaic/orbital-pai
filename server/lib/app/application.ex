@@ -41,6 +41,7 @@ defmodule App.Application do
     children =
       children ++
         reminder_scheduler() ++
+        timer_scheduler() ++
         briefing_scheduler() ++
         memory_consolidator() ++
         memory_embedder() ++
@@ -55,6 +56,12 @@ defmodule App.Application do
   defp reminder_scheduler do
     if Application.get_env(:app, :start_reminder_scheduler, true),
       do: [App.Reminders.Scheduler],
+      else: []
+  end
+
+  defp timer_scheduler do
+    if Application.get_env(:app, :start_timer_scheduler, true),
+      do: [App.Timers.Scheduler],
       else: []
   end
 
