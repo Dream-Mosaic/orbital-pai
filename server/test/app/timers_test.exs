@@ -130,6 +130,24 @@ defmodule App.TimersTest do
       {:ok, _} = Timers.fire(t.id)
       assert {:ok, [%Timer{state: "done"}]} = Timers.cancel(alice.id, t.id)
     end
+
+    test "a stop read as RUNNING that fires in between still stops it (cancel/fire race)", %{
+      alice: alice
+    } do
+      {:ok, stale} = Timers.create(alice.id, 60)
+      {:ok, _} = Timers.fire(stale.id)
+      assert {:ok, %Timer{state: "done"}} = Timers.stop_one(stale)
+      refute Timers.ringing?(stale.id)
+    end
+
+    test "a queued timer notice is dropped once the timer is no longer ringing", %{alice: alice} do
+      {:ok, t} = Timers.create(alice.id, 60)
+      {:ok, ringing} = Timers.fire(t.id)
+      item = Timers.agenda_item(ringing)
+      refute App.Agenda.expired?(item)
+      {:ok, _} = Timers.dismiss(alice.id, t.id)
+      assert App.Agenda.expired?(item)
+    end
   end
 
   describe "dismiss/2" do

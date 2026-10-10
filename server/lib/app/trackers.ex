@@ -141,14 +141,21 @@ defmodule App.Trackers do
         {:error, :invalid_name}
 
       {label, key} ->
-        Repo.transaction(fn ->
-          with {:ok, tracker, created} <- find_or_create(user_id, key, label, attrs[:unit]),
-               {:ok, entry} <- insert_entry(tracker, attrs) do
-            %{tracker: tracker, entry: entry, created: created}
-          else
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end)
+        # IMMEDIATE, not the default deferred: this reads (find) then writes (insert), and a
+        # deferred transaction that reads first gets SQLITE_BUSY_SNAPSHOT — instantly, past
+        # busy_timeout — if anything commits in between. Two parallel log_tracker_entry calls in
+        # one brain round is exactly that. Taking the write lock up front makes the second wait.
+        Repo.transaction(
+          fn ->
+            with {:ok, tracker, created} <- find_or_create(user_id, key, label, attrs[:unit]),
+                 {:ok, entry} <- insert_entry(tracker, attrs) do
+              %{tracker: tracker, entry: entry, created: created}
+            else
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end,
+          mode: :immediate
+        )
     end
   end
 

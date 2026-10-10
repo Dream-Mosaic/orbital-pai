@@ -245,7 +245,7 @@ defmodule App.Recipes do
   `{:error, :missing_steps}` (a `steps` list that cleans to empty), or `get/3`'s errors.
   """
   def update(user_id, name, attrs, scope \\ :any) do
-    with {:ok, recipe} <- get(user_id, name, scope),
+    with {:ok, recipe} <- get_for_write(user_id, name, scope),
          {:ok, changes, report} <- edits(recipe, attrs) do
       case recipe |> Recipe.changeset(changes) |> Repo.update() do
         {:ok, updated} -> {:ok, updated, report}
@@ -339,8 +339,26 @@ defmodule App.Recipes do
 
   @doc "Delete a recipe the caller can see (`get/3` resolution). `{:ok, recipe}` or `get/3`'s errors."
   def delete(user_id, name, scope \\ :any) do
-    with {:ok, recipe} <- get(user_id, name, scope), do: Repo.delete(recipe)
+    with {:ok, recipe} <- get_for_write(user_id, name, scope), do: Repo.delete(recipe)
   end
+
+  # Reads may prefer the household copy when a name exists in both scopes; WRITES may not. "Delete
+  # my lasagna recipe" with a shared Lasagna and a private one must not silently delete the shared
+  # one (the speaker's "my" is stripped by normalization), so an unqualified write that resolves
+  # in BOTH scopes asks which. An explicit scope (`personal: true/false`) goes straight through.
+  defp get_for_write(user_id, name, :any) do
+    with {:ok, recipe} <- get(user_id, name, :any) do
+      case {get(user_id, name, :household), get(user_id, name, :personal)} do
+        {{:ok, %{name: same} = shared}, {:ok, %{name: same} = mine}} ->
+          {:error, {:which_scope, shared, mine}}
+
+        _ ->
+          {:ok, recipe}
+      end
+    end
+  end
+
+  defp get_for_write(user_id, name, scope), do: get(user_id, name, scope)
 
   # ---------------------------------------------------------------------------------------------
   # Cleaning

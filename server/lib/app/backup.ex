@@ -55,10 +55,16 @@ defmodule App.Backup do
     keep = Keyword.get(opts, :keep, @keep)
     path = Path.join(dir, "app-#{Date.to_iso8601(local_today())}.db")
 
+    # Into a temp file, then renamed over today's: a failed or interrupted VACUUM never costs the
+    # snapshot already there, and never leaves a half-written app-<date>.db that list/latest
+    # would report as good.
+    tmp = path <> ".tmp"
+
     with :ok <- File.mkdir_p(dir),
          # VACUUM INTO refuses an existing target.
-         _ <- File.rm(path),
-         {:ok, _} <- Ecto.Adapters.SQL.query(App.Repo, "VACUUM INTO ?", [path]) do
+         _ <- File.rm(tmp),
+         {:ok, _} <- Ecto.Adapters.SQL.query(App.Repo, "VACUUM INTO ?", [tmp]),
+         :ok <- File.rename(tmp, path) do
       prune(dir, keep)
       Logger.info("[backup] snapshot written: #{path} (#{File.stat!(path).size} bytes)")
       {:ok, path}

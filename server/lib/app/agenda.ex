@@ -67,7 +67,21 @@ defmodule App.Agenda do
     }
   end
 
-  @doc "Is this item past its expiry? (nil = never expires)"
-  def expired?(%Item{expires_at: nil}), do: false
-  def expired?(%Item{expires_at: at}), do: DateTime.compare(DateTime.utc_now(), at) == :gt
+  @doc """
+  Is this item no longer worth speaking? Past its `expires_at` (nil = never), or its `still_due`
+  guard says the thing it announces is over. Checked at every delivery entry point, i.e. at the
+  moment it would be spoken. A guard that raises fails OPEN (speak) — never silently lose one.
+  """
+  def expired?(%Item{} = item), do: past_expiry?(item) or not still_due?(item)
+
+  defp past_expiry?(%Item{expires_at: nil}), do: false
+  defp past_expiry?(%Item{expires_at: at}), do: DateTime.compare(DateTime.utc_now(), at) == :gt
+
+  defp still_due?(%Item{still_due: {m, f, a}}) do
+    apply(m, f, a) != false
+  rescue
+    _ -> true
+  end
+
+  defp still_due?(_item), do: true
 end

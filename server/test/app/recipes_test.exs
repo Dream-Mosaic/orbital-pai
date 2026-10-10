@@ -305,6 +305,22 @@ defmodule App.RecipesTest do
       assert Recipes.list(d) == []
     end
 
+    test "a name in BOTH scopes is not silently resolved for a write — it asks which", %{
+      d: d,
+      t: t
+    } do
+      save!(d, %{})
+      save!(t, %{household: false})
+
+      assert {:error, {:which_scope, %Recipe{household: true}, %Recipe{household: false}}} =
+               Recipes.delete(t, "my lasagna recipe")
+
+      assert {:error, {:which_scope, _, _}} = Recipes.update(t, "lasagna", %{add_note: "x"})
+      # an explicit scope goes straight through, and the shared one survives
+      assert {:ok, %Recipe{household: false}} = Recipes.delete(t, "lasagna", :personal)
+      assert [%Recipe{household: true}] = Recipes.list(d)
+    end
+
     test "another user's personal recipe is invisible to delete", %{d: d, t: t} do
       save!(d, %{household: false})
       assert Recipes.delete(t, "lasagna") == {:error, :not_found}

@@ -132,19 +132,30 @@ defmodule App.Tools.Lists do
             {:error, :invalid_item}
 
           [first | _] ->
-            # The list's contents ride along so the client can show the updated list as a
-            # card (App.Cards) — "added butter" is better SEEN on the groceries list itself.
-            items = Lists.with_items(list).items
+            base = %{
+              item: first,
+              added: added,
+              list: list.name,
+              household: list.household,
+              assigned: target.assigned
+            }
 
-            {:ok,
-             %{
-               item: first,
-               added: added,
-               list: list.name,
-               household: list.household,
-               assigned: target.assigned,
-               items: Enum.map(items, &%{text: &1.text, checked: &1.checked_at != nil})
-             }}
+            # The list's contents ride along so the client can show the updated list as a
+            # card (App.Cards) — but ONLY for a list the speaker may read: the household's or
+            # their own. Adding to someone ELSE's personal list (household_named_targets) must
+            # not hand their private items to the brain and the card.
+            if list.household or target.user_id == uid(ctx) do
+              items = Lists.with_items(list).items
+
+              {:ok,
+               Map.put(
+                 base,
+                 :items,
+                 Enum.map(items, &%{text: &1.text, checked: &1.checked_at != nil})
+               )}
+            else
+              {:ok, base}
+            end
         end
     end
   end

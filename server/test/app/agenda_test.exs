@@ -113,6 +113,15 @@ defmodule App.AgendaTest do
     assert Agenda.expired?(%Item{kind: :x, prompt: "p", expires_at: minutes_from_now(-5)})
   end
 
+  def still(v), do: v
+  def boom, do: raise("guard blew up")
+
+  test "expired?/1 honours a still_due guard, failing OPEN when the guard raises" do
+    refute Agenda.expired?(%Item{kind: :x, prompt: "p", still_due: {__MODULE__, :still, [true]}})
+    assert Agenda.expired?(%Item{kind: :x, prompt: "p", still_due: {__MODULE__, :still, [false]}})
+    refute Agenda.expired?(%Item{kind: :x, prompt: "p", still_due: {__MODULE__, :boom, []}})
+  end
+
   test "deliver/2 broadcasts {:agenda_due, item} on agenda:<user_id>" do
     Phoenix.PubSub.subscribe(App.PubSub, "agenda:42")
     item = %Item{kind: :reminder, prompt: "p"}

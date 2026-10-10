@@ -114,8 +114,7 @@ defmodule App.Timers do
   end
 
   defp stop_all(user_id, timers) do
-    stopped =
-      for t <- timers, {:ok, s} <- [transition(t.id, t.state, stop_state(t.state))], do: s
+    stopped = for t <- timers, {:ok, s} <- [stop_one(t)], do: s
 
     case stopped do
       [] ->
@@ -129,6 +128,22 @@ defmodule App.Timers do
 
   defp stop_state("ringing"), do: "done"
   defp stop_state("running"), do: "cancelled"
+
+  # The state we read can be a beat stale: "cancel the pasta timer" said just as it fires reads
+  # `running`, but the scheduler's fire lands first and the running→cancelled update matches no
+  # row. Retry once from `ringing` so the user's stop still stops it.
+  @doc false
+  def stop_one(%Timer{state: "running"} = t) do
+    case transition(t.id, "running", "cancelled") do
+      {:ok, _} = ok -> ok
+      _ -> transition(t.id, "ringing", "done")
+    end
+  end
+
+  def stop_one(%Timer{state: state} = t), do: transition(t.id, state, stop_state(state))
+
+  @doc "Is this timer still ringing? The guard a queued 'timer's done' notice re-checks."
+  def ringing?(id), do: match?(%Timer{state: "ringing"}, Repo.get(Timer, id))
 
   @doc "Silence one of the user's RINGING timers (→ done). `{:error, :not_found}` otherwise."
   def dismiss(user_id, id) when is_integer(id) do
@@ -211,7 +226,9 @@ defmodule App.Timers do
       lead_idle: "Timer's done —",
       lead_interjected: "Oh — your timer —",
       deliver: :when_idle,
-      expires_at: DateTime.add(DateTime.utc_now(), @notice_ttl_s, :second)
+      expires_at: DateTime.add(DateTime.utc_now(), @notice_ttl_s, :second),
+      # queued behind a turn and dismissed meanwhile (tap or "stop the timer") → don't announce it
+      still_due: {__MODULE__, :ringing?, [timer.id]}
     }
   end
 

@@ -98,6 +98,10 @@ defmodule App.Tools.ListsTest do
 
       assert result.assigned == "Bob"
       assert Enum.any?(App.Lists.list_visible(other.id), &(&1.name == "To-do"))
+
+      # Bob's PERSONAL list contents never come back to Alice (no items, so no card either)
+      refute Map.has_key?(result, :items)
+      assert App.Cards.from_tool("add_to_list", %{}, result) == nil
     end
 
     test "for: a name falls back to personal when household_named_targets is off (default)", %{

@@ -308,6 +308,15 @@ defmodule App.Tools.Recipes do
      }}
   end
 
+  defp miss({:error, {:which_scope, shared, _mine}}, _name, _uid) do
+    {:ok,
+     %{
+       note:
+         "there's a shared \"#{shared.title}\" AND a private one — ask which, then call again " <>
+           "with personal: true for the private one or personal: false for the shared one"
+     }}
+  end
+
   defp miss({:error, %Ecto.Changeset{}}, _name, _uid), do: {:error, :invalid_recipe}
   defp miss({:error, _reason} = error, _name, _uid), do: error
 

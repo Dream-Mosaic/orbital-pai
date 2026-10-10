@@ -29,7 +29,10 @@ defmodule App.Agenda.Item do
             # true = `prompt` is spoken VERBATIM in the brain slot (TTS only, no model call) —
             # for items whose words are already known (a timer going off, a relayed household
             # message), where a brain round-trip would only add latency and paraphrase.
-            canned: false
+            canned: false,
+            # {m, f, a} re-checked the moment the item would be spoken; false drops it like an
+            # expiry (a queued "timer's done" whose timer was dismissed meanwhile). nil = always.
+            still_due: nil
 
   @type t :: %__MODULE__{}
 end
