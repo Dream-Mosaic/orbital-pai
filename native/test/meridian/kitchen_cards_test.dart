@@ -161,6 +161,36 @@ void main() {
       expect(find.byType(StepProgress), findsOneWidget);
     });
 
+    testWidgets('a pill with seconds starts its timer once, then reads Started', (tester) async {
+      final started = <(int, String)>[];
+      final data = {...cookStepCard, 'timer_seconds': [1500, 0]};
+      await tester.pumpWidget(host(ThreadCardView(
+        card: ThreadCard(type: 'cook_step', data: data),
+        onStartTimer: (s, label) {
+          started.add((s, label));
+          return true;
+        },
+      )));
+
+      await tester.tap(find.text('25 minutes'));
+      await tester.pump();
+      expect(started, [(1500, "grandma's lasagna")]);
+      expect(find.text('Started · 25 minutes'), findsOneWidget);
+
+      // tapping again can't start a second timer; a 0-second pill was never tappable
+      await tester.tap(find.text('Started · 25 minutes'));
+      await tester.tap(find.text('20 more minutes'));
+      await tester.pump();
+      expect(started, hasLength(1));
+    });
+
+    testWidgets('without a callback (or seconds) the pills are display-only', (tester) async {
+      await tester.pumpWidget(view('cook_step', cookStepCard));
+      await tester.tap(find.text('25 minutes'));
+      await tester.pump();
+      expect(find.textContaining('Started'), findsNothing);
+    });
+
     testWidgets('the last step says so and shows no next', (tester) async {
       final last = {...cookStepCard, 'next_label': 'Last step', 'step': 7}..remove('next');
       await tester.pumpWidget(view('cook_step', last));

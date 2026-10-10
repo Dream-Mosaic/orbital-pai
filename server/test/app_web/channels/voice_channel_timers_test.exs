@@ -61,6 +61,27 @@ defmodule AppWeb.VoiceChannelTimersTest do
     assert_push "timers", %{timers: [%{label: "tea", state: "ringing", remaining_ms: 0}]}
   end
 
+  describe "start_timer (a tapped cook-mode pill)" do
+    test "starts the user's own timer and the strip gets it", %{alice: alice} do
+      channel = join_voice(alice)
+      assert_push "timers", %{timers: []}
+
+      ref = push(channel, "start_timer", %{"seconds" => 480, "label" => "Lasagna"})
+      assert_reply ref, :ok
+      assert_push "timers", %{timers: [%{label: "Lasagna", duration_ms: 480_000}]}
+      assert [%{label: "Lasagna"}] = Timers.list_active(alice.id)
+    end
+
+    test "a bad duration or an off-shape payload is refused", %{alice: alice} do
+      channel = join_voice(alice)
+      ref = push(channel, "start_timer", %{"seconds" => 0})
+      assert_reply ref, :error, %{reason: "invalid_duration"}
+      ref = push(channel, "start_timer", %{"seconds" => "8 minutes"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      assert Timers.list_active(alice.id) == []
+    end
+  end
+
   describe "dismiss_timer" do
     test "silences one of the user's own ringing timers", %{alice: alice} do
       {:ok, t} = Timers.create(alice.id, 60)

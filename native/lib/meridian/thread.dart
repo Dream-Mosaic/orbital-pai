@@ -25,6 +25,7 @@ class Thread extends StatelessWidget {
     required this.glow,
     this.scrollController,
     this.onAck,
+    this.onStartTimer,
   });
 
   final List<ThreadItem> items;
@@ -34,6 +35,9 @@ class Thread extends StatelessWidget {
 
   final ScrollController? scrollController;
   final void Function(int reminderId)? onAck;
+
+  /// A card's tappable timer (a cook-mode step's "8 minutes" pill).
+  final bool Function(int seconds, String label)? onStartTimer;
 
   static const double _railFraction = 0.36; // --rail
   static const double _logPadX = 4.0; // #voice .log padding: 0 4px
@@ -132,7 +136,7 @@ class Thread extends StatelessWidget {
         // A visual answer sits in Henry's column, its left edge on his text.
         ThreadCard() => Padding(
             padding: EdgeInsets.only(left: rail + 18),
-            child: ThreadCardView(card: item),
+            child: ThreadCardView(card: item, onStartTimer: onStartTimer),
           ),
       };
 

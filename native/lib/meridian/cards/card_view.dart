@@ -14,9 +14,12 @@ import 'weather_card.dart';
 /// drops unknown types; the fallthrough here is belt-and-braces, and renders
 /// nothing rather than a guess.
 class ThreadCardView extends StatelessWidget {
-  const ThreadCardView({super.key, required this.card});
+  const ThreadCardView({super.key, required this.card, this.onStartTimer});
 
   final ThreadCard card;
+
+  /// Passed to cards with startable timers (cook steps); null = pills are display-only.
+  final bool Function(int seconds, String label)? onStartTimer;
 
   @override
   Widget build(BuildContext context) => switch (card.type) {
@@ -28,7 +31,7 @@ class ThreadCardView extends StatelessWidget {
         'tracker' => TrackerCard(data: card.data),
         'tracker_logged' => TrackerLoggedCard(data: card.data),
         'recipe' => RecipeCard(data: card.data),
-        'cook_step' => CookStepCard(data: card.data),
+        'cook_step' => CookStepCard(data: card.data, onStartTimer: onStartTimer),
         _ => const SizedBox.shrink(),
       };
 }

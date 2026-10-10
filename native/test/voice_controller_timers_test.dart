@@ -89,6 +89,15 @@ void main() {
     ]);
   });
 
+  test('startTimer pushes start_timer with seconds and label; nonsense is refused', () async {
+    expect(vc.startTimer(480, 'lasagna'), isTrue);
+    expect(vc.startTimer(0, 'nope'), isFalse);
+    await settle();
+    expect(pushesOf('start_timer'), [
+      {'seconds': 480, 'label': 'lasagna'}
+    ]);
+  });
+
   test('cancelTimer pushes cancel_timer', () async {
     vc.debugHandleMessage(timersMsg([wireTimer(7)]));
     vc.cancelTimer(7);

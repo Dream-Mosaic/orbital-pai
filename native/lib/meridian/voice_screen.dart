@@ -223,6 +223,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                               glow: glow,
                               scrollController: _scroll,
                               onAck: vc.ackReminder,
+                              onStartTimer: vc.startTimer,
                             ),
                           ),
                         ),

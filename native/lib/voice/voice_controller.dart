@@ -659,6 +659,15 @@ class VoiceController extends ChangeNotifier {
     _live?.push('cancel_timer', {'id': id});
   }
 
+  /// A tapped timer pill on a cook-mode card: start it on the server (no brain round); the
+  /// strip shows it when the `timers` push comes back, on every device of the user.
+  bool startTimer(int seconds, String label) {
+    final ch = _live;
+    if (ch == null || seconds <= 0) return false;
+    ch.push('start_timer', {'seconds': seconds, 'label': label});
+    return true;
+  }
+
   // ---- controls ----
 
   /// The native twin of index.js's startTalking()/stopTalking().

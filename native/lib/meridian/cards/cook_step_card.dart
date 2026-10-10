@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../tokens.dart';
 import 'card_frame.dart';
@@ -9,9 +10,12 @@ import 'card_frame.dart';
 /// the counter: where you are in the recipe, the step itself as large as the
 /// column allows, its times as timer suggestions, and a glance at what's next.
 class CookStepCard extends StatelessWidget {
-  const CookStepCard({super.key, required this.data});
+  const CookStepCard({super.key, required this.data, this.onStartTimer});
 
   final Map<String, dynamic> data;
+
+  /// Starts a pill's timer — hands in the dough, one tap, no voice round.
+  final bool Function(int seconds, String label)? onStartTimer;
 
   static const Color accent = M.recipe;
 
@@ -27,6 +31,13 @@ class CookStepCard extends StatelessWidget {
     final step = data['step'];
     final count = data['step_count'];
     final timers = data.strs('timers');
+    // aligned with `timers`; 0 / missing = display only
+    final rawSecs = data['timer_seconds'];
+    final secs = [
+      for (var i = 0; i < timers.length; i++)
+        rawSecs is List && i < rawSecs.length && rawSecs[i] is int ? rawSecs[i] as int : 0,
+    ];
+    final title = data.str('title') ?? 'timer';
     final nextLabel = data.str('next_label');
     final next = data.str('next');
     return CardFrame(
@@ -61,7 +72,15 @@ class CookStepCard extends StatelessWidget {
             Wrap(
               spacing: 6,
               runSpacing: 6,
-              children: [for (final t in timers) TimerPill(t)],
+              children: [
+                for (var i = 0; i < timers.length; i++)
+                  TimerPill(
+                    timers[i],
+                    onTap: onStartTimer != null && secs[i] > 0
+                        ? () => onStartTimer!(secs[i], title.toLowerCase())
+                        : null,
+                  ),
+              ],
             ),
           ],
           if (nextLabel != null) ...[
@@ -155,25 +174,57 @@ class _ProgressPainter extends CustomPainter {
 }
 
 /// A step's time, offered as a timer: a coral pill with a small stopwatch.
-class TimerPill extends StatelessWidget {
-  const TimerPill(this.text, {super.key});
+class TimerPill extends StatefulWidget {
+  const TimerPill(this.text, {super.key, this.onTap});
 
   final String text;
+
+  /// Starts the timer; null = display only. Returns whether it was sent.
+  final bool Function()? onTap;
 
   static const Color colour = M.timer;
 
   @override
-  Widget build(BuildContext context) => Container(
+  State<TimerPill> createState() => _TimerPillState();
+}
+
+class _TimerPillState extends State<TimerPill> {
+  /// Set once a tap has started it: the pill reads "Started" so a second tap
+  /// can't quietly start a second timer for the same step.
+  bool _started = false;
+
+  void _tap() {
+    final sent = widget.onTap?.call() ?? false;
+    if (!sent) return;
+    HapticFeedback.selectionClick();
+    setState(() => _started = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const colour = TimerPill.colour;
+    final text = _started ? 'Started · ${widget.text}' : widget.text;
+    final tappable = widget.onTap != null && !_started;
+    final pill = _pill(colour, text, tappable);
+    if (!tappable) return pill;
+    return Semantics(
+      button: true,
+      label: 'Start a ${widget.text} timer',
+      child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: _tap, child: pill),
+    );
+  }
+
+  Widget _pill(Color colour, String text, bool tappable) => Container(
         padding: const EdgeInsets.fromLTRB(7, 4.5, 9, 4.5),
         decoration: BoxDecoration(
           color: colour.withValues(alpha: 0.1),
-          border: Border.all(color: colour.withValues(alpha: 0.4)),
+          border: Border.all(color: colour.withValues(alpha: tappable ? 0.7 : 0.4)),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
+            SizedBox(
               width: 11,
               height: 11,
               child: CustomPaint(painter: _StopwatchPainter(colour)),

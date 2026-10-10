@@ -9,6 +9,25 @@ defmodule App.CardsTest do
 
   defp card(name, args, result), do: Cards.from_tool(name, args, result, @opts)
 
+  describe "duration_seconds/1 (cook-mode timer pills)" do
+    test "spoken step durations become seconds; a range starts at its low end" do
+      for {phrase, secs} <- [
+            {"8 minutes", 480},
+            {"25 to 30 minutes", 1500},
+            {"an hour", 3600},
+            {"half an hour", 1800},
+            {"1 1/2 hours", 5400},
+            {"10 min", 600},
+            {"45 seconds", 45},
+            {"ten minutes", 600}
+          ],
+          do: assert(Cards.duration_seconds(phrase) == secs, phrase)
+
+      assert Cards.duration_seconds("about") == nil
+      assert Cards.duration_seconds(nil) == nil
+    end
+  end
+
   describe "weather" do
     # Shaped by the tool's own builder from a raw Open-Meteo payload, so this is exactly the
     # map get_weather hands the brain.

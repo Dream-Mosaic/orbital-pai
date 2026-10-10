@@ -191,6 +191,20 @@ defmodule AppWeb.VoiceChannel do
   def handle_in(event, _payload, socket) when event in ["dismiss_timer", "cancel_timer"],
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
+  # A timer started by a TAP (a cook-mode step's "8 minutes" pill) — no brain round, the same
+  # App.Timers path the set_timer tool takes, so every device's strip shows it.
+  def handle_in("start_timer", %{"seconds" => secs} = payload, socket) when is_integer(secs) do
+    label = if is_binary(payload["label"]), do: String.slice(payload["label"], 0, 60)
+
+    case App.Timers.create(socket.assigns.user_id, secs, label) do
+      {:ok, _timer} -> {:reply, :ok, socket}
+      {:error, _} -> {:reply, {:error, %{reason: "invalid_duration"}}, socket}
+    end
+  end
+
+  def handle_in("start_timer", _payload, socket),
+    do: {:reply, {:error, %{reason: "bad_request"}}, socket}
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do

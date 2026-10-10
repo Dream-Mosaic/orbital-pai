@@ -802,9 +802,84 @@ defmodule App.Cards do
       step_count: length(steps),
       text: step.text,
       timers: nonempty(step[:durations] || []),
+      # aligned with `timers`; 0 = not startable. A range starts at its LOW end ("25 to 30
+      # minutes" → 25): a kitchen timer is for checking, and checking early is the safe side.
+      timer_seconds: nonempty(Enum.map(step[:durations] || [], &(duration_seconds(&1) || 0))),
       next_label: if(next, do: "Next", else: "Last step"),
       next: next && preview(next.text)
     })
+  end
+
+  @words %{
+    "a" => 1,
+    "an" => 1,
+    "one" => 1,
+    "two" => 2,
+    "three" => 3,
+    "four" => 4,
+    "five" => 5,
+    "six" => 6,
+    "seven" => 7,
+    "eight" => 8,
+    "nine" => 9,
+    "ten" => 10,
+    "fifteen" => 15,
+    "twenty" => 20,
+    "thirty" => 30,
+    "forty" => 40,
+    "forty-five" => 45,
+    "sixty" => 60
+  }
+
+  @doc """
+  Seconds in a spoken duration from a recipe step ("8 minutes", "25 to 30 minutes" → its low
+  end, "an hour", "half an hour", "1 1/2 hours", "10 min", "45 seconds"), or nil.
+  """
+  def duration_seconds(phrase) when is_binary(phrase) do
+    p = phrase |> String.downcase() |> String.trim()
+
+    unit =
+      cond do
+        p =~ ~r/\b(hours?|hrs?)\b/u -> 3600
+        p =~ ~r/\b(minutes?|mins?)\b/u -> 60
+        p =~ ~r/\b(seconds?|secs?)\b/u -> 1
+        true -> nil
+      end
+
+    with u when is_integer(u) <- unit, amount when is_number(amount) <- amount(p) do
+      secs = round(amount * u)
+      if secs in 1..86_400, do: secs
+    else
+      _ -> nil
+    end
+  end
+
+  def duration_seconds(_), do: nil
+
+  defp amount(p) do
+    cond do
+      p =~ ~r/^half an?\b/u ->
+        0.5
+
+      m = Regex.run(~r/^(\d+)\s+(\d+)\/(\d+)/u, p) ->
+        [_, w, n, d] = m
+        String.to_integer(w) + String.to_integer(n) / max(String.to_integer(d), 1)
+
+      m = Regex.run(~r/^(\d+)\/(\d+)/u, p) ->
+        [_, n, d] = m
+        String.to_integer(n) / max(String.to_integer(d), 1)
+
+      m = Regex.run(~r/^(\d+(?:[.,]\d+)?)/u, p) ->
+        [_, x] = m
+        x |> String.replace(",", ".") |> Float.parse() |> elem(0)
+
+      m = Regex.run(~r/^([a-z-]+)\b/u, p) ->
+        [_, w] = m
+        Map.get(@words, w)
+
+      true ->
+        nil
+    end
   end
 
   # The next step's opening words — enough to glance ahead without reading it.
