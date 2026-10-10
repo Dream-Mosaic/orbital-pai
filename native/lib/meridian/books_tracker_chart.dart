@@ -408,18 +408,39 @@ class _TrackerChartState extends State<TrackerChart> {
       children: [
         SizedBox(
           height: 16,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              tip.isNotEmpty ? tip : widget.caption.toUpperCase(),
-              key: TrackerChart.readoutKey,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: tip.isNotEmpty
-                  ? CardStyle.body(12, colour: M.ink, weight: 520, height: 1.2)
-                  : CardStyle.label(widget.colour.withValues(alpha: 0.9),
-                      size: 8.6),
-            ),
+          child: Row(
+            children: [
+              // The touched day's key: a dot in the bars' colour, so the
+              // readout is visibly about the lifted bar. The text stays ink.
+              if (tip.isNotEmpty)
+                Container(
+                  width: 6,
+                  height: 6,
+                  margin: const EdgeInsets.only(right: 7),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: widget.colour,
+                    boxShadow: [
+                      BoxShadow(
+                          color: widget.colour.withValues(alpha: 0.6),
+                          blurRadius: 6),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: Text(
+                  tip.isNotEmpty ? tip : widget.caption.toUpperCase(),
+                  key: TrackerChart.readoutKey,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: tip.isNotEmpty
+                      ? CardStyle.body(12,
+                          colour: M.ink, weight: 520, height: 1.2)
+                      : CardStyle.label(widget.colour.withValues(alpha: 0.9),
+                          size: 8.6),
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 8),
