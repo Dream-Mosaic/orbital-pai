@@ -12,6 +12,7 @@ class SettingsState {
     required this.defaultAbi,
     required this.defaultPtt,
     required this.voiceActivation,
+    this.headsUp,
     required this.briefingTime,
     required this.relockSeconds,
     required this.appVersion,
@@ -20,6 +21,11 @@ class SettingsState {
   final bool defaultAbi;
   final bool defaultPtt;
   final bool voiceActivation;
+
+  /// Calendar heads-ups (a spoken nudge before each event). null when the
+  /// server predates the pref: the app and server ship separately, and a
+  /// toggle the server would refuse is better hidden than shown OFF.
+  final bool? headsUp;
 
   /// null when the morning briefing is off — the toggle derives from exactly
   /// this, as the web's `checked={@briefing_time != nil}` does.
@@ -36,6 +42,7 @@ class SettingsState {
         defaultAbi: j['default_abi'] == true,
         defaultPtt: j['default_ptt'] == true,
         voiceActivation: j['voice_activation'] == true,
+        headsUp: j['heads_up'] as bool?,
         briefingTime: j['briefing_time'] as String?,
         relockSeconds: (j['relock_seconds'] as num?)?.toInt() ?? 15,
         appVersion: j['app_version'] as String? ?? '',

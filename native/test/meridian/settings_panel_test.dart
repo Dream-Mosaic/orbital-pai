@@ -12,11 +12,23 @@ import '../support/fake_socket.dart';
 
 const String _stateFrame = '[null,null,"panel:settings:henry","state",'
     '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+    '"heads_up":true,'
     '"briefing_time":null,"relock_seconds":15,"app_version":"0.4.19"}]';
 
 const String _briefingOnFrame = '[null,null,"panel:settings:henry","state",'
     '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+    '"heads_up":true,'
     '"briefing_time":"07:00","relock_seconds":15,"app_version":"0.4.19"}]';
+
+const String _headsUpOffFrame = '[null,null,"panel:settings:henry","state",'
+    '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+    '"heads_up":false,'
+    '"briefing_time":null,"relock_seconds":15,"app_version":"0.4.19"}]';
+
+// A server that predates calendar heads-ups: no heads_up key at all.
+const String _noHeadsUpFrame = '[null,null,"panel:settings:henry","state",'
+    '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+    '"briefing_time":null,"relock_seconds":15,"app_version":"0.4.19"}]';
 
 void main() {
   // Same rationale as reminders_panel_test.dart: the socket's heartbeat is a
@@ -72,6 +84,10 @@ void main() {
         find.text('Wake word (say "Henry" to start; saves streaming cost)'),
         findsOneWidget);
     expect(find.text('Morning briefing (spoken your first turn that morning)'),
+        findsOneWidget);
+    expect(
+        find.text(
+            'Calendar heads-ups (a spoken nudge 10 minutes before each event)'),
         findsOneWidget);
     expect(find.text('Danger zone'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
@@ -145,6 +161,54 @@ void main() {
 
     expect(find.textContaining('wall only'), findsNothing);
     expect(find.textContaining('Wake word'), findsOneWidget);
+
+    await conn.disconnect();
+  });
+
+  testWidgets('the heads-up toggle reflects state, on and off', (tester) async {
+    final (client, conn, _) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('toggle-heads_up')))
+            .value,
+        isTrue);
+    await conn.disconnect();
+
+    final (client2, conn2, _) = await openedClient(tester, _headsUpOffFrame);
+    await pumpPanel(tester, client2);
+    expect(
+        tester
+            .widget<Switch>(find.byKey(const ValueKey('toggle-heads_up')))
+            .value,
+        isFalse);
+    await conn2.disconnect();
+  });
+
+  testWidgets('flipping the heads-up switch pushes set_pref heads_up false',
+      (tester) async {
+    final (client, conn, fake) = await openedClient(tester, _stateFrame);
+    await pumpPanel(tester, client);
+
+    await tester.tap(find.byKey(const ValueKey('toggle-heads_up')));
+    await tester.pump();
+
+    expect(lastPush(fake), [
+      'panel:settings:henry',
+      'set_pref',
+      {'pref': 'heads_up', 'value': false},
+    ]);
+
+    await conn.disconnect();
+  });
+
+  testWidgets('no heads-up toggle when the server does not know the pref',
+      (tester) async {
+    final (client, conn, _) = await openedClient(tester, _noHeadsUpFrame);
+    await pumpPanel(tester, client);
+
+    expect(find.byKey(const ValueKey('toggle-heads_up')), findsNothing);
+    expect(find.textContaining('Calendar heads-ups'), findsNothing);
 
     await conn.disconnect();
   });

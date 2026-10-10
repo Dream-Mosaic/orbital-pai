@@ -9,6 +9,7 @@ import '../support/fake_socket.dart';
 const String _stateFrame =
     '[null,null,"panel:settings:henry","state",'
     '{"default_abi":true,"default_ptt":false,"voice_activation":true,'
+    '"heads_up":true,'
     '"briefing_time":"07:00","relock_seconds":15,"app_version":"0.4.19"}]';
 
 // Same payload except the morning briefing is off — proves the parse lands
@@ -58,6 +59,7 @@ void main() {
     expect(s!.defaultAbi, isTrue);
     expect(s.defaultPtt, isFalse);
     expect(s.voiceActivation, isTrue);
+    expect(s.headsUp, isTrue);
     expect(s.briefingTime, '07:00');
     expect(s.relockSeconds, 15);
     expect(s.appVersion, '0.4.19');
@@ -82,6 +84,30 @@ void main() {
     await pumpEventQueue();
 
     expect(sc.state!.briefingTime, isNull);
+  });
+
+  test('a server that predates heads_up parses it to null, not false',
+      () async {
+    // _nullBriefingFrame carries no heads_up key: an older server. null lets
+    // the panel hide a toggle the server could not honour, rather than show
+    // it OFF and refuse the write.
+    final fake2 = FakeSocket(
+        joinPushes: const {'panel:settings:henry': _nullBriefingFrame});
+    final c2 = AppConnection(
+      connector: () async => fake2.socket,
+      rejoinBackoff: const [Duration(days: 1)],
+    );
+    final sc = SettingsClient(connection: c2);
+    addTearDown(() {
+      sc.dispose();
+      c2.dispose();
+    });
+
+    await c2.connect();
+    sc.open();
+    await pumpEventQueue();
+
+    expect(sc.state!.headsUp, isNull);
   });
 
   test('close() leaves the topic, clears state, and deregisters the topic',

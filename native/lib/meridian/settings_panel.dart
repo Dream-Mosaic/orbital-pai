@@ -143,6 +143,16 @@ class SettingsPanelView extends StatelessWidget {
             const SizedBox(height: 8),
             _briefingTimeRow(context, state),
           ],
+          if (state.headsUp != null) ...[
+            const SizedBox(height: 8),
+            _toggle(
+              key: const ValueKey('toggle-heads_up'),
+              label:
+                  'Calendar heads-ups (a spoken nudge 10 minutes before each event)',
+              value: state.headsUp!,
+              onChanged: (v) => client.setPref('heads_up', v),
+            ),
+          ],
           const SizedBox(height: 8),
           _lockdownRow(state),
         ],
