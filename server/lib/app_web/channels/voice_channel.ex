@@ -148,6 +148,22 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # A TYPED message (spec 2026-10-10 household wave 1, F1), answered quietly in text. The
+  # thread's "you" line comes back as the ordinary `transcript` push, so the sender never
+  # draws an optimistic copy and every device renders it exactly once.
+  @max_typed_chars 2_000
+
+  def handle_in("text", %{"text" => text}, socket) when is_binary(text) do
+    case String.trim(text) do
+      "" -> :ok
+      t -> Conversation.typed(socket.assigns.conversation, String.slice(t, 0, @max_typed_chars))
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_in("text", _payload, socket), do: {:noreply, socket}
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do

@@ -369,6 +369,48 @@ defmodule AppWeb.VoiceChannelTest do
     end
   end
 
+  # Spec 2026-10-10 household wave 1, F1: a typed message rides voice:henry and is answered
+  # quietly. The "you" line comes from the server's transcript echo, never an optimistic one.
+  describe "text (typed turns)" do
+    setup do
+      # the quiet turn persists like any other, and the memory updater behind it calls the
+      # text model from a background task
+      Mox.set_mox_global()
+      Mox.stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, ""} end)
+      :ok
+    end
+
+    test "echoes the trimmed transcript and answers in text, with no audio", %{socket: socket} do
+      push(socket, "text", %{"text" => "  what's the weather  "})
+
+      assert_push "transcript", %{text: "what's the weather"}
+      assert_push "speak_start", %{source: :brain, text: "the answer"}
+      refute_push "audio", _, 100
+    end
+
+    test "a blank message is dropped", %{socket: socket} do
+      push(socket, "text", %{"text" => "   \n "})
+      refute_push "transcript", _, 200
+    end
+
+    test "a long message is capped at 2,000 characters", %{socket: socket} do
+      push(socket, "text", %{"text" => String.duplicate("a", 2_500)})
+
+      assert_push "transcript", %{text: text}
+      assert String.length(text) == 2_000
+    end
+
+    test "an off-shape payload is ignored, not crashed on", %{socket: socket} do
+      push(socket, "text", %{"text" => 42})
+      push(socket, "text", %{})
+      refute_push "transcript", _, 100
+
+      # the channel is still alive and relaying
+      send(socket.channel_pid, {:to_client, :stop_playback})
+      assert_push "stop_playback", %{}
+    end
+  end
+
   defp fired_reminder!(attrs) do
     due = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
     {:ok, r} = App.Reminders.create(Map.merge(%{due_at: due}, attrs))
