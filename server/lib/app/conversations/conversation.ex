@@ -73,6 +73,14 @@ defmodule App.Conversations.Conversation do
   def ptt_press(pid), do: :gen_statem.cast(pid, {:ptt_press, self()})
 
   @doc """
+  A TYPED message from the calling channel (spec 2026-10-10 household wave 1, F1). Explicit
+  intent, answered quietly in text — no reflex, no speech. Claims the conversation from a
+  non-bound device (like `ptt_press/1`), gets through the wake lock, PTT gating and the Voice
+  Lock gate without unlocking anything, and aborts a turn in flight like a barge-in.
+  """
+  def typed(pid, text), do: :gen_statem.cast(pid, {:typed, text, self()})
+
+  @doc """
   The CLIENT's local keyword spotter fired. Unlocks immediately rather than waiting to
   re-recognize the name in a transcript whose opening the server may only partially hold —
   the device gates the audio, so the first syllables may predate the socket opening.
@@ -197,6 +205,9 @@ defmodule App.Conversations.Conversation do
       # when set to {item, mode}, the in-flight turn is a self-initiated agenda turn
       # (canned lead instead of the reflex model; not persisted as conversation)
       agenda_turn: nil,
+      # the in-flight turn was TYPED: answered in text only (no reflex, no TTS, no audio).
+      # Reset on completion (reset_turn_fields) and on abort (:cancel_brain).
+      quiet_turn: false,
       reflex_text: nil,
       brain_text: nil,
       # eager_end head-start: a reflex pre-computed from Ink's turn.eager_end prediction.
@@ -562,6 +573,21 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, {:ptt_press, from}, _s, %{client: from} = data),
     do: {:keep_state, data}
+
+  # A typed message (see typed/2). A CLAIM from a non-bound device, exactly as for ptt_press.
+  def handle_event(:cast, {:typed, text, from}, _s, data) do
+    cond do
+      blank?(text) ->
+        {:keep_state, data}
+
+      from != data.client ->
+        Logger.info("[conn] claimed by a non-bound device (typed)")
+        typed_turn(String.trim(text), claim(data, from)) |> cancel_linger()
+
+      true ->
+        typed_turn(String.trim(text), data)
+    end
+  end
 
   def handle_event(:cast, {:push_audio, pcm, from}, _s, %{client: from} = data),
     do: {:keep_state, push_to_stt(pcm, buffer_audio(pcm, data))}
@@ -971,7 +997,7 @@ defmodule App.Conversations.Conversation do
 
     {pid, ref, data} =
       case data.prewarm_brain do
-        {pid, ref} when data.agenda_turn == nil ->
+        {pid, ref} when data.agenda_turn == nil and not data.quiet_turn ->
           # a prewarmed brain matches this turn's context policy (default recent-context) —
           # adopt it: the Cartesia WS handshake is already done or in flight.
           if Process.alive?(pid) do
@@ -983,7 +1009,8 @@ defmodule App.Conversations.Conversation do
           end
 
         {pid, ref} ->
-          # agenda turns manage their own context — refuse the prewarm
+          # agenda turns manage their own context, and a quiet (typed) turn never speaks — the
+          # prewarm holds a Cartesia socket it would never use — refuse the prewarm
           Process.demonitor(ref, [:flush])
           if Process.alive?(pid), do: Process.exit(pid, :shutdown)
           cold_start_brain(%{data | prewarm_brain: nil}, recent?)
@@ -1021,7 +1048,9 @@ defmodule App.Conversations.Conversation do
         transcript: data.transcript,
         session_id: data.session_id,
         recent_context: recent?,
-        config: data.config
+        config: data.config,
+        # a quiet (typed) turn is read, never spoken: no Cartesia socket at all
+        tts: not data.quiet_turn
       )
 
     {pid, Process.monitor(pid), data}
@@ -1031,6 +1060,7 @@ defmodule App.Conversations.Conversation do
     cfg = data.config
     sid = data.session_id
     transcript = data.transcript
+    quiet? = data.quiet_turn
     me = self()
 
     Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
@@ -1039,12 +1069,9 @@ defmodule App.Conversations.Conversation do
 
       case text_model().generate(transcript, ctx, opts) do
         {:ok, text} ->
-          case tts().synthesize(text, tts_opts(cfg)) do
-            {:ok, pcm} -> send(me, {:brain_audio, pcm})
-            # TTS down too — still send the text so the UI shows the answer.
-            {:error, _} -> :ok
-          end
-
+          # TTS down too — still send the text so the UI shows the answer. A quiet (typed)
+          # turn is text only by design.
+          unless quiet?, do: speak_brain_audio(me, text, cfg)
           send(me, {:brain_done, text})
 
         {:error, _} ->
@@ -1060,18 +1087,24 @@ defmodule App.Conversations.Conversation do
   # resulting non-blank {:brain_done, _} can't loop back into another substitution.
   defp spawn_canned_brain(text, data) do
     cfg = data.config
+    quiet? = data.quiet_turn
     me = self()
 
     Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
-      case tts().synthesize(text, tts_opts(cfg)) do
-        {:ok, pcm} -> send(me, {:brain_audio, pcm})
-        {:error, _} -> :ok
-      end
-
+      # a quiet (typed) turn shows the line without speaking it
+      unless quiet?, do: speak_brain_audio(me, text, cfg)
       send(me, {:brain_done, text})
     end)
 
     data
+  end
+
+  # Synthesize `text` and hand it back as brain audio; a TTS failure is silently text-only.
+  defp speak_brain_audio(me, text, cfg) do
+    case tts().synthesize(text, tts_opts(cfg)) do
+      {:ok, pcm} -> send(me, {:brain_audio, pcm})
+      {:error, _} -> :ok
+    end
   end
 
   defp blank?(text), do: not is_binary(text) or String.trim(text) == ""
@@ -1795,18 +1828,7 @@ defmodule App.Conversations.Conversation do
   defp run_effects(effects, data), do: Enum.reduce(effects, {data, []}, &run_effect/2)
 
   defp run_effect({:generate_reflex, t}, {data, acts}) do
-    # transcript drives the BRAIN + memory; it folds in any unanswered request carried from a
-    # barge-in (so "check my calendar" + barge "also drones?" answers both). The displayed `you:`
-    # line + the reflex still use just `t` (the new utterance), so the UI isn't redundant.
-    data = %{
-      data
-      | endpoint_at: System.monotonic_time(:millisecond),
-        ttfa: nil,
-        ttb: nil,
-        transcript: with_pending(data, t),
-        pending_request: nil,
-        reflex_text: nil
-    }
+    data = begin_turn(data, t)
 
     case {data.agenda_turn, data.speculative_reflex} do
       {{%Item{} = item, mode}, _} ->
@@ -1828,6 +1850,11 @@ defmodule App.Conversations.Conversation do
         {spawn_reflex_model(t, data), acts}
     end
   end
+
+  # A quiet (typed) turn has no :generate_reflex to do the turn's bookkeeping, so it is done
+  # here, before the brain reads data.transcript.
+  defp run_effect({:start_brain, t}, {%{quiet_turn: true} = data, acts}),
+    do: start_brain_now(begin_turn(data, t), acts)
 
   defp run_effect({:start_brain, _t}, {data, acts}), do: start_brain_now(data, acts)
 
@@ -1901,6 +1928,7 @@ defmodule App.Conversations.Conversation do
          caption_buffer: [],
          pending_answer: nil,
          agenda_turn: nil,
+         quiet_turn: false,
          speculative_reflex: nil,
          commit_speculative?: false,
          interrupt_pending?: false,
@@ -1925,6 +1953,22 @@ defmodule App.Conversations.Conversation do
        {{:timeout, :watchdog}, :infinity, :cancel},
        {{:timeout, :turn_done}, :infinity, :cancel} | acts
      ]}
+  end
+
+  # The per-turn bookkeeping every endpoint owes the brain + persist path, reflex or not.
+  # transcript drives the BRAIN + memory; it folds in any unanswered request carried from a
+  # barge-in (so "check my calendar" + barge "also drones?" answers both). The displayed `you:`
+  # line + the reflex still use just `t` (the new utterance), so the UI isn't redundant.
+  defp begin_turn(data, t) do
+    %{
+      data
+      | endpoint_at: System.monotonic_time(:millisecond),
+        ttfa: nil,
+        ttb: nil,
+        transcript: with_pending(data, t),
+        pending_request: nil,
+        reflex_text: nil
+    }
   end
 
   defp announce_heard(t, data) do
@@ -2008,6 +2052,30 @@ defmodule App.Conversations.Conversation do
       end)
 
     put_ref(data, task.ref, {:reflex_tts, task.pid})
+  end
+
+  # A typed turn. It never goes near handle_endpoint, so the wake lock, PTT gating and the
+  # Voice Lock gate are bypassed by construction — and nothing here touches `locked` or the
+  # relock timer. A turn in flight is aborted exactly like a barge-in first: an unanswered
+  # request carries forward into this one (the brain answers both), an answered one persists.
+  # Returns a gen_statem result.
+  defp typed_turn(text, data) do
+    {data, abort_actions} =
+      if data.policy.phase == :listening do
+        {data, []}
+      else
+        Logger.info("[turn] ⏹ typed barge-in (during #{data.policy.phase})")
+        {:keep_state, data, actions} = barge_in_feed(on_barge_in(data))
+        {data, actions}
+      end
+
+    Logger.info("[turn] ⌨ typed: #{inspect(text)}")
+    data = cancel_speculative_reflex(%{data | quiet_turn: true})
+    emit(data, {:transcript, text})
+    {:keep_state, data, actions} = feed({:endpoint_quiet, text}, data)
+    # The abort's timer cancels must land BEFORE this turn arms its watchdog (same timer name;
+    # gen_statem applies actions in order).
+    {:keep_state, data, abort_actions ++ actions}
   end
 
   # An agenda item becomes a self-initiated turn: instant canned lead (reflex slot) then the
@@ -2318,6 +2386,7 @@ defmodule App.Conversations.Conversation do
         commit_speculative?: false,
         interrupt_pending?: false,
         pending_request: nil,
+        quiet_turn: false,
         reflex_ms: 0,
         brain_ms: 0
     }

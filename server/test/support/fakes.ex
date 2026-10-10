@@ -31,6 +31,8 @@ defmodule App.Test.Fakes do
     @moduledoc """
     Fake streaming brain: emits one tiny audio chunk then `{:brain_done, "the answer"}`.
     Set `:fake_brain_done_ms` to delay the done (so a test can barge in mid-stream).
+    `tts: false` (a quiet, typed turn) emits no audio — like the real one, which has no
+    Cartesia socket — and tells the observer `{:fake_brain_tts, false}`.
     """
     use GenServer
 
@@ -42,15 +44,21 @@ defmodule App.Test.Fakes do
 
     @impl true
     def init(opts) do
+      state = %{owner: Keyword.fetch!(opts, :owner), tts: Keyword.get(opts, :tts, true)}
+
       case Keyword.get(opts, :transcript) do
         nil ->
           # pre-warm: no transcript yet — announce and wait for begin/3
           if pid = Process.whereis(:fake_brain_observer), do: send(pid, {:fake_brain_prewarmed})
-          {:ok, %{owner: Keyword.fetch!(opts, :owner)}}
+          {:ok, state}
 
         transcript ->
           notify_observer(transcript, Keyword.get(opts, :recent_context, true))
-          {:ok, %{owner: Keyword.fetch!(opts, :owner)}, {:continue, :emit}}
+
+          observer = Process.whereis(:fake_brain_observer)
+          if state.tts == false and observer, do: send(observer, {:fake_brain_tts, false})
+
+          {:ok, state, {:continue, :emit}}
       end
     end
 
@@ -86,7 +94,7 @@ defmodule App.Test.Fakes do
     end
 
     defp emit_audio(state) do
-      send(state.owner, {:brain_audio, :binary.copy(<<0, 0>>, 160)})
+      if state.tts, do: send(state.owner, {:brain_audio, :binary.copy(<<0, 0>>, 160)})
 
       for d <- Application.get_env(:app, :fake_brain_text_deltas, []),
           do: send(state.owner, {:brain_text, d})

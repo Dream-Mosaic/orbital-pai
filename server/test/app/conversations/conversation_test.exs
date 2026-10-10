@@ -2347,6 +2347,209 @@ defmodule App.Conversations.ConversationTest do
     end
   end
 
+  # Spec 2026-10-10-household-jarvis-wave1 F1: a TYPED message is explicit intent, answered
+  # quietly in text — no reflex, no TTS, no audio — and it gets through every voice gate.
+  describe "typed (quiet) turns" do
+    setup do
+      on_exit(fn ->
+        for key <- [:fake_brain_done_ms, :fake_brain_error, :fake_brain_text_deltas],
+            do: Application.delete_env(:app, key)
+
+        if Process.whereis(:fake_brain_observer), do: Process.unregister(:fake_brain_observer)
+      end)
+    end
+
+    test "answers in text only: transcript echo + brain answer, never a reflex or any audio" do
+      # No TextModelMock expectation at all: a reflex model call would raise in its task and
+      # surface as the "Hm, go on?" fallback reflex, which the refutes below would catch.
+      Process.register(self(), :fake_brain_observer)
+      pid = start_conv()
+
+      Conversation.typed(pid, "  what's the weather  ")
+
+      assert_receive {:to_client, {:transcript, "what's the weather"}}, 500
+      assert_receive {:fake_brain_transcript, "what's the weather"}, 500
+      assert_receive {:fake_brain_tts, false}, 500
+      assert_receive {:to_client, :thinking}, 500
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+      assert_receive {:to_client, :listening}, 1000
+
+      refute_received {:to_client, {:audio, _src, _pcm}}
+      refute_received {:to_client, {:speak_start, :reflex, _}}
+    end
+
+    test "brain deltas stream straight through (no reflex to wait behind)" do
+      Application.put_env(:app, :fake_brain_text_deltas, ["The ", "answer"])
+      pid = start_conv()
+
+      Conversation.typed(pid, "hi")
+      assert_receive {:to_client, {:brain_delta, "The "}}, 1000
+      assert_receive {:to_client, {:brain_delta, "answer"}}, 1000
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+    end
+
+    test "gets through the voice-activation lock without unlocking it or arming the relock" do
+      Application.put_env(:app, :relock_ms, 60)
+      on_exit(fn -> Application.delete_env(:app, :relock_ms) end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.typed(pid, "what's the weather")
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+      assert_receive {:to_client, :listening}, 1000
+
+      # still locked: no unlock was pushed, and no relock (which would push {:locked, true})
+      refute_receive {:to_client, {:locked, _}}, 300
+
+      # ...and a no-name utterance is still silent afterwards
+      Conversation.endpoint(pid, "are you there")
+      refute_receive {:to_client, {:speak_start, _src, _text}}, 300
+    end
+
+    test "gets through PTT mode with nothing held" do
+      pid = start_conv()
+      Conversation.set_ptt(pid, true)
+
+      Conversation.typed(pid, "hi")
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+    end
+
+    test "from a non-bound device it claims the conversation, then answers that device" do
+      pid = start_conv()
+      other = spawn_client_proxy(self())
+
+      :gen_statem.cast(pid, {:typed, "hi", other})
+
+      assert_receive {:to_client, {:bound, false}}, 500
+      assert_receive {:proxied, {:to_client, {:bound, true}}}, 500
+      assert_receive {:proxied, {:to_client, {:transcript, "hi"}}}, 500
+      assert_receive {:proxied, {:to_client, {:speak_start, :brain, "the answer"}}}, 1000
+      refute_received {:to_client, {:transcript, _}}
+    end
+
+    test "typing during a live turn aborts it like a barge-in, then answers (carrying it forward)" do
+      # keep the voice turn's brain open so it is mid-stream (unanswered) when the text lands
+      Application.put_env(:app, :fake_brain_done_ms, 5_000)
+      Process.register(self(), :fake_brain_observer)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+
+      pid = start_conv()
+      Conversation.endpoint(pid, "check my calendar")
+      assert_receive {:fake_brain_transcript, "check my calendar"}, 1000
+      assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+      assert_receive {:to_client, {:audio, :brain, _}}, 1000
+
+      # the typed turn's brain answers at once
+      Application.put_env(:app, :fake_brain_done_ms, 0)
+      Conversation.typed(pid, "and the weather")
+
+      assert_receive {:to_client, :stop_playback}, 500
+      assert_receive {:to_client, {:transcript, "and the weather"}}, 500
+      # the unanswered voice request is folded in, exactly as a spoken barge-in would
+      assert_receive {:fake_brain_transcript, combined}, 1000
+      assert combined =~ "check my calendar"
+      assert combined =~ "and the weather"
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+      refute_received {:to_client, {:speak_start, :reflex, _}}
+    end
+
+    test "a blank message is ignored" do
+      pid = start_conv()
+      Conversation.typed(pid, "   ")
+
+      refute_receive {:to_client, {:transcript, _}}, 200
+      refute_received {:to_client, :speaking}
+    end
+
+    test "the next VOICE turn speaks normally (quiet_turn resets on completion)" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+      pid = start_conv()
+
+      Conversation.typed(pid, "hi")
+      assert_receive {:to_client, :listening}, 1000
+
+      Conversation.endpoint(pid, "and now out loud")
+      assert_receive {:to_client, {:speak_start, :reflex, "huh"}}, 1000
+      assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+      assert_receive {:to_client, {:audio, :brain, _}}, 1000
+    end
+
+    test "the next VOICE turn speaks normally after a typed turn is aborted (watchdog)" do
+      Application.put_env(:app, :fake_brain_done_ms, 10_000)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+      pid = start_conv(%Config{turn_max_ms: 200})
+
+      Conversation.typed(pid, "hi")
+      assert_receive {:to_client, :speaking}, 500
+      assert_receive {:to_client, :listening}, 1000
+
+      Application.put_env(:app, :fake_brain_done_ms, 0)
+      Conversation.endpoint(pid, "and now out loud")
+      assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+      assert_receive {:to_client, {:audio, :brain, _}}, 1000
+    end
+
+    test "a reminder that fires mid-typed-turn is spoken (with audio) after it" do
+      Application.put_env(:app, :fake_brain_done_ms, 200)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "huh"} end)
+      pid = start_conv()
+
+      Conversation.typed(pid, "hi")
+      assert_receive {:to_client, :speaking}, 500
+      send(pid, {:agenda_due, App.Agenda.reminder_item(%App.Reminders.Reminder{body: "bins"})})
+
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+      # queued, then interjected (its interjected lead) once the typed turn completed
+      assert_receive {:to_client, {:speak_start, :reminder, _lead}}, 1500
+      assert_receive {:to_client, {:audio, :reminder, _}}, 1000
+    end
+
+    test "a failed brain stream falls back to text only (no TTS on a quiet turn)" do
+      Application.put_env(:app, :fake_brain_error, true)
+
+      stub(App.TextModelMock, :generate, fn _t, _c, opts ->
+        assert Keyword.fetch!(opts, :tier) == :brain
+        {:ok, "the fallback answer"}
+      end)
+
+      pid = start_conv()
+      Conversation.typed(pid, "hi")
+
+      assert_receive {:to_client, {:speak_start, :brain, "the fallback answer"}}, 2000
+      assert_receive {:to_client, :listening}, 1000
+      refute_received {:to_client, {:audio, _src, _pcm}}
+    end
+
+    test "a rate-limited quiet turn shows its honest line without speaking it" do
+      Application.put_env(:app, :fake_brain_error, {:http, 429})
+      pid = start_conv()
+      Conversation.typed(pid, "hi")
+
+      assert_receive {:to_client, {:speak_start, :brain, line}}, 2000
+      assert line =~ "rate-limited"
+      assert_receive {:to_client, :listening}, 1000
+      refute_received {:to_client, {:audio, _src, _pcm}}
+    end
+
+    test "persists like any other turn" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "summary"} end)
+      sid = session_id_for_test_user()
+      pid = start_conv_session(@config, sid)
+
+      Conversation.typed(pid, "typed hello")
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 1000
+
+      wait_until(fn ->
+        Enum.any?(App.Memory.recent_turns(String.to_integer(sid), 5), fn turn ->
+          turn.user_text == "typed hello" and turn.brain_text == "the answer"
+        end)
+      end)
+
+      stop_session(pid)
+    end
+  end
+
   # Spec 2026-09-26-web-admin-dashboard-design: the dashboard watches a conversation over
   # PubSub and never joins, so it can never bind or take audio.
   describe "dashboard mirror" do
