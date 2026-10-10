@@ -62,6 +62,17 @@ defmodule AppWeb.DashboardPanelsTest do
     assert reminder =~ ~s(data-kind="reminder") and reminder =~ "Heads up"
   end
 
+  test "timer, message and heads-up leads get their own colours, like a reminder's" do
+    for {kind, colour} <- [timer: "text-timer", message: "text-message", heads_up: "text-drain"] do
+      html =
+        render_component(&DashboardPanels.thread_row/1, row: %{id: "x", kind: kind, text: "lead"})
+
+      assert html =~ ~s(data-kind="#{kind}")
+      assert html =~ colour
+      refute html =~ "italic", "an agenda lead is not the dim italic reflex aside"
+    end
+  end
+
   test "a Voice Lock gate drop renders its own dim, compact row (finding #2b)" do
     gate =
       render_component(&DashboardPanels.thread_row/1,

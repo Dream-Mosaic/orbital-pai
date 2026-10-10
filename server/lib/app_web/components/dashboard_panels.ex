@@ -565,20 +565,28 @@ defmodule AppWeb.DashboardPanels do
   defp lock_title(true), do: "Wake lock on: waiting for the wake word"
   defp lock_title(false), do: "Awake: every utterance reaches the assistant"
 
-  defp aside_margin(kind) when kind in [:reminder, :briefing, :followup], do: "mt-6"
+  @agenda_kinds [:reminder, :briefing, :followup, :timer, :message, :heads_up]
+
+  defp aside_margin(kind) when kind in @agenda_kinds, do: "mt-6"
   defp aside_margin(_kind), do: "mt-2.5"
 
   defp aside_node(:reminder), do: "bg-you"
   defp aside_node(:briefing), do: "bg-drain"
   defp aside_node(:followup), do: "bg-followup"
+  defp aside_node(:timer), do: "bg-timer"
+  defp aside_node(:message), do: "bg-message"
+  defp aside_node(:heads_up), do: "bg-drain"
   defp aside_node(_kind), do: "border border-base-content/40 bg-base-200"
 
   defp aside_label(:reminder), do: "text-you"
   defp aside_label(:briefing), do: "text-drain"
   defp aside_label(:followup), do: "text-followup"
+  defp aside_label(:timer), do: "text-timer"
+  defp aside_label(:message), do: "text-message"
+  defp aside_label(:heads_up), do: "text-drain"
   defp aside_label(_kind), do: "text-base-content/45"
 
-  defp aside_body(kind) when kind in [:reminder, :briefing, :followup],
+  defp aside_body(kind) when kind in @agenda_kinds,
     do: "text-[15px] text-brain-body"
 
   defp aside_body(_kind), do: "text-sm italic text-base-content/60"

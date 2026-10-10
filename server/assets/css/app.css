@@ -144,6 +144,9 @@
   --color-reflex: #6ee7b7;
   --color-drain: #43b2e1;
   --color-followup: #ba9cef;
+  /* the native app's timer coral and message rose (tokens.dart M.timer / M.message) */
+  --color-timer: #f0806a;
+  --color-message: #e88fb8;
   --color-idle: #5d647a;
 }
 
