@@ -31,6 +31,35 @@ defmodule App.Tools.ListsTest do
       assert result.assigned == "the household"
     end
 
+    test "items: a whole recipe's worth in ONE call, de-duplicated, with the list's contents",
+         %{user: user} do
+      assert {:ok, r} =
+               Tool.execute(
+                 "add_to_list",
+                 %{
+                   "list" => "groceries",
+                   "items" => ["beef", " noodles ", "Beef", ""],
+                   "item" => "ricotta"
+                 },
+                 ctx(user)
+               )
+
+      assert r.added == ["beef", "noodles", "ricotta"]
+      assert r.item == "beef"
+      assert Enum.map(r.items, & &1.text) |> Enum.sort() == ["beef", "noodles", "ricotta"]
+      assert Enum.all?(r.items, &(&1.checked == false))
+
+      # and the card shows the updated list, saying what just landed
+      card = App.Cards.from_tool("add_to_list", %{}, r)
+      assert card.type == "list"
+      assert card.summary == "Added 3 · 3 left"
+    end
+
+    test "neither item nor items is a missing-args error", %{user: user} do
+      assert {:error, :missing_args} = Tool.execute("add_to_list", %{"items" => [" "]}, ctx(user))
+      assert {:error, :missing_args} = Tool.execute("add_to_list", %{}, ctx(user))
+    end
+
     test "adds to a named book, creating it on demand", %{user: user} do
       assert {:ok, result} =
                Tool.execute(

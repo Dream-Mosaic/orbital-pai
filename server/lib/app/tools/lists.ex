@@ -20,14 +20,20 @@ defmodule App.Tools.Lists do
       %{
         name: "add_to_list",
         description:
-          "Add an item to a list. Use a named list for a domain \"book\" (groceries, plants); " <>
-            "omit `list` for the generic to-do list. Lists are SHARED by default.",
+          "Add one or more items to a list. Use a named list for a domain \"book\" " <>
+            "(groceries, plants); omit `list` for the generic to-do list. Lists are SHARED by " <>
+            "default. Several items at once (a recipe's ingredients) go in ONE call via `items`.",
         parameters: %{
           type: "object",
           properties: %{
             item: %{
               type: "string",
               description: "The item to add, e.g. \"butter\" or \"call the plumber\"."
+            },
+            items: %{
+              type: "array",
+              items: %{type: "string"},
+              description: "Several items to add in one call, e.g. a recipe's ingredients."
             },
             list: %{
               type: "string",
@@ -41,7 +47,7 @@ defmodule App.Tools.Lists do
                   "Use \"me\"/\"my\" for personal. Use a person's name (\"David\"/\"Tanya\") for theirs."
             }
           },
-          required: ["item"]
+          required: []
         }
       },
       %{
@@ -111,26 +117,37 @@ defmodule App.Tools.Lists do
   def execute("add_to_list", _args, %{user_id: nil}),
     do: {:ok, %{note: "no user session — item not saved"}}
 
-  def execute("add_to_list", %{"item" => item} = args, ctx) do
-    target = resolve_target(args["for"], ctx)
-    list = Lists.find_or_create_list(target, list_name(args))
+  def execute("add_to_list", args, ctx) do
+    case items_to_add(args) do
+      [] ->
+        {:error, :missing_args}
 
-    case Lists.add_item(list, item) do
-      {:ok, added} ->
-        {:ok,
-         %{
-           item: added.text,
-           list: list.name,
-           household: list.household,
-           assigned: target.assigned
-         }}
+      texts ->
+        target = resolve_target(args["for"], ctx)
+        list = Lists.find_or_create_list(target, list_name(args))
+        added = for t <- texts, {:ok, item} <- [Lists.add_item(list, t)], do: item.text
 
-      {:error, _} ->
-        {:error, :invalid_item}
+        case added do
+          [] ->
+            {:error, :invalid_item}
+
+          [first | _] ->
+            # The list's contents ride along so the client can show the updated list as a
+            # card (App.Cards) — "added butter" is better SEEN on the groceries list itself.
+            items = Lists.with_items(list).items
+
+            {:ok,
+             %{
+               item: first,
+               added: added,
+               list: list.name,
+               household: list.household,
+               assigned: target.assigned,
+               items: Enum.map(items, &%{text: &1.text, checked: &1.checked_at != nil})
+             }}
+        end
     end
   end
-
-  def execute("add_to_list", _args, _ctx), do: {:error, :missing_args}
 
   def execute("check_off", _args, %{user_id: nil}),
     do: {:ok, %{note: "no user session — nothing to check off"}}
@@ -199,6 +216,19 @@ defmodule App.Tools.Lists do
   end
 
   def execute("remove_item", _args, _ctx), do: {:error, :missing_args}
+
+  # `item` and/or `items`, trimmed, blanks dropped, de-duplicated case-insensitively (a recipe
+  # that lists "salt" twice still adds it once).
+  defp items_to_add(args) do
+    many = if is_list(args["items"]), do: args["items"], else: []
+    one = if is_binary(args["item"]), do: [args["item"]], else: []
+
+    (many ++ one)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq_by(&String.downcase/1)
+  end
 
   defp list_name(args) do
     case args["list"] do

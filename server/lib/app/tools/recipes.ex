@@ -29,8 +29,8 @@ defmodule App.Tools.Recipes do
       "ingredient and step counts, and call save_recipe only once they confirm; if it says " <>
       "one already exists, ask before saving again with replace: true. For \"what do I need " <>
       "for X\" call get_recipe and list the ingredients briefly; to put a recipe on the " <>
-      "groceries, get_recipe and then call add_to_list (list \"groceries\") for every " <>
-      "ingredient in that same round, leaving out pantry staples only if they say so. COOK " <>
+      "groceries, get_recipe and then call add_to_list ONCE with list \"groceries\" and " <>
+      "every ingredient in `items`, leaving out pantry staples only if they say so. COOK " <>
       "MODE (\"walk me through it\", \"let's make X\"): speak ONE step per turn, plainly and " <>
       "briefly, starting with its number (\"Step 3 — …\"), then wait for \"next\"/\"okay\"; " <>
       "recipe results don't carry over between turns, so call get_recipe again each turn " <>

@@ -48,6 +48,9 @@ defmodule App.Cards do
 
   defp build("read_list", _args, %{items: [_ | _] = items} = r, _ctx), do: list_card(r, items)
 
+  defp build("add_to_list", _args, %{items: [_ | _] = items, added: [_ | _] = added} = r, _ctx),
+    do: r |> list_card(items) |> Map.put(:summary, added_tally(added, items))
+
   defp build("list_reminders", _args, %{reminders: [_ | _] = rs}, ctx),
     do: reminders_card("Reminders", rs, ctx)
 
@@ -311,6 +314,11 @@ defmodule App.Cards do
       items: Enum.take(ordered, @list_cap),
       more: more(length(ordered) - @list_cap)
     })
+  end
+
+  defp added_tally(added, items) do
+    open = Enum.count(items, &(&1[:checked] != true))
+    "Added #{length(added)} · #{open} left"
   end
 
   defp tally(0, _done), do: "All done"
