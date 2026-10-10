@@ -353,6 +353,23 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   session when the BOUND device left even while another device sat in standby — and stopping
   takes the standby's channel down too (it monitors the session). It now re-arms while any other
   joined channel is alive.
+- **Lists find-or-create runs IMMEDIATE.** The brain makes parallel tool calls in one round
+  ("add milk", "add eggs"); each used to find no "groceries" and create its own — duplicate books,
+  the panel showing one. `Lists.find_or_create_list/2` now takes the write lock up front and folds
+  any same-name duplicates into the oldest. Any new read-then-create on the tool path needs the
+  same (`Repo.transaction(fun, mode: :immediate)`) — SQLite returns BUSY_SNAPSHOT instantly, past
+  `busy_timeout`, when a deferred transaction that already read tries to write.
+- **Turn identity:** the canned line and the batch fallback are tracked as the turn's brain
+  (`track_brain_task/2` → `brain_pid`/`brain_ref`) so an abort kills them; untracked, a timer
+  announcement still synthesizing became the NEXT (typed) turn's answer. A claim mid-turn stops
+  playback on the DISPLACED device before rebinding. An interrupted request carries the tools it
+  already ran in `brain_note` (brain input only — never persisted as the user's words).
+- **"Henry, stop" / "okay" silence a ringing timer** (`silence_timers/1` in the safety-stop, wake
+  command and — only when something actually rings — the bare-acknowledgement endpoint paths).
+- **Background notifications** (`native/lib/notify/`): only while the app isn't `resumed`;
+  timers ring once per id, message/reminder/heads-up leads pair with the next brain line (3 s
+  fallback); everything cancels on resume. Local notifications from the live socket only — no FCM,
+  no foreground service (#15/#18), so a killed process gets nothing.
 - **Emulator smoke without Authentik:** run a throwaway server from a scratch worktree with
   `elixir --sname <name> --cookie <c> -S mix phx.server` (own DB copy, `HOME_ASSISTANT=false`, the
   Qdrant writers disabled), tap Sign in, then `adb shell am start -a android.intent.action.VIEW -d
@@ -375,8 +392,10 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 
 - **Shipped 2026-10-10 (household Jarvis, free-rein session):** Type to Henry (quiet text turns),
   timers, visual cards, the household intercom, trackers, routines, recipes + cook mode, calendar
-  heads-ups, the ambient orb face, nightly backups. Live-smoked on an emulator against a sandbox
-  server; the on-device checklist is `docs/superpowers/results/2026-10-10-household-jarvis-smoke.md`.
+  heads-ups, the ambient orb face, nightly backups, recipe/tracker/routine shelves in Books,
+  background notifications, tappable cook-mode timer pills, cards that survive history replay.
+  Live-smoked on an emulator against a sandbox server; the on-device checklist is
+  `docs/superpowers/results/2026-10-10-household-jarvis-smoke.md`.
 
 - **Done & live-smoked:** the 3-phase **Ink-2 STT migration** (swap off Deepgram+Silero VAD; eager_end
   reflex head-start; stream brain text to the UI), the **barge-in redesign** (server-side `turn.start`,
