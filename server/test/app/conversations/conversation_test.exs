@@ -2128,6 +2128,26 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
     end
 
+    test "a joined standby device keeps the session through the linger; it stops once that's gone too" do
+      # Phone (bound) goes away while the tablet sits in standby: stopping the session would
+      # also kill the tablet's channel (it monitors the session) and drop it offline until its
+      # backoff reconnects. The linger re-arms instead, and still stops a truly empty session.
+      Application.put_env(:app, :client_linger_ms, 80)
+      on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)
+      pid = start_conv()
+      ref = Process.monitor(pid)
+
+      standby = spawn(fn -> receive do: (:stop -> :ok) end)
+      :gen_statem.cast(pid, {:join, standby, "tablet"})
+      Conversation.client_disconnected(pid, self())
+
+      refute_receive {:DOWN, ^ref, _, _, _}, 300
+      assert Process.alive?(pid)
+
+      send(standby, :stop)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    end
+
     test "client_disconnected from a STALE pid does not arm the linger" do
       Application.put_env(:app, :client_linger_ms, 80)
       on_exit(fn -> Application.delete_env(:app, :client_linger_ms) end)

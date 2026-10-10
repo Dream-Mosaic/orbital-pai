@@ -513,9 +513,20 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:cast, {:client_disconnected, _from}, _s, data), do: {:keep_state, data}
 
+  # Another device of this user is still JOINED (standby): stopping now would take its channel
+  # down with us (it monitors this process) and leave it offline until its backoff reconnects.
+  # Keep lingering instead — it can still claim by speaking — and stop once nobody is left.
   def handle_event({:timeout, :client_linger}, :expire, _s, data) do
-    Logger.info("[conn] linger expired with no rebind — stopping the session")
-    {:stop, :normal, data}
+    if standby_joined?(data) do
+      Logger.info(
+        "[conn] linger expired but a standby device is still joined — keeping the session"
+      )
+
+      {:keep_state, data, [{{:timeout, :client_linger}, linger_ms(), :expire}]}
+    else
+      Logger.info("[conn] linger expired with no rebind — stopping the session")
+      {:stop, :normal, data}
+    end
   end
 
   def handle_event(:cast, :clear_memory, _s, data),
@@ -1844,6 +1855,9 @@ defmodule App.Conversations.Conversation do
   end
 
   defp live?(pid), do: is_pid(pid) and Process.alive?(pid)
+
+  defp standby_joined?(data),
+    do: Enum.any?(Map.keys(data.device_ids), &(&1 != data.client and live?(&1)))
 
   # W3: one-shot state snapshot so a (re)binding client can reset its UI. "busy" is any
   # non-listening phase — the client only needs the orb-level distinction. `bound` tells a
