@@ -15,9 +15,12 @@ void main() {
     expect(toolLabel('recall_memory'), 'thinking back');
     expect(toolLabel('send_household_message'), 'sending a message');
     expect(toolLabel('check_household_messages'), 'checking messages');
+    expect(toolLabel('set_timer'), 'setting a timer');
+    expect(toolLabel('list_timers'), 'checking your timers');
+    expect(toolLabel('cancel_timer'), 'stopping a timer');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(11));
+    expect(kToolLabels, hasLength(14));
   });
 
   test('the tool chip reads like the audio bridge, then resolves', () {

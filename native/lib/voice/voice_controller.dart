@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import '../audio/alarm_sound.dart';
 import '../audio/audio_track_player.dart';
 import '../audio/keyword_spotter.dart';
 import '../audio/mic_capture.dart';
@@ -13,6 +14,7 @@ import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
 import 'glance.dart';
 import 'mic_state.dart';
+import 'timers_model.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
 
@@ -28,12 +30,15 @@ class VoiceController extends ChangeNotifier {
     WakeSpotter? spotter,
     WakeGate? gate,
     DeviceId? deviceId,
+    AlarmSound? alarm,
+    MonoClock? timerClock,
   })  : _connection = connection,
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer(),
         _spotter = spotter ?? SherpaWakeSpotter(),
         _gate = gate ?? WakeGate(),
-        _deviceId = deviceId ?? DeviceId() {
+        _deviceId = deviceId ?? DeviceId(),
+        _timers = TimersModel(clock: timerClock, alarm: alarm) {
     // The other half of the mic-restore contract: a deliberate teardown that
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
@@ -601,6 +606,31 @@ class VoiceController extends ChangeNotifier {
     _safeNotify();
   }
 
+  // ---- timers (the strip between the orb and the thread) ----
+
+  /// Per USER, not per conversation: the server pushes the whole list to every
+  /// device on every change. The alarm rides here rather than in the strip so a
+  /// timer still rings with a drawer open over the voice screen.
+  final TimersModel _timers;
+  List<TimerEntry> get timers => _timers.timers;
+
+  /// The monotonic clock the entries are anchored to — the strip counts down
+  /// against this, never against wall time.
+  MonoClock get timerClock => _timers.now;
+
+  /// Tap on a ringing chip. Hushes this device at once; the chip goes when the
+  /// server's `timers` echo lands (on every device).
+  void dismissTimer(int id) {
+    _live?.push('dismiss_timer', {'id': id});
+    _timers.silence(id);
+    _safeNotify();
+  }
+
+  /// Long-press on a running chip.
+  void cancelTimer(int id) {
+    _live?.push('cancel_timer', {'id': id});
+  }
+
   // ---- controls ----
 
   /// The native twin of index.js's startTalking()/stopTalking().
@@ -1047,6 +1077,8 @@ class VoiceController extends ChangeNotifier {
             }
           }
         }
+      case 'timers':
+        _timers.apply(p);
       case 'stop_playback':
         _handleStopPlayback();
       case 'duck':
@@ -1760,6 +1792,8 @@ class VoiceController extends ChangeNotifier {
       _playerReady = false;
     }
     orbFrame.dispose();
+    // A sign-out mid-ring must not leave the phone ringing.
+    _timers.dispose();
     super.dispose();
   }
 }
