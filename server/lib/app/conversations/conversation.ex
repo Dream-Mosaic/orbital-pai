@@ -187,6 +187,11 @@ defmodule App.Conversations.Conversation do
       # it answers, its request is carried forward — and without this the next brain would run
       # them again (interrupt "set a pasta timer" and two timers ring).
       turn_actions: [],
+      # The "already run" note for a carried-forward request (pending_note), moved into
+      # brain_note when the next turn begins. BRAIN INPUT ONLY — never persisted or shown: the
+      # transcript is what history replays as the user's own words.
+      pending_note: nil,
+      brain_note: "",
       # The FINAL answer, held for the same reason and released by the same :flush_brain,
       # when the brain finishes generating before the reflex has been spoken. Pushing it
       # at {:brain_done, _} time (as we used to) put the answer on screen ahead of the
@@ -1052,7 +1057,7 @@ defmodule App.Conversations.Conversation do
           # a prewarmed brain matches this turn's context policy (default recent-context) —
           # adopt it: the Cartesia WS handshake is already done or in flight.
           if Process.alive?(pid) do
-            brain_stream_mod().begin(pid, data.transcript, recent?)
+            brain_stream_mod().begin(pid, brain_input(data), recent?)
             {pid, ref, %{data | prewarm_brain: nil}}
           else
             Process.demonitor(ref, [:flush])
@@ -1096,7 +1101,7 @@ defmodule App.Conversations.Conversation do
     {:ok, pid} =
       brain_stream_mod().start(
         owner: self(),
-        transcript: data.transcript,
+        transcript: brain_input(data),
         session_id: data.session_id,
         recent_context: recent?,
         config: data.config,
@@ -1110,7 +1115,7 @@ defmodule App.Conversations.Conversation do
   defp spawn_brain_fallback(data) do
     cfg = data.config
     sid = data.session_id
-    transcript = data.transcript
+    transcript = brain_input(data)
     quiet? = data.quiet_turn
     me = self()
 
@@ -2037,9 +2042,15 @@ defmodule App.Conversations.Conversation do
         ttb: nil,
         transcript: with_pending(data, t),
         pending_request: nil,
+        brain_note: data.pending_note || "",
+        pending_note: nil,
         reflex_text: nil
     }
   end
+
+  # What the brain reads: the (possibly carried-forward) transcript plus any note that must not
+  # be persisted as the user's words.
+  defp brain_input(data), do: data.transcript <> data.brain_note
 
   defp announce_heard(t, data) do
     Logger.info("[turn] ▶ heard: #{inspect(t)}")
@@ -2369,7 +2380,7 @@ defmodule App.Conversations.Conversation do
 
   defp on_barge_in(%{agenda_turn: nil, transcript: t} = data)
        when is_binary(t) and t != "",
-       do: %{data | pending_request: t <> already_done_note(data.turn_actions)}
+       do: %{data | pending_request: t, pending_note: already_done_note(data.turn_actions)}
 
   defp on_barge_in(data), do: data
 
@@ -2488,6 +2499,8 @@ defmodule App.Conversations.Conversation do
         commit_speculative?: false,
         interrupt_pending?: false,
         pending_request: nil,
+        pending_note: nil,
+        brain_note: "",
         quiet_turn: false,
         reflex_ms: 0,
         brain_ms: 0
