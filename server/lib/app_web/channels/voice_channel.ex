@@ -164,12 +164,38 @@ defmodule AppWeb.VoiceChannel do
 
   def handle_in("text", _payload, socket), do: {:noreply, socket}
 
+  # The timer strip's taps (tap a ringing chip / long-press a running one). Scoped to THIS
+  # socket's user inside App.Timers, so an id belonging to someone else is just not_found.
+  def handle_in(event, %{"id" => id}, socket)
+      when event in ["dismiss_timer", "cancel_timer"] and is_integer(id) do
+    uid = socket.assigns.user_id
+
+    result =
+      if event == "dismiss_timer",
+        do: App.Timers.dismiss(uid, id),
+        else: App.Timers.cancel(uid, id)
+
+    case result do
+      {:ok, _} -> {:reply, :ok, socket}
+      {:error, _} -> {:reply, {:error, %{reason: "not_found"}}, socket}
+    end
+  end
+
+  def handle_in(event, _payload, socket) when event in ["dismiss_timer", "cancel_timer"],
+    do: {:reply, {:error, %{reason: "bad_request"}}, socket}
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do
     push(socket, "history", %{turns: history(socket.assigns.session_id)})
-    {:noreply, socket}
+    # Timers are per USER, not per conversation: every device of the user watches them
+    # directly (no Conversation involvement). Subscribe BEFORE reading, so a change landing
+    # in between still re-pushes.
+    Phoenix.PubSub.subscribe(App.PubSub, "timers:#{socket.assigns.user_id}")
+    {:noreply, push_timers(socket)}
   end
+
+  def handle_info({:timers_changed, _user_id}, socket), do: {:noreply, push_timers(socket)}
 
   # Tracked via handle_info (not inline in join/3) so join returns fast; Presence auto-untracks
   # on channel death, so no terminate change is needed.
@@ -355,5 +381,12 @@ defmodule AppWeb.VoiceChannel do
       nil -> %{}
       user -> %{default_abi: user.default_abi, default_ptt: user.default_ptt}
     end
+  end
+
+  # remaining_ms is computed at push time, so each device anchors its countdown to its own
+  # clock (no server/device skew).
+  defp push_timers(socket) do
+    push(socket, "timers", %{timers: App.Timers.wire(socket.assigns.user_id)})
+    socket
   end
 end
