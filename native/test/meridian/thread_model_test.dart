@@ -20,7 +20,41 @@ void main() {
     expect(toolLabel('cancel_timer'), 'stopping a timer');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(14));
+    expect(kToolLabels, hasLength(47));
+  });
+
+  test('every registered server tool has a friendly label', () {
+    // The declarations/0 of every module in server/lib/app/tools/*.ex. A tool missing here
+    // falls back to its raw name ("home control"), which reads like a log line.
+    const registered = [
+      'get_weather',
+      'get_calendar_events', 'create_event',
+      'create_reminder', 'list_reminders', 'acknowledge_reminder', 'create_followup',
+      'cancel_reminder',
+      'search_email', 'read_email', 'send_email',
+      'recall_memory',
+      'add_to_list', 'check_off', 'read_list', 'clear_checked', 'remove_item',
+      'add_plant', 'note_plant', 'list_garden', 'archive_plant', 'close_season',
+      'remove_plant', 'update_plant',
+      'home_index', 'home_find', 'home_control', 'play_music',
+      'set_timer', 'list_timers', 'cancel_timer',
+      'send_household_message', 'check_household_messages',
+      'log_tracker_entry', 'get_tracker_entries', 'list_trackers', 'undo_tracker_entry',
+      'delete_tracker',
+      'save_routine', 'list_routines', 'delete_routine', 'run_routine',
+      'save_recipe', 'get_recipe', 'list_recipes', 'edit_recipe', 'delete_recipe',
+    ];
+    for (final name in registered) {
+      expect(kToolLabels.containsKey(name), isTrue, reason: '$name has no label');
+    }
+  });
+
+  test('a card keeps its type and its server map verbatim', () {
+    const card = ThreadCard(type: 'list', data: {'type': 'list', 'title': 'Groceries'});
+    expect(card.type, 'list');
+    expect(card.data['title'], 'Groceries');
+    expect(ThreadCard.knownTypes,
+        {'weather', 'agenda', 'list', 'reminders', 'email'});
   });
 
   test('the tool chip reads like the audio bridge, then resolves', () {

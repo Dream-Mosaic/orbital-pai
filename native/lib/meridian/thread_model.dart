@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 
-/// Friendly labels for the live tool-call chip, ported verbatim from TOOL_LABELS
-/// in server/assets/js/voice/index.js:57-67 (keyed by App.Tools registry names).
+/// Friendly labels for the live tool-call chip, keyed by App.Tools registry
+/// names. The first nine are ported verbatim from TOOL_LABELS in the old web
+/// client (index.js:57-67); the rest cover every tool registered since, so no
+/// chip falls back to a raw function name.
 const Map<String, String> kToolLabels = {
   'get_weather': 'checking the weather',
   'get_calendar_events': 'checking your calendar',
@@ -12,11 +14,53 @@ const Map<String, String> kToolLabels = {
   'read_email': 'checking your email',
   'send_email': 'sending an email',
   'recall_memory': 'thinking back',
+  // household messages
   'send_household_message': 'sending a message',
   'check_household_messages': 'checking messages',
+  // timers
   'set_timer': 'setting a timer',
   'list_timers': 'checking your timers',
   'cancel_timer': 'stopping a timer',
+  // reminders
+  'acknowledge_reminder': 'clearing that reminder',
+  'create_followup': 'setting a follow-up',
+  'cancel_reminder': 'cancelling a reminder',
+  // lists
+  'add_to_list': 'adding to your list',
+  'check_off': 'checking that off',
+  'read_list': 'checking your list',
+  'clear_checked': 'clearing done items',
+  'remove_item': 'removing from your list',
+  // garden
+  'add_plant': 'adding to the garden',
+  'note_plant': 'noting that in the garden',
+  'list_garden': 'checking the garden',
+  'archive_plant': 'archiving a plant',
+  'close_season': 'closing out the season',
+  'remove_plant': 'removing a plant',
+  'update_plant': 'updating the garden',
+  // home assistant
+  'home_index': 'checking the house',
+  'home_find': 'looking around the house',
+  'home_control': 'adjusting the house',
+  'play_music': 'starting the music',
+  // trackers
+  'log_tracker_entry': 'logging that',
+  'get_tracker_entries': 'looking at your log',
+  'list_trackers': 'checking your trackers',
+  'undo_tracker_entry': 'scratching that',
+  'delete_tracker': 'deleting a tracker',
+  // routines
+  'save_routine': 'saving a routine',
+  'list_routines': 'checking your routines',
+  'delete_routine': 'deleting a routine',
+  'run_routine': 'running your routine',
+  // recipes
+  'save_recipe': 'saving the recipe',
+  'get_recipe': 'pulling up the recipe',
+  'list_recipes': 'checking your recipes',
+  'edit_recipe': 'updating the recipe',
+  'delete_recipe': 'deleting a recipe',
 };
 
 String toolLabel(String name) => kToolLabels[name] ?? name.replaceAll('_', ' ');
@@ -142,4 +186,30 @@ class ThreadToolChip extends ThreadItem {
   String get text => '⚙ ${toolLabel(name)}${resolved ? ' ✓' : '…'}';
 
   ThreadToolChip resolve() => ThreadToolChip(name: name, resolved: true);
+}
+
+/// A visual answer: a tool result the server has already shaped into display
+/// strings (`App.Cards`). [type] picks the layout and [data] is the card map
+/// exactly as the channel sent it — the client lays it out, never reformats it.
+@immutable
+class ThreadCard extends ThreadItem {
+  const ThreadCard({required this.type, required this.data});
+
+  final String type;
+  final Map<String, dynamic> data;
+
+  /// The card types this build can lay out. Anything else is skipped at the
+  /// router, never rendered as a guess.
+  static const Set<String> knownTypes = {
+    'weather',
+    'agenda',
+    'list',
+    'reminders',
+    'email',
+  };
+
+  /// Tighter than a line's rhythm against the tool chip above it; the
+  /// collapse rule still gives the answer line below its own 16.8.
+  @override
+  double get margin => 10.0;
 }

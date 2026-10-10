@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'cards/card_view.dart';
 import 'thread_model.dart';
 import 'tokens.dart';
 import 'voice_md.dart';
@@ -128,6 +129,11 @@ class Thread extends StatelessWidget {
           ),
         ThreadLine() =>
           item.kind == LineKind.you ? _youLine(item, rail) : _fieldLine(item, rail),
+        // A visual answer sits in Henry's column, its left edge on his text.
+        ThreadCard() => Padding(
+            padding: EdgeInsets.only(left: rail + 18),
+            child: ThreadCardView(card: item),
+          ),
       };
 
   // --- `you`: amber, right-aligned on the rail to the spine's left ---

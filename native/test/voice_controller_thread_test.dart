@@ -205,6 +205,34 @@ void main() {
         reason: "resolved chips stay as the turn's story; unresolved ones are dropped");
   });
 
+  test('a card lands in the thread in arrival order, between the chip and the answer', () {
+    vc.debugHandleMessage(msg('transcript', const {'text': 'weather?'}));
+    vc.debugHandleMessage(msg('tool_call', const {'name': 'get_weather'}));
+    vc.debugHandleMessage(msg('card', const {
+      'card': {'type': 'weather', 'temp': '72°', 'location': 'Belleville, IL'},
+    }));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'Sunny, 72.'}));
+
+    expect(vc.thread.map((i) => i.runtimeType).toList(),
+        [ThreadLine, ThreadToolChip, ThreadCard, ThreadLine]);
+    final card = vc.thread.whereType<ThreadCard>().single;
+    expect(card.type, 'weather');
+    expect(card.data['temp'], '72°', reason: 'the card map renders verbatim');
+
+    // and a later delta still lands on the answer, not on the card
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': ' Nice.'}));
+    expect((vc.thread.last as ThreadLine).text, 'Sunny, 72. Nice.');
+  });
+
+  test('a card of an unknown type (or with no map) is skipped, never guessed', () {
+    vc.debugHandleMessage(msg('card', const {
+      'card': {'type': 'hologram', 'x': 1},
+    }));
+    vc.debugHandleMessage(msg('card', const {'card': 'weather'}));
+    vc.debugHandleMessage(msg('card', const {}));
+    expect(vc.thread, isEmpty);
+  });
+
   test('dropping a chip keeps the brain line handle pointing at the right line', () {
     // The index-shifting hazard: a chip removed from BEFORE the live brain line
     // must slide _brainIndex down with it, or the next delta appends to the

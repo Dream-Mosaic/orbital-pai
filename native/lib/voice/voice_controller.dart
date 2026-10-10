@@ -1053,6 +1053,18 @@ class VoiceController extends ChangeNotifier {
       case 'tool_call':
         _thread.add(ThreadToolChip(name: (p['name'] as String?) ?? 'tool'));
         _toolChipIndexes.add(_thread.length - 1);
+      case 'card':
+        // A visual answer (App.Cards), appended in arrival order. It holds no
+        // handle, so the index bookkeeping above is untouched. Unknown types
+        // are dropped rather than guessed at.
+        final card = p['card'];
+        if (card is Map) {
+          final data = card.cast<String, dynamic>();
+          final type = data['type'];
+          if (type is String && ThreadCard.knownTypes.contains(type)) {
+            _thread.add(ThreadCard(type: type, data: data));
+          }
+        }
       case 'metrics':
         final metrics = ThreadMetrics(
           ttfaMs: (p['ttfa'] as num?)?.round(),
