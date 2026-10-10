@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
     <!-- The timer alarm's vibration (AlarmPlayer.kt). A normal permission: no prompt. -->
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Local notifications while backgrounded (HenryNotifier.kt). A RUNTIME permission from
+         Android 13: asked once after sign-in; a "no" just means no notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="Orbital P.A.I"
         android:name="${applicationName}"

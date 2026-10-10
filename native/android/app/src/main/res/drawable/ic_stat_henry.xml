@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status-bar icon for Henry's notifications (HenryNotifier.kt). Android draws a small
+     icon from its ALPHA only, so the launcher foreground (an opaque square) would show as a
+     white block. This is the orb reduced to that: the ring and the wave line across it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M12,3a9,9 0,1 1,0 18a9,9 0,1 1,0 -18z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M4.5,12.4C6.5,12.4 7.5,10.6 9.5,10.6C11.5,10.6 12.5,13.4 14.5,13.4C16.5,13.4 17.5,11.6 19.5,11.6" />
+</vector>
