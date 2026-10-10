@@ -50,6 +50,7 @@ defmodule App.Config do
             tools: [
               App.Tools.Weather,
               App.Tools.Reminders,
+              App.Tools.Timers,
               App.Tools.Lists,
               App.Tools.Garden,
               App.Tools.Calendar,
