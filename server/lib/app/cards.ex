@@ -33,7 +33,7 @@ defmodule App.Cards do
   @ingredients_cap 12
   @steps_cap 8
   # Cook mode's "Next: …" is a glance ahead, not the step.
-  @preview_words 6
+  @preview_words 5
 
   @doc """
   The card for one tool result, or nil. `opts`: `:now` (UTC `DateTime`) and `:tz` (IANA zone)
@@ -89,17 +89,13 @@ defmodule App.Cards do
 
   defp build("get_recipe", _args, %{title: _, ingredients: is, steps: ss} = r, _ctx)
        when is_list(is) and is_list(ss),
-       do: recipe_card(r, "Recipe")
+       do: recipe_card(r, nil)
 
   defp build("save_recipe", _args, %{saved: true, recipe: %{} = recipe} = r, _ctx),
-    do:
-      recipe_card(
-        recipe,
-        if(r[:replaced] == true, do: "Recipe replaced", else: "Saved to recipes")
-      )
+    do: recipe_card(recipe, if(r[:replaced] == true, do: "Replaced", else: "Saved"))
 
   defp build("edit_recipe", _args, %{recipe: %{} = recipe}, _ctx),
-    do: recipe_card(recipe, "Recipe updated")
+    do: recipe_card(recipe, "Updated")
 
   defp build(_name, _args, _result, _ctx), do: nil
 
@@ -704,15 +700,18 @@ defmodule App.Cards do
 
   # ---- recipes ----
 
-  defp recipe_card(r, label) do
+  # `status` says what a write did ("Saved"/"Replaced"/"Updated"); a plain lookup has none.
+  defp recipe_card(r, status) do
     ingredients = r.ingredients
     steps = r.steps
 
     compact(%{
       type: "recipe",
-      label: label,
+      status: status,
       title: r.title,
-      scope: if(r[:personal] == true, do: "Yours", else: "Household"),
+      # The household book is the default (and the header's room is the title's), so only a
+      # private recipe says whose it is.
+      scope: if(r[:personal] == true, do: "Yours"),
       meta: recipe_meta(r),
       ingredients_label: count_label(length(ingredients), "ingredient"),
       ingredients:

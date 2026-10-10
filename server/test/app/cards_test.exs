@@ -775,9 +775,11 @@ defmodule App.CardsTest do
       c = card("get_recipe", %{"name" => "lasagna"}, lasagna())
 
       assert c.type == "recipe"
-      assert c.label == "Recipe"
+      # a lookup has no status; only a write says what it did
+      refute Map.has_key?(c, :status)
       assert c.title == "Grandma's Lasagna"
-      assert c.scope == "Household"
+      # the shared book is the default, so only a private recipe is labelled
+      refute Map.has_key?(c, :scope)
       assert c.meta == "Serves 8 · from Grandma"
       assert c.notes == "Freezes well. Use fresh basil if you have it."
       assert c.ingredients_label == "10 ingredients"
@@ -874,12 +876,12 @@ defmodule App.CardsTest do
         recipe: lasagna()
       }
 
-      assert %{type: "recipe", label: "Saved to recipes"} = card("save_recipe", %{}, saved)
+      assert %{type: "recipe", status: "Saved"} = card("save_recipe", %{}, saved)
 
-      assert %{label: "Recipe replaced"} = card("save_recipe", %{}, %{saved | replaced: true})
+      assert %{status: "Replaced"} = card("save_recipe", %{}, %{saved | replaced: true})
 
       edited = %{edited: true, added: ["Fresh basil"], removed: [], recipe: lasagna()}
-      assert %{type: "recipe", label: "Recipe updated"} = card("edit_recipe", %{}, edited)
+      assert %{type: "recipe", status: "Updated"} = card("edit_recipe", %{}, edited)
 
       # not saved (it already exists — the brain asks first) is no card
       assert card("save_recipe", %{}, %{saved: false, exists: true, title: "X", note: "…"}) ==
@@ -903,7 +905,8 @@ defmodule App.CardsTest do
                step_count: 5,
                text: "Layer noodles, sauce, ricotta and mozzarella; repeat three times.",
                next_label: "Next",
-               next: "Bake 25 to 30 minutes, then…"
+               # the opening words, minus a dangling comma, then an ellipsis
+               next: "Bake 25 to 30 minutes…"
              }
 
       assert card("get_recipe", %{}, cook(2)).timers == ["8 minutes"]
@@ -918,8 +921,13 @@ defmodule App.CardsTest do
       refute Map.has_key?(c, :next)
     end
 
-    test "a short next step is shown whole" do
-      assert card("get_recipe", %{}, cook(2)).next == "Stir the eggs into the ricotta."
+    test "a short next step is shown whole; a longer one by its opening words" do
+      short = lasagna(%{steps: ["Boil the water.", "Add the pasta and salt.", "Drain."]})
+
+      assert card("get_recipe", %{}, Map.put(short, :current_step, 1)).next ==
+               "Add the pasta and salt."
+
+      assert card("get_recipe", %{}, cook(2)).next == "Stir the eggs into the…"
     end
   end
 
