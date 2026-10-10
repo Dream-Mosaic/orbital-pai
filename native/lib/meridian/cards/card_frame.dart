@@ -180,7 +180,10 @@ class CardFrame extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 7),
-          Flexible(
+          // The label takes the row; the note keeps its natural width (capped)
+          // flush right. Two flexible children would split the row in half
+          // and strand the note mid-card.
+          Expanded(
             child: Text(
               label.toUpperCase(),
               maxLines: 1,
@@ -191,7 +194,8 @@ class CardFrame extends StatelessWidget {
           ),
           if (trailing != null) ...[
             const SizedBox(width: 10),
-            Expanded(
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 112),
               child: Text(
                 trailing!,
                 maxLines: 1,
