@@ -126,7 +126,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - `assets/js/`: just LiveView bootstrap; the web has no voice client.
 - Native additions: `lib/meridian/composer.dart` (Type to Henry), `timer_strip.dart`, `orb_face.dart`
   (+ `lib/voice/glance.dart`), `lib/meridian/cards/` (one widget per card type, `card_view.dart`
-  dispatches), `lib/voice/timers_model.dart`, `lib/audio/alarm_sound.dart` (+ `AlarmPlayer.kt`).
+  dispatches), `lib/voice/timers_model.dart`, `lib/audio/alarm_sound.dart` (+ `AlarmPlayer.kt`),
+  `lib/notify/` (background notifications), `lib/meridian/books_*.dart` (recipe/tracker/routine
+  shelves), `lib/meridian/wall_layout.dart` (breakpoints: compact < 600dp is the phone column,
+  UNCHANGED; medium 600–899 a larger column; expanded ≥ 900 two panes — orb + timers + composer
+  left, thread + nav right). A new voice-screen child must be placed in BOTH builders.
 
 ## Gotchas (hard-won — don't re-hit these)
 
