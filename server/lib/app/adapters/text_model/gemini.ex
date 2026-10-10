@@ -118,7 +118,7 @@ defmodule App.Adapters.TextModel.Gemini do
                   # the raw result, for a visual card (App.Cards) — sent from this task so a
                   # fast tool's card can land while a slower sibling is still running
                   send(target, {:gemini_tool_result, name, args, r})
-                  %{result: r}
+                  with_card_note(%{result: r}, name, args, r)
 
                 {:error, e} ->
                   # Proves the failure path: the brain SEES this error and (via B1/B2) must
@@ -154,6 +154,20 @@ defmodule App.Adapters.TextModel.Gemini do
         {next_hops, tool_ctx} = spend_hop(calls, hops, tool_ctx)
         run_rounds(contents, system, cfg, thinking, tool_ctx, target, next_hops, round_fun)
     end
+  end
+
+  @card_note "This result is ALSO shown to the user as a visual card on their screen " <>
+               "(every row of it). Don't recite it: give the takeaway in a sentence or two " <>
+               "and only call out what matters for their question."
+
+  @doc false
+  # A result that renders as a card (App.Cards) tells the brain so: the card carries the detail,
+  # the words carry the takeaway. Without this the answer re-reads the whole week under a card
+  # that already shows it — in a typed turn that's a wall of text, spoken it's thirty seconds.
+  def with_card_note(response, name, args, result) do
+    if App.Cards.from_tool(name, args, result),
+      do: Map.put(response, :display, @card_note),
+      else: response
   end
 
   defp spend_hop(calls, hops, tool_ctx) do

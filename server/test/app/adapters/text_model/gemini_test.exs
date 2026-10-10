@@ -550,6 +550,16 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.memory_block(%{user_name: nil, profile: "", summary: ""}) == ""
   end
 
+  test "a carded tool result tells the brain the user can see it; others are untouched" do
+    weather = %{location: "X", current: %{temp_f: 64.2, conditions: "overcast"}}
+    noted = Gemini.with_card_note(%{result: weather}, "get_weather", %{}, weather)
+    assert noted.display =~ "visual card"
+    assert noted.result == weather
+
+    plain = %{result: %{ok: true}}
+    assert Gemini.with_card_note(plain, "set_timer", %{}, %{ok: true}) == plain
+  end
+
   test "a routine with an extra dependent lookup still finishes with tools (routine hop refund)" do
     # run → index+calendar → find → act → answer: one hop past the plain cap, absorbed by the
     # refund the first run_routine earns.
