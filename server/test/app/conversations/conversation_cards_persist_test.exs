@@ -50,8 +50,13 @@ defmodule App.Conversations.ConversationCardsPersistTest do
   end
 
   # Synchronous stop before the sandbox owner goes (see conversation_test.exs: an in-flight
-  # init pull outliving its owner is how the next test sees "Database busy").
-  defp stop_session(pid), do: :gen_statem.stop(pid, :normal, 2_000)
+  # init pull outliving its owner is how the next test sees "Database busy"). Drain the
+  # persist + memory-updater task first, while this test's Mox stub still answers it — the
+  # setup_sandbox drain runs after the test process (and its stubs) are gone.
+  defp stop_session(pid) do
+    App.DataCase.drain_conversation_tasks()
+    :gen_statem.stop(pid, :normal, 2_000)
+  end
 
   defp eventually(fun, tries \\ 60) do
     case fun.() do
