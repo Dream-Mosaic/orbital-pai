@@ -2535,6 +2535,38 @@ defmodule App.Conversations.ConversationTest do
     end
   end
 
+  describe "what's new (once per release)" do
+    test "it waits for the user's first exchange, then speaks once and is marked heard" do
+      Application.put_env(:app, :whats_new, true)
+      on_exit(fn -> Application.put_env(:app, :whats_new, false) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      uid = user_id_for_test_user()
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(uid)
+        )
+
+      # connecting alone never triggers it
+      refute_receive {:to_client, {:speak_start, :news, _}}, 400
+
+      Conversation.endpoint(pid, "hello there")
+      # the user's own turn answers first…
+      assert_receive {:to_client, {:speak_start, :brain, "the answer"}}, 3000
+      # …then the note interjects
+      assert_receive {:to_client, {:speak_start, :news, "Oh — before you go —"}}, 3000
+      assert_receive {:to_client, {:speak_start, :brain, notes}}, 2000
+      assert notes =~ "kitchen timers"
+
+      Process.sleep(300)
+      assert App.Users.get(uid).whats_new_seen == App.Agenda.WhatsNew.release()
+      stop_session(pid)
+    end
+  end
+
   describe "voice silences a ringing timer" do
     test "'okay' while a timer rings dismisses it and never reaches the brain" do
       Process.register(self(), :fake_brain_observer)

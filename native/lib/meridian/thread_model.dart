@@ -78,7 +78,8 @@ enum LineKind {
   followup,
   timer,
   message,
-  headsUp
+  headsUp,
+  news
 }
 
 LineKind? lineKindFromSource(String source) => switch (source) {
@@ -91,6 +92,7 @@ LineKind? lineKindFromSource(String source) => switch (source) {
       'timer' => LineKind.timer,
       'message' => LineKind.message,
       'heads_up' => LineKind.headsUp,
+      'news' => LineKind.news,
       _ => null,
     };
 

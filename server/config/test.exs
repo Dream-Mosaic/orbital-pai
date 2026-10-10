@@ -43,3 +43,7 @@ config :phoenix,
 
 # The voice channel's idle-orb glance runs real tools (weather/calendar) — not in tests.
 config :app, glance: false
+
+# The once-per-release "what's new" note would interject after every session-bound test's
+# first turn — tests that want it turn it on.
+config :app, whats_new: false

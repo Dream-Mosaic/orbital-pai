@@ -145,6 +145,7 @@ defmodule App.Conversations.Conversation do
       send(self(), :pull_briefing)
       send(self(), :pull_pending_reminders)
       send(self(), :pull_messages)
+      send(self(), :pull_whats_new)
     end
 
     data = %{
@@ -879,6 +880,17 @@ defmodule App.Conversations.Conversation do
   # lasts seconds.
   def handle_event(:info, :pull_messages, _s, %{session_id: sid} = data) do
     Enum.each(App.Messages.pull(sid), &send(self(), {:agenda_due, &1}))
+    {:keep_state, data}
+  end
+
+  # pull-on-connect: once per release, a short canned note on what Henry learned, spoken after
+  # the user's first exchange (App.Agenda.WhatsNew).
+  def handle_event(:info, :pull_whats_new, _s, %{session_id: sid} = data) do
+    case App.Agenda.WhatsNew.pull(sid) do
+      %Item{} = item -> send(self(), {:agenda_due, item})
+      _ -> :ok
+    end
+
     {:keep_state, data}
   end
 
