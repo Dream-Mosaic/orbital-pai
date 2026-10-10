@@ -952,6 +952,98 @@ defmodule App.Conversations.ConversationTest do
     refute_receive {:to_client, {:tool_call, _}}, 200
   end
 
+  # ---- cards (App.Cards): a tool result rendered as a visual answer ----
+
+  @groceries %{
+    list: "Groceries",
+    household: true,
+    items: [%{text: "milk", checked: false}, %{text: "eggs", checked: true}]
+  }
+
+  test "a card-shaped tool result reaches the client as a card mid-turn" do
+    Application.put_env(:app, :fake_brain_done_ms, 5_000)
+    on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+    stub(App.TextModelMock, :generate, fn _t, _c, _opts -> {:ok, "huh"} end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "what's on the grocery list")
+    assert_receive {:to_client, {:audio, :brain, _}}, 1000
+
+    send(pid, {:brain_tool_result, "read_list", %{"list" => "groceries"}, @groceries})
+    assert_receive {:to_client, {:card, %{type: "list", title: "Groceries"} = card}}, 500
+    assert [%{text: "milk", done: false}, %{text: "eggs", done: true}] = card.items
+  end
+
+  test "a tool result that is not card-shaped sends nothing" do
+    Application.put_env(:app, :fake_brain_done_ms, 5_000)
+    on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+    stub(App.TextModelMock, :generate, fn _t, _c, _opts -> {:ok, "huh"} end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "turn on the lamp")
+    assert_receive {:to_client, {:audio, :brain, _}}, 1000
+
+    send(pid, {:brain_tool_result, "home_control", %{}, %{ok: true}})
+    refute_receive {:to_client, {:card, _}}, 200
+  end
+
+  test "a card that lands before the reflex is held, then released right after the caption" do
+    # Same gate as the caption: a card on screen ahead of the filler would be the answer
+    # arriving before "let me look". Held cards follow the held caption out of :flush_brain.
+    Application.put_env(:app, :fake_brain_text_deltas, ["Milk ", "and eggs."])
+    Application.put_env(:app, :fake_brain_done_ms, 1_000)
+
+    on_exit(fn ->
+      Application.delete_env(:app, :fake_brain_text_deltas)
+      Application.put_env(:app, :fake_brain_done_ms, 0)
+    end)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, _o ->
+      Process.sleep(300)
+      {:ok, "huh"}
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "what's on the grocery list")
+    send(pid, {:brain_tool_result, "read_list", %{}, @groceries})
+
+    msgs = drain_to_client(600)
+    reflex_at = Enum.find_index(msgs, &match?({:speak_start, :reflex, _}, &1))
+    caption_at = Enum.find_index(msgs, &match?({:brain_delta, _}, &1))
+    card_at = Enum.find_index(msgs, &match?({:card, %{type: "list"}}, &1))
+
+    assert reflex_at && caption_at && card_at, "missing a message: #{inspect(msgs)}"
+    assert reflex_at < caption_at and caption_at < card_at, "out of order: #{inspect(msgs)}"
+    assert Enum.count(msgs, &match?({:card, _}, &1)) == 1
+  end
+
+  test "a held card from a barged turn is dropped, never released into the next turn" do
+    Application.put_env(:app, :fake_brain_done_ms, 5_000)
+    on_exit(fn -> Application.put_env(:app, :fake_brain_done_ms, 0) end)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, _o ->
+      Process.sleep(300)
+      {:ok, "huh"}
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "what's on the grocery list")
+    send(pid, {:brain_tool_result, "read_list", %{}, @groceries})
+    Conversation.barge_in(pid)
+    assert_receive {:to_client, :stop_playback}, 1000
+
+    Conversation.endpoint(pid, "never mind, what time is it")
+    assert_receive {:to_client, {:audio, :brain, _}}, 2000
+    msgs = drain_to_client(300)
+    refute Enum.any?(msgs, &match?({:card, _}, &1)), "a stale card leaked: #{inspect(msgs)}"
+  end
+
+  test "a stale tool result (idle / abandoned turn) is dropped" do
+    pid = start_conv()
+    send(pid, {:brain_tool_result, "read_list", %{}, @groceries})
+    refute_receive {:to_client, {:card, _}}, 200
+  end
+
   test "barge-in stops playback and kills the brain stream" do
     # keep the brain stream open so we can barge in mid-stream
     Application.put_env(:app, :fake_brain_done_ms, 5_000)

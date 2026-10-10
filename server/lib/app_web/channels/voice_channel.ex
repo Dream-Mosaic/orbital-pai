@@ -240,6 +240,12 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # A visual answer (App.Cards): already display-ready, so the client only lays it out.
+  def handle_info({:to_client, {:card, card}}, socket) do
+    push(socket, "card", %{card: card})
+    {:noreply, socket}
+  end
+
   def handle_info({:to_client, {:metrics, ttfa, ttb}}, socket) do
     push(socket, "metrics", %{ttfa: ttfa, ttb: ttb})
     {:noreply, socket}

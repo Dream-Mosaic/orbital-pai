@@ -176,6 +176,9 @@ defmodule App.Conversations.Conversation do
       # filler — you would read the answer, then see the filler, then hear the
       # filler, then hear the answer. Same rule for both streams now.
       caption_buffer: [],
+      # Visual cards (App.Cards) held behind the reflex for the same reason, newest first;
+      # released by :flush_brain right after the caption, dropped with it on an abort.
+      card_buffer: [],
       # The FINAL answer, held for the same reason and released by the same :flush_brain,
       # when the brain finishes generating before the reflex has been spoken. Pushing it
       # at {:brain_done, _} time (as we used to) put the answer on screen ahead of the
@@ -712,6 +715,34 @@ defmodule App.Conversations.Conversation do
   end
 
   def handle_event(:info, {:brain_tool_call, _name}, _s, data), do: {:keep_state, data}
+
+  # A tool result shaped into a visual card (App.Cards) — e.g. the weather, today's agenda.
+  # Gated exactly like the caption: only while a turn is live (a stale result from an
+  # abandoned/barged turn is dropped), and held behind the reflex so the card can't beat the
+  # filler onto the screen. Not card-shaped (nil) sends nothing.
+  def handle_event(
+        :info,
+        {:brain_tool_result, name, args, result},
+        _s,
+        %{policy: %{phase: phase}} = data
+      )
+      when phase != :listening do
+    case App.Cards.from_tool(name, args, result) do
+      nil ->
+        {:keep_state, data}
+
+      card ->
+        if data.policy.reflex_sent do
+          emit(data, {:card, card})
+          {:keep_state, data}
+        else
+          {:keep_state, %{data | card_buffer: [card | data.card_buffer]}}
+        end
+    end
+  end
+
+  def handle_event(:info, {:brain_tool_result, _name, _args, _result}, _s, data),
+    do: {:keep_state, data}
 
   # The brain finished with no ANSWER text — don't go silent. Substitute a canned line ONCE
   # (guarded by brain_fallback) so the user always hears a reply and knows to retry. NOTE: we key
@@ -1757,6 +1788,7 @@ defmodule App.Conversations.Conversation do
   defp mirrored?({:speak_start, _, _}), do: true
   defp mirrored?({:brain_delta, _}), do: true
   defp mirrored?({:tool_call, _}), do: true
+  defp mirrored?({:card, _}), do: true
   defp mirrored?({:metrics, _, _}), do: true
   defp mirrored?({:locked, _}), do: true
   defp mirrored?({:voice_gate, _}), do: true
@@ -1885,12 +1917,14 @@ defmodule App.Conversations.Conversation do
         emit(data, {:brain_delta, deltas |> Enum.reverse() |> Enum.join()})
     end
 
+    data.card_buffer |> Enum.reverse() |> Enum.each(&emit(data, {:card, &1}))
+
     data =
       data.brain_buffer
       |> Enum.reverse()
       |> Enum.reduce(data, fn pcm, d -> push_audio_chunk(:brain, pcm, d) end)
 
-    {%{data | brain_buffer: [], caption_buffer: [], pending_answer: nil}, acts}
+    {%{data | brain_buffer: [], caption_buffer: [], card_buffer: [], pending_answer: nil}, acts}
   end
 
   defp run_effect(:arm_drain, {data, acts}) do
@@ -1926,6 +1960,7 @@ defmodule App.Conversations.Conversation do
          # is not reached again this turn. Drop it with the audio, or the next turn's flush
          # would render the barged turn's caption/answer against the new utterance.
          caption_buffer: [],
+         card_buffer: [],
          pending_answer: nil,
          agenda_turn: nil,
          quiet_turn: false,
@@ -2377,6 +2412,7 @@ defmodule App.Conversations.Conversation do
       data
       | brain_buffer: [],
         caption_buffer: [],
+        card_buffer: [],
         pending_answer: nil,
         audio_until: nil,
         brain_fallback: false,

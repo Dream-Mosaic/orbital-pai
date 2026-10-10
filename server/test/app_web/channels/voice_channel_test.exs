@@ -202,6 +202,12 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "tool_call", %{name: "x"}
   end
 
+  test "relays a card as its display-ready map", %{socket: socket} do
+    card = %{type: "weather", temp: "72°", hourly: [%{label: "3PM", icon: "partly"}]}
+    send(socket.channel_pid, {:to_client, {:card, card}})
+    assert_push "card", %{card: ^card}
+  end
+
   test "audio relays as a binary payload", %{socket: socket} do
     send(socket.channel_pid, {:to_client, {:audio, :brain, <<1, 2, 3, 4>>}})
     assert_push "audio", {:binary, <<1, 2, 3, 4>>}
