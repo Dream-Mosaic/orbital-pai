@@ -21,11 +21,11 @@ import 'tokens.dart';
 /// glance. Recipe and tracker match the thread cards' hues for the same data;
 /// routines take Henry's green, since a routine is Henry acting.
 abstract final class ShelfAccent {
-  /// A butter/parchment warmth — a recipe card.
-  static const Color recipe = Color(0xFFE1C792);
+  /// The recipe card's parchment — the same token the thread's recipe cards use.
+  static const Color recipe = M.recipe;
 
-  /// A calm cornflower — data, cool, without borrowing a status colour.
-  static const Color tracker = Color(0xFF8DA8F1);
+  /// The tracker card's cornflower — shared with the thread's tracker cards.
+  static const Color tracker = M.tracker;
 
   /// Henry's own green.
   static const Color routine = M.henry;
