@@ -222,7 +222,7 @@ defmodule App.Cards do
       time: time,
       title: e.summary || "(no title)",
       location: short_location(e[:location]),
-      account: if(multi_account?, do: e[:account]),
+      account: if(multi_account?, do: account_label(e[:account])),
       day: if(multi_day?, do: day_name(date, ctx))
     })
   end
@@ -384,7 +384,7 @@ defmodule App.Cards do
       from: sender(m[:from]),
       subject: blank_to_nil(m[:subject]) || "(no subject)",
       when: m[:date] |> parse_rfc2822() |> received_label(ctx),
-      account: if(multi_account?, do: m[:account])
+      account: if(multi_account?, do: account_label(m[:account]))
     })
   end
 
@@ -495,6 +495,23 @@ defmodule App.Cards do
       _ -> Calendar.strftime(date, "%a, %b %-d")
     end
   end
+
+  @consumer_mail ~w(gmail.com googlemail.com icloud.com me.com outlook.com hotmail.com live.com
+                    yahoo.com proton.me protonmail.com)
+
+  # A Google account's label defaults to its address, which doesn't fit a card row. Two
+  # personal Gmails differ by the local part; a work account is best named by its domain.
+  defp account_label(label) when is_binary(label) do
+    case String.split(label, "@") do
+      [local, domain] when local != "" and domain != "" ->
+        if String.downcase(domain) in @consumer_mail, do: local, else: domain
+
+      _ ->
+        label
+    end
+  end
+
+  defp account_label(_), do: nil
 
   defp more(n) when n > 0, do: "+#{n} more"
   defp more(_), do: nil

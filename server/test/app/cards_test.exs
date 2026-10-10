@@ -186,6 +186,22 @@ defmodule App.CardsTest do
       refute Map.has_key?(c, :more)
     end
 
+    test "an account still labelled by its email is shortened for the card" do
+      # Labels default to the address on connect; a full address doesn't fit a card row.
+      result = %{
+        events: [
+          event("Standup", "2026-10-10T14:00:00Z", %{account: "dave@acme-corp.com"}),
+          event("Run", "2026-10-10T15:00:00Z", %{account: "davidclausen2051@gmail.com"}),
+          event("Dinner", "2026-10-10T23:00:00Z", %{account: "Family"})
+        ],
+        errors: [],
+        accounts_read: ["dave@acme-corp.com", "davidclausen2051@gmail.com", "Family"]
+      }
+
+      assert Enum.map(card("get_calendar_events", @today, result).events, & &1.account) ==
+               ["acme-corp.com", "davidclausen2051", "Family"]
+    end
+
     test "account labels only appear when more than one account was read" do
       result = %{
         events: [event("Standup", "2026-10-10T14:00:00Z")],
