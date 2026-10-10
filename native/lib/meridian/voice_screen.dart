@@ -12,6 +12,7 @@ import 'orb_bezel.dart';
 import 'orb_face.dart';
 import 'palette.dart';
 import 'thread.dart';
+import 'timer_strip.dart';
 import 'tokens.dart';
 
 /// The Meridian voice screen — the port of `<main>` in conversation_live.ex:
@@ -205,6 +206,14 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                         _orbPane(vc, glow,
                             maxDiameter: typing ? _orbRoomWhileTyping(context) : null),
                         const SizedBox(height: M.columnGap),
+                        // Zero height with no timers; carries its own gap below.
+                        TimerStrip(
+                          timers: vc.timers,
+                          clock: vc.timerClock,
+                          glow: glow,
+                          onDismiss: vc.dismissTimer,
+                          onCancel: vc.cancelTimer,
+                        ),
                         Expanded(
                           child: NotificationListener<ScrollNotification>(
                             onNotification: _onScrollNotification,
