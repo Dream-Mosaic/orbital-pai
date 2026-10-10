@@ -87,7 +87,7 @@ void main() {
         findsOneWidget);
     expect(
         find.text(
-            'Calendar heads-ups (a spoken nudge 10 minutes before each event)'),
+            "Heads-ups (before calendar events, and when rain's about to start)"),
         findsOneWidget);
     expect(find.text('Danger zone'), findsOneWidget);
     expect(find.text('About'), findsOneWidget);
@@ -208,7 +208,7 @@ void main() {
     await pumpPanel(tester, client);
 
     expect(find.byKey(const ValueKey('toggle-heads_up')), findsNothing);
-    expect(find.textContaining('Calendar heads-ups'), findsNothing);
+    expect(find.textContaining('Heads-ups'), findsNothing);
 
     await conn.disconnect();
   });

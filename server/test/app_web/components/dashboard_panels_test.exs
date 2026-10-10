@@ -86,6 +86,24 @@ defmodule AppWeb.DashboardPanelsTest do
     refute gate =~ ~s(class="text-[11px] font-semibold leading-4 tracking-wide)
   end
 
+  test "settings: the heads-up row covers calendar events AND rain, one switch for both" do
+    user = %{
+      name: "Alice",
+      email: "a@x.com",
+      default_abi: true,
+      default_ptt: false,
+      voice_activation: true,
+      briefing_time: nil,
+      heads_up: true,
+      relock_seconds: 15
+    }
+
+    html = render_component(&DashboardPanels.settings_panel/1, user: user, app_version: "0.0.0")
+
+    assert html =~ "Heads-ups (calendar + rain)"
+    refute html =~ "Calendar heads-ups"
+  end
+
   test "short_id tolerates a non-string device id (finding #5)" do
     html =
       render_component(&DashboardPanels.status_strip/1,

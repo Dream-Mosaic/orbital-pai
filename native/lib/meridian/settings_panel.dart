@@ -148,7 +148,7 @@ class SettingsPanelView extends StatelessWidget {
             _toggle(
               key: const ValueKey('toggle-heads_up'),
               label:
-                  'Calendar heads-ups (a spoken nudge 10 minutes before each event)',
+                  "Heads-ups (before calendar events, and when rain's about to start)",
               value: state.headsUp!,
               onChanged: (v) => client.setPref('heads_up', v),
             ),

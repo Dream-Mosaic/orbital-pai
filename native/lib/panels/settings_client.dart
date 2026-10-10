@@ -22,7 +22,8 @@ class SettingsState {
   final bool defaultPtt;
   final bool voiceActivation;
 
-  /// Calendar heads-ups (a spoken nudge before each event). null when the
+  /// Heads-ups (a spoken nudge before each calendar event, and when rain's
+  /// about to start at home). null when the
   /// server predates the pref: the app and server ship separately, and a
   /// toggle the server would refuse is better hidden than shown OFF.
   final bool? headsUp;
