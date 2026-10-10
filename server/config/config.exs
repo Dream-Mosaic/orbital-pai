@@ -46,6 +46,9 @@ config :app, start_reminder_scheduler: true
 # The timer scheduler arms one send_after per running timer; off in test (tests start it).
 config :app, start_timer_scheduler: true
 
+# Calendar heads-ups (App.Agenda.Heads) poll connected users' calendars; off in test (tests start it).
+config :app, start_heads_up: true
+
 # Pool warming makes outbound HTTP calls at boot — only wanted in prod (the deploy host's cold
 # connect is the slow one). Off by default so dev/test never hit the network on startup.
 config :app, start_pool_warmer: false

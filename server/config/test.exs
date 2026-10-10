@@ -24,6 +24,7 @@ config :logger, level: :warning
 config :app, start_reminder_scheduler: false
 config :app, start_timer_scheduler: false
 config :app, start_briefing_scheduler: false
+config :app, start_heads_up: false
 config :app, start_memory_consolidator: false
 config :app, start_memory_embedder: false
 config :app, start_source_ingester: false

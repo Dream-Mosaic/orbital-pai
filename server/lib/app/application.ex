@@ -43,6 +43,7 @@ defmodule App.Application do
         reminder_scheduler() ++
         timer_scheduler() ++
         briefing_scheduler() ++
+        heads_up() ++
         memory_consolidator() ++
         memory_embedder() ++
         source_ingester() ++ pool_warmer() ++ speaker_verifier() ++ backup()
@@ -68,6 +69,12 @@ defmodule App.Application do
   defp briefing_scheduler do
     if Application.get_env(:app, :start_briefing_scheduler, true),
       do: [App.Agenda.Briefing],
+      else: []
+  end
+
+  defp heads_up do
+    if Application.get_env(:app, :start_heads_up, true),
+      do: [App.Agenda.Heads],
       else: []
   end
 
