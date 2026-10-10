@@ -158,6 +158,13 @@ defmodule App.Conversations.BrainStream do
     {:noreply, state}
   end
 
+  # Relay each successful tool result so the owner can render it as a visual card (App.Cards).
+  # Text-free, so it is independent of the TTS socket being ready.
+  def handle_info({:gemini_tool_result, name, args, result}, state) do
+    send(state.owner, {:brain_tool_result, name, args, result})
+    {:noreply, state}
+  end
+
   def handle_info({:gemini_done}, %{ready: false} = state),
     do: {:noreply, %{state | gemini_done: true}}
 

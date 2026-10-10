@@ -110,6 +110,9 @@ defmodule App.Adapters.TextModel.Gemini do
             fn %{name: name, args: args} ->
               case App.Tools.execute(name, args, tool_ctx) do
                 {:ok, r} ->
+                  # the raw result, for a visual card (App.Cards) — sent from this task so a
+                  # fast tool's card can land while a slower sibling is still running
+                  send(target, {:gemini_tool_result, name, args, r})
                   %{result: r}
 
                 {:error, e} ->

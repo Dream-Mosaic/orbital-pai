@@ -118,6 +118,38 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert_receive {:gemini_done}
   end
 
+  test "each successful tool result is relayed to the owner (for cards); errors are not" do
+    defmodule CardSource do
+      @behaviour App.Tools.Tool
+      def declarations do
+        for n <- ["good_tool", "bad_tool"] do
+          %{name: n, description: n, parameters: %{type: "object", properties: %{}, required: []}}
+        end
+      end
+
+      def execute("good_tool", _a, _c), do: {:ok, %{temp: 72}}
+      def execute("bad_tool", _a, _c), do: {:error, :nope}
+    end
+
+    cfg = %App.Config{tools: [CardSource], web_search: false, tool_cache: false}
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+
+    round_fun = fn _contents, _system, _cfg, _thinking, _target, tools? ->
+      if tools? and not Process.get(:sent_calls, false) do
+        Process.put(:sent_calls, true)
+        {:ok, [call("good_tool", %{args: %{"where" => "home"}}), call("bad_tool")]}
+      else
+        {:ok, []}
+      end
+    end
+
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, self(), 0, round_fun)
+
+    assert_receive {:gemini_tool_result, "good_tool", %{"where" => "home"}, %{temp: 72}}
+    assert_receive {:gemini_done}
+    refute_received {:gemini_tool_result, "bad_tool", _, _}
+  end
+
   test "tools_block includes function tools AND googleSearch when web_search is on" do
     assert [%{functionDeclarations: decls}, %{googleSearch: %{}}] =
              Gemini.tools_block(%Config{web_search: true})

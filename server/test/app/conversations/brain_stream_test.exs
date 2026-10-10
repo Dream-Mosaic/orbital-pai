@@ -56,6 +56,17 @@ defmodule App.Conversations.BrainStreamTest do
     assert_receive {:brain_tool_call, "x"}
   end
 
+  test "a gemini tool result is relayed to the owner, ready or not (it never touches TTS)" do
+    for ready <- [false, true] do
+      state = %{ready: ready, pending: [], text: "", owner: self()}
+      msg = {:gemini_tool_result, "get_weather", %{"location" => "home"}, %{location: "X"}}
+      {:noreply, ^state} = BrainStream.handle_info(msg, state)
+
+      assert_receive {:brain_tool_result, "get_weather", %{"location" => "home"},
+                      %{location: "X"}}
+    end
+  end
+
   # ---- context rotation: a Cartesia context expires 1s after its last audio (docs). A long tool
   # gap (silent bridge→answer) expires the context before the answer; we rotate to a fresh one
   # instead of ending the turn empty. ----
