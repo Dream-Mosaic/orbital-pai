@@ -17,6 +17,8 @@ defmodule App.Users.User do
     # morning briefing: local "HH:MM" (nil = off) + the local date last DELIVERED (once/day)
     field :briefing_time, :string
     field :briefing_last_on, :date
+    # calendar heads-ups: a spoken nudge ~10 min before each timed event (App.Agenda.Heads)
+    field :heads_up, :boolean, default: true
     # Voice Lock: "off" | "shadow" | "enforce"; nil threshold falls back to App.Config.
     field :voice_lock_mode, :string, default: "off"
     field :voice_lock_threshold, :float
@@ -50,6 +52,7 @@ defmodule App.Users.User do
       :default_abi,
       :default_ptt,
       :voice_activation,
+      :heads_up,
       :relock_seconds,
       :briefing_time,
       :voice_lock_mode,

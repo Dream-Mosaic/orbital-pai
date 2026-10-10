@@ -27,8 +27,15 @@ defmodule AppWeb.Panels.SettingsChannelTest do
     assert is_boolean(state.default_abi)
     assert is_boolean(state.default_ptt)
     assert is_boolean(state.voice_activation)
+    assert is_boolean(state.heads_up)
     assert is_integer(state.relock_seconds)
     assert state.app_version == App.version()
+  end
+
+  test "calendar heads-ups default ON for a user who never touched the pref",
+       %{socket: socket, alice: alice} do
+    {:ok, _reply, _socket} = join!(socket, alice)
+    assert_push "state", %{heads_up: true}
   end
 
   test "briefing_time is nil when the morning briefing is off", %{socket: socket, alice: alice} do
@@ -52,7 +59,7 @@ defmodule AppWeb.Panels.SettingsChannelTest do
     assert_push "state", %{relock_seconds: 11}
   end
 
-  test "the pushed state has exactly the six expected keys, no others", %{
+  test "the pushed state has exactly the seven expected keys, no others", %{
     socket: socket,
     alice: alice
   } do
@@ -65,6 +72,7 @@ defmodule AppWeb.Panels.SettingsChannelTest do
                :default_abi,
                :default_ptt,
                :voice_activation,
+               :heads_up,
                :briefing_time,
                :relock_seconds,
                :app_version
@@ -76,7 +84,7 @@ defmodule AppWeb.Panels.SettingsChannelTest do
       {:ok, _reply, socket} = join!(socket, alice)
       assert_push "state", _
 
-      for pref <- ~w(default_abi default_ptt voice_activation) do
+      for pref <- ~w(default_abi default_ptt voice_activation heads_up) do
         ref = push(socket, "set_pref", %{"pref" => pref, "value" => false})
         assert_reply ref, :ok
         assert_push "state", state
@@ -89,6 +97,17 @@ defmodule AppWeb.Panels.SettingsChannelTest do
       end
 
       assert Users.get(alice.id).default_abi
+    end
+
+    test "heads_up off is stored, so the producer stops polling this user",
+         %{socket: socket, alice: alice} do
+      {:ok, _reply, socket} = join!(socket, alice)
+      assert_push "state", %{heads_up: true}
+
+      ref = push(socket, "set_pref", %{"pref" => "heads_up", "value" => false})
+      assert_reply ref, :ok
+      assert_push "state", %{heads_up: false}
+      refute Users.get(alice.id).heads_up
     end
 
     test "a pref outside the allowlist is refused and changes nothing",

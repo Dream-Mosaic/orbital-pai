@@ -469,6 +469,7 @@ defmodule AppWeb.DashboardPanels do
           <.setting label="Push-to-talk" value={on_off(@user.default_ptt)} />
           <.setting label="Wake word" value={on_off(@user.voice_activation)} />
           <.setting label="Morning briefing" value={@user.briefing_time || "off"} />
+          <.setting label="Calendar heads-ups" value={on_off(@user.heads_up)} />
           <.setting label="Lockdown timeout" value={"#{@user.relock_seconds}s"} />
         </dl>
       </section>

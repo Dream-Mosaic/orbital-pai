@@ -31,7 +31,8 @@ defmodule AppWeb.Panels.SettingsChannel do
   @settable %{
     "default_abi" => :default_abi,
     "default_ptt" => :default_ptt,
-    "voice_activation" => :voice_activation
+    "voice_activation" => :voice_activation,
+    "heads_up" => :heads_up
   }
 
   @impl true
@@ -173,6 +174,7 @@ defmodule AppWeb.Panels.SettingsChannel do
           default_abi: user.default_abi,
           default_ptt: user.default_ptt,
           voice_activation: user.voice_activation,
+          heads_up: user.heads_up,
           briefing_time: user.briefing_time,
           relock_seconds: user.relock_seconds,
           app_version: App.version()
