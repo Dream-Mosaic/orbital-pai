@@ -11,6 +11,7 @@ import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
+import 'glance.dart';
 import 'mic_state.dart';
 import '../phoenix/decoded_message.dart';
 import '../phoenix/phoenix_channel.dart';
@@ -279,6 +280,26 @@ class VoiceController extends ChangeNotifier {
   final PlaybackLevels _levels = PlaybackLevels();
 
   String get caption => _caption;
+
+  Glance _glance = Glance.empty;
+
+  /// The idle orb's weather + next-event line, from the server's `glance` push.
+  Glance get glance => _glance;
+
+  /// Whether the orb is at rest and may show its ambient face: nobody is
+  /// mid-utterance (the caption is empty or only the resting wake prompt) and
+  /// Henry is neither thinking nor speaking.
+  bool get orbAtRest {
+    final quietCaption = _caption.isEmpty || (_caption == _restingCaption && !_captionPending);
+    // The TURN, not the rendered orb state: a powered-off orb still renders
+    // `off` while a typed turn is thinking, and that turn owns the glass.
+    return quietCaption &&
+        _turnState != TurnState.speaking &&
+        _turnState != TurnState.thinking;
+  }
+
+  /// The resting prompt the face carries as its footer ('' when unlocked).
+  String get restingHint => _restingCaption;
 
   /// Whether [caption] is a live partial transcript that Ink-2 is still
   /// extending — i.e. whether the trailing ellipsis belongs on it.
@@ -926,6 +947,8 @@ class VoiceController extends ChangeNotifier {
           }
           _thread.add(const ThreadDivider());
         }
+      case 'glance':
+        _glance = Glance.fromJson(p);
       case 'partial':
         _setCaption((p['text'] as String?) ?? '', pending: true);
       case 'transcript':

@@ -9,6 +9,7 @@ import 'hold_to_talk.dart';
 import 'meridian_surface.dart';
 import 'nav.dart';
 import 'orb_bezel.dart';
+import 'orb_face.dart';
 import 'palette.dart';
 import 'thread.dart';
 import 'tokens.dart';
@@ -263,6 +264,15 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                     onClear: _confirmClear,
                     onPtt: vc.setPtt,
                     onAbi: vc.setAllowInterruptions,
+                    face: vc.orbAtRest
+                        ? (w, h) => OrbFace(
+                              width: w,
+                              height: h,
+                              glance: vc.glance,
+                              hint: vc.restingHint,
+                              dimmed: !vc.micOn,
+                            )
+                        : null,
                   ),
                 ),
                 SizedBox(

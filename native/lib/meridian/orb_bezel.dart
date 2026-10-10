@@ -41,6 +41,7 @@ class OrbBezel extends StatelessWidget {
     required this.onClear,
     required this.onPtt,
     required this.onAbi,
+    this.face,
     this.powerEnabled = true,
   });
 
@@ -59,6 +60,11 @@ class OrbBezel extends StatelessWidget {
   final VoidCallback onClear;
   final ValueChanged<bool> onPtt;
   final ValueChanged<bool> onAbi;
+
+  /// The ambient face shown in the caption's box while the orb is at rest, or
+  /// null for the bare caption. Built at the box's size; crossfades with the
+  /// caption so your first word replaces the clock without a jump.
+  final Widget Function(double width, double height)? face;
 
   /// False until the socket has actually joined. See OrbDetent.enabled.
   final bool powerEnabled;
@@ -91,11 +97,20 @@ class OrbBezel extends StatelessWidget {
       width: halfW * 2,
       height: halfH * 2,
       child: IgnorePointer(
-        child: LiveCaption(
-          text: caption,
-          pending: captionPending,
-          width: halfW * 2,
-          height: halfH * 2,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          child: face != null
+              ? KeyedSubtree(
+                  key: const ValueKey('orb-face'),
+                  child: face!(halfW * 2, halfH * 2),
+                )
+              : LiveCaption(
+                  key: const ValueKey('orb-caption'),
+                  text: caption,
+                  pending: captionPending,
+                  width: halfW * 2,
+                  height: halfH * 2,
+                ),
         ),
       ),
     );

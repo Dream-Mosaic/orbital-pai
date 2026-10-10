@@ -31,6 +31,23 @@ void main() {
     expect(conn.connStatus, ConnStatus.connecting);
   });
 
+  test('a glance push lands on the controller; the orb is at rest until someone talks', () {
+    vc.debugHandleMessage(msg('glance', const {
+      'weather': {'temp': '64°', 'condition': 'Clear', 'icon': 'clear-night'},
+      'next_event': {'title': 'Dinner', 'time': '7:30 PM', 'day': 'Today'},
+    }));
+    expect(vc.glance.weather!.temp, '64°');
+    expect(vc.glance.next!.title, 'Dinner');
+    expect(vc.orbAtRest, isTrue);
+
+    vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
+    expect(vc.orbAtRest, isFalse, reason: 'your live words own the orb');
+
+    vc.debugHandleMessage(msg('transcript', const {'text': 'what is the weather'}));
+    vc.debugHandleMessage(msg('thinking', const {}));
+    expect(vc.orbAtRest, isFalse, reason: 'thinking/speaking own the orb too');
+  });
+
   test('a transcript becomes a `you` line and clears the caption', () {
     vc.debugHandleMessage(msg('partial', const {'text': 'what is th'}));
     expect(vc.caption, 'what is th');
