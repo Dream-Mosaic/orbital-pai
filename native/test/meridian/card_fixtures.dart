@@ -279,3 +279,540 @@ const Map<String, dynamic> emailCard = {
   ],
   'title': 'Unread',
 };
+
+// Trackers and recipes, from the same pinned clock and the tools' own result builders: a
+// month of headaches (10 entries, two on Mon Oct 5), a "no soda" habit with no values, a
+// just-logged entry, Grandma's lasagna looked up and just saved, and cook mode on step 6 of 7
+// and on step 1.
+
+const Map<String, dynamic> trackerCard = {
+  'range': 'Last 30 days',
+  'recent': [
+    {
+      'note': 'behind the eyes',
+      'value': '7',
+      'when': 'Yesterday, 3:45 PM',
+    },
+    {
+      'note': 'poor sleep',
+      'value': '5',
+      'when': 'Wed, 9:10 AM',
+    },
+    {
+      'note': 'skipped lunch, coffee',
+      'value': '6',
+      'when': 'Mon, 6:00 PM',
+    },
+  ],
+  'series': [
+    {
+      'count': 0,
+      'label': 'Sep 11',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 12',
+      'value': 4,
+    },
+    {
+      'count': 0,
+      'label': 'Sep 13',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 14',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 15',
+      'value': 3,
+    },
+    {
+      'count': 0,
+      'label': 'Sep 16',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 17',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 18',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 19',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 20',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 21',
+      'value': 5,
+    },
+    {
+      'count': 0,
+      'label': 'Sep 22',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 23',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 24',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 25',
+      'peak': '8',
+      'value': 8,
+    },
+    {
+      'count': 0,
+      'label': 'Sep 26',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 27',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 28',
+      'value': 6,
+    },
+    {
+      'count': 0,
+      'label': 'Sep 29',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 30',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 1',
+      'value': 5,
+    },
+    {
+      'count': 0,
+      'label': 'Oct 2',
+    },
+    {
+      'count': 0,
+      'label': 'Oct 3',
+    },
+    {
+      'count': 0,
+      'label': 'Oct 4',
+    },
+    {
+      'count': 2,
+      'label': 'Oct 5',
+      'value': 6,
+    },
+    {
+      'count': 0,
+      'label': 'Oct 6',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 7',
+      'value': 5,
+    },
+    {
+      'count': 0,
+      'label': 'Oct 8',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 9',
+      'value': 7,
+    },
+    {
+      'count': 0,
+      'label': 'Oct 10',
+    },
+  ],
+  'stats': [
+    {
+      'label': 'Entries',
+      'value': '10',
+    },
+    {
+      'label': 'Avg',
+      'value': '5.3',
+    },
+    {
+      'label': 'Range',
+      'value': '3–8',
+    },
+  ],
+  'title': 'Headache',
+  'top_tags': [
+    'skipped lunch ×3',
+    'poor sleep ×2',
+    'screen time ×2',
+  ],
+  'type': 'tracker',
+};
+
+const Map<String, dynamic> trackerHabitCard = {
+  'range': 'Last 30 days',
+  'recent': [
+    {
+      'when': 'Yesterday, 9:30 PM',
+    },
+    {
+      'when': 'Thu, 9:30 PM',
+    },
+    {
+      'when': 'Wed, 9:30 PM',
+    },
+  ],
+  'series': [
+    {
+      'count': 0,
+      'label': 'Sep 11',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 12',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 13',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 14',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 15',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 16',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 17',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 18',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 19',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 20',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 21',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 22',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 23',
+    },
+    {
+      'count': 0,
+      'label': 'Sep 24',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 25',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 26',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 27',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 28',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 29',
+    },
+    {
+      'count': 1,
+      'label': 'Sep 30',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 1',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 2',
+    },
+    {
+      'count': 0,
+      'label': 'Oct 3',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 4',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 5',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 6',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 7',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 8',
+    },
+    {
+      'count': 1,
+      'label': 'Oct 9',
+    },
+    {
+      'count': 0,
+      'label': 'Oct 10',
+    },
+  ],
+  'stats': [
+    {
+      'label': 'Entries',
+      'value': '23',
+    },
+    {
+      'label': 'Best streak',
+      'value': '8 days',
+    },
+  ],
+  'title': 'No soda',
+  'type': 'tracker',
+};
+
+const Map<String, dynamic> trackerLoggedCard = {
+  'label': 'Logged',
+  'note': 'behind the eyes, came on at work',
+  'summary': '12th entry',
+  'tags': [
+    'skipped lunch',
+    'coffee',
+  ],
+  'title': 'Headache',
+  'type': 'tracker_logged',
+  'value': '6',
+  'when': 'Today, 1:40 PM',
+};
+
+const Map<String, dynamic> recipeCard = {
+  'ingredients': [
+    {
+      'item': 'ground beef',
+      'qty': '1 lb',
+    },
+    {
+      'item': 'Italian sausage',
+      'qty': '1 lb',
+    },
+    {
+      'item': 'lasagna noodles',
+      'qty': '12',
+    },
+    {
+      'item': 'marinara',
+      'qty': '1 (24 oz) jar',
+    },
+    {
+      'item': 'ricotta cheese',
+      'qty': '2 cups',
+    },
+    {
+      'item': 'large eggs',
+      'qty': '2',
+    },
+    {
+      'item': 'shredded mozzarella',
+      'qty': '3 cups',
+    },
+    {
+      'item': 'grated parmesan',
+      'qty': '1 cup',
+    },
+    {
+      'item': 'garlic, minced',
+      'qty': '3 cloves',
+    },
+    {
+      'item': 'salt',
+      'qty': '½ tsp',
+    },
+    {
+      'item': 'Fresh basil',
+    },
+  ],
+  'ingredients_label': '11 ingredients',
+  'meta': 'Serves 8 · from Grandma',
+  'notes': 'Freezes well — wrap it tight and bake from frozen at 375°F for 90 minutes.',
+  'steps': [
+    {
+      'number': '1',
+      'text': 'Preheat the oven to 375°F.',
+    },
+    {
+      'number': '2',
+      'text': 'Brown the beef and sausage with the garlic, about 8 minutes; drain.',
+    },
+    {
+      'number': '3',
+      'text': 'Boil the noodles until just tender, 8 to 10 minutes.',
+    },
+    {
+      'number': '4',
+      'text': 'Stir the eggs and half the parmesan into the ricotta.',
+    },
+    {
+      'number': '5',
+      'text': 'Layer sauce, noodles, ricotta and mozzarella three times; finish with sauce and parmesan.',
+    },
+    {
+      'number': '6',
+      'text': 'Cover with foil and bake 25 minutes, then uncover and bake 20 more minutes.',
+    },
+    {
+      'number': '7',
+      'text': 'Let it rest 15 minutes before cutting.',
+    },
+  ],
+  'steps_label': '7 steps',
+  'title': "Grandma's Lasagna",
+  'type': 'recipe',
+};
+
+const Map<String, dynamic> recipeSavedCard = {
+  'ingredients': [
+    {
+      'item': 'ground beef',
+      'qty': '1 lb',
+    },
+    {
+      'item': 'Italian sausage',
+      'qty': '1 lb',
+    },
+    {
+      'item': 'lasagna noodles',
+      'qty': '12',
+    },
+    {
+      'item': 'marinara',
+      'qty': '1 (24 oz) jar',
+    },
+    {
+      'item': 'ricotta cheese',
+      'qty': '2 cups',
+    },
+    {
+      'item': 'large eggs',
+      'qty': '2',
+    },
+    {
+      'item': 'shredded mozzarella',
+      'qty': '3 cups',
+    },
+    {
+      'item': 'grated parmesan',
+      'qty': '1 cup',
+    },
+    {
+      'item': 'garlic, minced',
+      'qty': '3 cloves',
+    },
+    {
+      'item': 'salt',
+      'qty': '½ tsp',
+    },
+    {
+      'item': 'Fresh basil',
+    },
+  ],
+  'ingredients_label': '11 ingredients',
+  'meta': 'Serves 8 · from Grandma',
+  'notes': 'Freezes well — wrap it tight and bake from frozen at 375°F for 90 minutes.',
+  'status': 'Saved',
+  'steps': [
+    {
+      'number': '1',
+      'text': 'Preheat the oven to 375°F.',
+    },
+    {
+      'number': '2',
+      'text': 'Brown the beef and sausage with the garlic, about 8 minutes; drain.',
+    },
+    {
+      'number': '3',
+      'text': 'Boil the noodles until just tender, 8 to 10 minutes.',
+    },
+    {
+      'number': '4',
+      'text': 'Stir the eggs and half the parmesan into the ricotta.',
+    },
+    {
+      'number': '5',
+      'text': 'Layer sauce, noodles, ricotta and mozzarella three times; finish with sauce and parmesan.',
+    },
+    {
+      'number': '6',
+      'text': 'Cover with foil and bake 25 minutes, then uncover and bake 20 more minutes.',
+    },
+    {
+      'number': '7',
+      'text': 'Let it rest 15 minutes before cutting.',
+    },
+  ],
+  'steps_label': '7 steps',
+  'title': "Grandma's Lasagna",
+  'type': 'recipe',
+};
+
+const Map<String, dynamic> cookStepCard = {
+  'next': 'Let it rest 15 minutes…',
+  'next_label': 'Next',
+  'progress': 'Step 6 of 7',
+  'step': 6,
+  'step_count': 7,
+  'text': 'Cover with foil and bake 25 minutes, then uncover and bake 20 more minutes.',
+  'timers': [
+    '25 minutes',
+    '20 more minutes',
+  ],
+  'title': "Grandma's Lasagna",
+  'type': 'cook_step',
+};
+
+const Map<String, dynamic> cookFirstStepCard = {
+  'next': 'Brown the beef and sausage…',
+  'next_label': 'Next',
+  'progress': 'Step 1 of 7',
+  'step': 1,
+  'step_count': 7,
+  'text': 'Preheat the oven to 375°F.',
+  'title': "Grandma's Lasagna",
+  'type': 'cook_step',
+};

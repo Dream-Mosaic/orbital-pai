@@ -81,6 +81,16 @@ extension CardData on Map<String, dynamic> {
   }
 
   bool flag(String key) => this[key] == true;
+
+  /// A list of strings (tags, timer suggestions), skipping anything that isn't one.
+  List<String> strs(String key) {
+    final v = this[key];
+    if (v is! List) return const [];
+    return [
+      for (final s in v)
+        if (s is String && s.isNotEmpty) s,
+    ];
+  }
 }
 
 class CardFrame extends StatelessWidget {

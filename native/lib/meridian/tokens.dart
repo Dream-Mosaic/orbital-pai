@@ -33,6 +33,16 @@ abstract final class M {
   /// can part ways without touching every briefing line.
   static const Color headsUp = briefing;
 
+  /// A private tracker (headaches, weight, habits) — oklch(0.74 0.11 268), a
+  /// cornflower between the briefing blue and the follow-up lavender: data,
+  /// cool and calm, without borrowing either one's meaning.
+  static const Color tracker = Color(0xFF8DA8F1);
+
+  /// The recipe book and cook mode — oklch(0.84 0.075 85), a butter/parchment
+  /// warmth that reads as a recipe card beside the amber list and lets the
+  /// coral [timer] pills on a cook step stand out against it.
+  static const Color recipe = Color(0xFFE1C792);
+
   /// daisyUI dark `--color-success` = oklch(0.60 0.118 184.704) — the power
   /// detent's icon while ON (`setPower()` toggles Tailwind's `.text-success`).
   ///

@@ -218,6 +218,10 @@ class ThreadCard extends ThreadItem {
     'list',
     'reminders',
     'email',
+    'tracker',
+    'tracker_logged',
+    'recipe',
+    'cook_step',
   };
 
   /// A card as the channel sends it (the live `card` push and each history

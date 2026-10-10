@@ -53,8 +53,10 @@ void main() {
     const card = ThreadCard(type: 'list', data: {'type': 'list', 'title': 'Groceries'});
     expect(card.type, 'list');
     expect(card.data['title'], 'Groceries');
-    expect(ThreadCard.knownTypes,
-        {'weather', 'agenda', 'list', 'reminders', 'email'});
+    expect(ThreadCard.knownTypes, {
+      'weather', 'agenda', 'list', 'reminders', 'email', //
+      'tracker', 'tracker_logged', 'recipe', 'cook_step',
+    });
   });
 
   test('the tool chip reads like the audio bridge, then resolves', () {

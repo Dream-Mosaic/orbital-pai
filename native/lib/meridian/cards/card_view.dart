@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../thread_model.dart';
 import 'agenda_card.dart';
+import 'cook_step_card.dart';
 import 'email_card.dart';
 import 'list_card.dart';
+import 'recipe_card.dart';
 import 'reminders_card.dart';
+import 'tracker_card.dart';
 import 'weather_card.dart';
 
 /// Picks a [ThreadCard]'s layout by its server-sent type. The router already
@@ -22,6 +25,10 @@ class ThreadCardView extends StatelessWidget {
         'list' => ListCard(data: card.data),
         'reminders' => RemindersCard(data: card.data),
         'email' => EmailCard(data: card.data),
+        'tracker' => TrackerCard(data: card.data),
+        'tracker_logged' => TrackerLoggedCard(data: card.data),
+        'recipe' => RecipeCard(data: card.data),
+        'cook_step' => CookStepCard(data: card.data),
         _ => const SizedBox.shrink(),
       };
 }
