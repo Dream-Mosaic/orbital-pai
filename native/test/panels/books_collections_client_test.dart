@@ -129,7 +129,13 @@ void main() {
             'range': 'Last 30 days',
             'series': [
               {'label': 'Sep 11', 'count': 0, 'value': null, 'peak': null},
-              {'label': 'Sep 12', 'count': 2, 'value': 8, 'peak': '8'},
+              {
+                'label': 'Sep 12',
+                'count': 2,
+                'value': 8,
+                'peak': '8',
+                'tip': 'Sat, Sep 12 · up to 8 · 2 entries',
+              },
               {'label': 'Sep 13', 'count': 1, 'value': 4.5, 'peak': null},
             ],
             'axis_from': 'Sep 11',
@@ -172,6 +178,8 @@ void main() {
       expect(t.series[0].logged, isFalse);
       expect(t.series[1].value, 8.0);
       expect(t.series[1].peak, '8');
+      expect(t.series[1].tip, 'Sat, Sep 12 · up to 8 · 2 entries');
+      expect(t.series[0].tip, '');
       expect(t.series[2].value, 4.5);
       expect(t.axisFrom, 'Sep 11');
       expect(t.axisTo, 'Today');

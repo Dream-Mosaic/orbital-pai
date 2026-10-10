@@ -111,9 +111,19 @@ class RecipesBody {
 /// One day of a tracker's 30-day chart, oldest first. Same shape as the
 /// thread's tracker card series.
 class TrackerPoint {
-  const TrackerPoint({this.label = '', this.count = 0, this.value, this.peak = ''});
+  const TrackerPoint({
+    this.label = '',
+    this.count = 0,
+    this.value,
+    this.peak = '',
+    this.tip = '',
+  });
 
   final String label;
+
+  /// What the chart reads out when this day is touched
+  /// ("Thu, Oct 8 · up to 8 · 2 entries").
+  final String tip;
 
   /// Entries that day; 0 is a day with nothing logged.
   final int count;
@@ -134,6 +144,7 @@ class TrackerPoint {
       count: c is num ? c.toInt() : (v is num ? 1 : 0),
       value: v is num ? v.toDouble() : null,
       peak: _s(j['peak']),
+      tip: _s(j['tip']),
     );
   }
 }
@@ -242,12 +253,17 @@ class TrackerRow {
         count: _s(j['count']),
         last: _s(j['last']),
         range: _s(j['range']),
-        series: _maps(j['series']).map(TrackerPoint.fromJson).toList(growable: false),
+        series: _maps(j['series'])
+            .map(TrackerPoint.fromJson)
+            .toList(growable: false),
         axisFrom: _s(j['axis_from']),
         axisTo: _s(j['axis_to']),
-        stats: _maps(j['stats']).map(TrackerStat.fromJson).toList(growable: false),
+        stats:
+            _maps(j['stats']).map(TrackerStat.fromJson).toList(growable: false),
         tags: _maps(j['tags']).map(TrackerTag.fromJson).toList(growable: false),
-        recent: _maps(j['recent']).map(TrackerEntryRow.fromJson).toList(growable: false),
+        recent: _maps(j['recent'])
+            .map(TrackerEntryRow.fromJson)
+            .toList(growable: false),
         more: _s(j['more']),
         quiet: _s(j['quiet']),
       );

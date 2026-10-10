@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../panels/books_client.dart';
 import 'books_garden.dart';
+import 'books_shelf.dart';
 import 'hero_icon.dart';
 import 'tokens.dart';
 
@@ -28,9 +29,26 @@ import 'tokens.dart';
 /// should not "restore" the nested disclosure as a bug fix; it is the
 /// deliberate flattening described above.
 class BooksPanelView extends StatefulWidget {
-  const BooksPanelView({super.key, required this.client});
+  const BooksPanelView({
+    super.key,
+    required this.client,
+    this.onOpenRecipe,
+    this.onOpenTracker,
+  });
 
   final BooksClient client;
+
+  /// Open a recipe's / a tracker's detail layer — `BooksDrawerHost` passes
+  /// these. Without them the collection rows are read-only (no chevron).
+  final ValueChanged<int>? onOpenRecipe;
+  final ValueChanged<int>? onOpenTracker;
+
+  /// The book kinds that are COLLECTIONS (`App.Books.collections/0`): no
+  /// Clear, and set apart from the lists and garden in the picker.
+  static const Set<String> collectionKinds = {'recipes', 'trackers', 'routines'};
+
+  /// The hairline in the picker between the lists/garden and the collections.
+  static const Key collectionsDividerKey = ValueKey('books-collections-divider');
 
   /// So a test can scope a find to the header row specifically — the current
   /// book's label and the current list's own name can coincide (the web sets
@@ -157,12 +175,15 @@ class _BooksPanelViewState extends State<BooksPanelView> {
                 ),
               ),
             ),
-            _ghostTextButton(
-              'Clear',
-              // Both arguments from `state` — the same snapshot, deliberately.
-              onTap: () =>
-                  _clearBook(context, state.clearConfirm, state.currentKey),
-            ),
+            // A collection has nothing to Clear: the channel sends no
+            // confirmation for it, and no confirmation means no control.
+            if (state.clearConfirm.isNotEmpty)
+              _ghostTextButton(
+                'Clear',
+                // Both arguments from `state` — the same snapshot, deliberately.
+                onTap: () =>
+                    _clearBook(context, state.clearConfirm, state.currentKey),
+              ),
           ],
         ),
       );
@@ -194,8 +215,23 @@ class _BooksPanelViewState extends State<BooksPanelView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    for (final book in state.books)
-                      _bookRow(book, isCurrent: book.key == currentBook.key),
+                    for (var i = 0; i < state.books.length; i++) ...[
+                      // A hairline where the collections start (server
+                      // order puts them last), so the picker reads as two
+                      // groups: the lists and garden, then the collections.
+                      if (i > 0 &&
+                          _isCollection(state.books[i]) &&
+                          !_isCollection(state.books[i - 1]))
+                        Container(
+                          key: BooksPanelView.collectionsDividerKey,
+                          height: 1,
+                          margin: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6),
+                          color: M.hairline,
+                        ),
+                      _bookRow(state.books[i],
+                          isCurrent: state.books[i].key == currentBook.key),
+                    ],
                     const SizedBox(height: 8),
                     _createRow(bottomInset),
                   ],
@@ -280,9 +316,32 @@ class _BooksPanelViewState extends State<BooksPanelView> {
         ],
       );
 
+  bool _isCollection(BookRef b) => BooksPanelView.collectionKinds.contains(b.kind);
+
   Widget _body(BooksState state, BookRef currentBook, double bottomInset) {
     final list = state.list;
     if (list != null) return _listBody(list, bottomInset);
+    // The collections: each body is non-null only while it is current.
+    // Defensive like the garden branch below — a kind whose body has not
+    // landed renders nothing rather than crashing the drawer.
+    switch (currentBook.kind) {
+      case 'recipes':
+        final recipes = state.recipes;
+        return recipes == null
+            ? const SizedBox.shrink()
+            : RecipesShelfBody(body: recipes, onOpen: widget.onOpenRecipe);
+      case 'trackers':
+        final trackers = state.trackers;
+        return trackers == null
+            ? const SizedBox.shrink()
+            : TrackersShelfBody(body: trackers, onOpen: widget.onOpenTracker);
+      case 'routines':
+        final routines = state.routines;
+        return routines == null
+            ? const SizedBox.shrink()
+            : RoutinesShelfBody(
+                body: routines, onDelete: widget.client.deleteRoutine);
+    }
     if (currentBook.kind == 'garden') {
       final garden = state.garden;
       // Defensive, same rationale as the :list branch below: the server
@@ -421,6 +480,9 @@ class _BooksPanelViewState extends State<BooksPanelView> {
         'shopping-cart' => HeroIcon.shoppingCart,
         'clipboard-document-list' => HeroIcon.clipboardDocumentList,
         'sun' => HeroIcon.sun,
+        'cake' => HeroIcon.cake,
+        'chart-bar' => HeroIcon.chartBar,
+        'bolt' => HeroIcon.bolt,
         'book-open' => HeroIcon.bookOpen,
         _ => HeroIcon.bookOpen,
       };

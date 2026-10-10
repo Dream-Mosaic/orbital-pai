@@ -8,7 +8,7 @@ import 'auth/auth_controller.dart';
 import 'auth/browser_session.dart';
 import 'auth/token_store.dart';
 import 'connection/app_connection.dart';
-import 'meridian/books_panel.dart';
+import 'meridian/books_drawer_host.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
 import 'meridian/login_screen.dart';
@@ -425,9 +425,15 @@ class _HenryHomeState extends State<HenryHome> {
       case MeridianTab.books:
         books.open();
         Navigator.of(context)
-            .push(meridianDrawerRoute(
-              title: tab.label,
-              child: BooksPanelView(client: books),
+            // Hosted, like Settings: a recipe or tracker opens as a layer
+            // inside this one route, so back returns to the book.
+            .push(meridianHostedDrawerRoute(
+              builder: (context, animation, onClose) => BooksDrawerHost(
+                title: tab.label,
+                animation: animation,
+                onClose: onClose,
+                client: books,
+              ),
             ))
             // whenComplete, not a then: a back gesture, a scrim tap and the ✕
             // all have to leave the topic, or the server keeps pushing state
