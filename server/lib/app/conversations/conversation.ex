@@ -1209,6 +1209,7 @@ defmodule App.Conversations.Conversation do
 
       safety_stop?(t, data.config) ->
         Logger.info(~s|[wake] safety stop: "#{t}"|)
+        silence_timers(data)
 
         # wake_hit so the rest of this breath's cumulative partials caption the STRIPPED remainder.
         data = %{data | wake_hit: true, interrupt_pending?: false}
@@ -1315,6 +1316,47 @@ defmodule App.Conversations.Conversation do
   end
 
   # A wake trigger whose remainder begins with a command word ("Henry stop") = the safety stop.
+  @alarm_acks ~w(stop okay ok enough quiet dismiss alright thanks) ++
+                [
+                  "stop it",
+                  "stop the timer",
+                  "stop the alarm",
+                  "got it",
+                  "i got it",
+                  "all right",
+                  "thank you",
+                  "shut up",
+                  "timer off",
+                  "turn it off"
+                ]
+
+  defp alarm_ack?(t) when is_binary(t) do
+    norm =
+      t
+      |> String.downcase()
+      |> String.replace(~r/[^\p{L}\p{N}\s']/u, " ")
+      |> String.split()
+      |> Enum.join(" ")
+
+    norm in @alarm_acks
+  end
+
+  defp alarm_ack?(_), do: false
+
+  # Dismiss this user's ringing timers. True if anything was ringing. Never raises — a DB hiccup
+  # must not turn a "stop" into a crash.
+  defp silence_timers(%{session_id: sid}) do
+    with uid when is_integer(uid) <- App.Users.id_from_session(sid),
+         n when n > 0 <- App.Timers.silence_ringing(uid) do
+      Logger.info("[timers] #{n} ringing timer(s) silenced by voice")
+      true
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
   defp safety_stop?(t, cfg) do
     case WakeWord.match(t, cfg) do
       {:wake, rest} -> WakeWord.command_rest(rest) != :none
@@ -1336,6 +1378,12 @@ defmodule App.Conversations.Conversation do
     cond do
       data.ptt_mode and not data.expecting_finalize ->
         :keep_state_and_data
+
+      # An alarm is ringing and you said "stop" / "okay" / "got it": that's for the alarm, not a
+      # question for the brain. Only while awake (a locked device's gate isn't streaming anyway;
+      # "Henry, stop" goes through the wake path below), and only if something actually rang.
+      not data.locked and alarm_ack?(t) and silence_timers(data) ->
+        {:keep_state, %{data | expecting_finalize: false, holding: false}}
 
       data.voice_activation ->
         handle_gated_endpoint(t, %{data | expecting_finalize: false, holding: false})
@@ -1387,10 +1435,19 @@ defmodule App.Conversations.Conversation do
   # otherwise run the stripped remainder as the turn.
   defp route_wake_rest(rest, data) do
     case {blank?(rest), WakeWord.command_rest(rest)} do
-      {true, _} -> {:keep_state, speak_ack(data), [relock_action(data)]}
-      {false, {:command, ""}} -> {:keep_state, data, [relock_action(data)]}
-      {false, {:command, tail}} -> gate_and_feed_endpoint(tail, data)
-      {false, :none} -> gate_and_feed_endpoint(rest, data)
+      {true, _} ->
+        {:keep_state, speak_ack(data), [relock_action(data)]}
+
+      {false, {:command, ""}} ->
+        # "Henry, stop" also silences a ringing kitchen timer — hands in the dough
+        silence_timers(data)
+        {:keep_state, data, [relock_action(data)]}
+
+      {false, {:command, tail}} ->
+        gate_and_feed_endpoint(tail, data)
+
+      {false, :none} ->
+        gate_and_feed_endpoint(rest, data)
     end
   end
 

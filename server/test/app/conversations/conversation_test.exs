@@ -2535,6 +2535,70 @@ defmodule App.Conversations.ConversationTest do
     end
   end
 
+  describe "voice silences a ringing timer" do
+    test "'okay' while a timer rings dismisses it and never reaches the brain" do
+      Process.register(self(), :fake_brain_observer)
+      uid = user_id_for_test_user()
+      {:ok, t} = App.Timers.create(uid, 60, "pasta")
+      {:ok, _} = App.Timers.fire(t.id)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(uid)
+        )
+
+      Conversation.endpoint(pid, "Okay.")
+      Process.sleep(150)
+      refute App.Timers.ringing?(t.id)
+      refute_received {:fake_brain_transcript, _}
+      stop_session(pid)
+    end
+
+    test "'Henry, stop' silences it on a wake-locked device too" do
+      Process.register(self(), :fake_brain_observer)
+      uid = user_id_for_test_user()
+      {:ok, _} = App.Users.update_prefs(App.Users.get(uid), %{voice_activation: true})
+      {:ok, t} = App.Timers.create(uid, 60, "pasta")
+      {:ok, _} = App.Timers.fire(t.id)
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(uid)
+        )
+
+      Conversation.endpoint(pid, "Henry, stop.")
+      Process.sleep(150)
+      refute App.Timers.ringing?(t.id)
+      refute_received {:fake_brain_transcript, _}
+      stop_session(pid)
+    end
+
+    test "'okay' with NOTHING ringing is an ordinary turn" do
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "hm"} end)
+      Process.register(self(), :fake_brain_observer)
+      uid = user_id_for_test_user()
+
+      {:ok, pid} =
+        Conversation.start_link(
+          client: self(),
+          config: @config,
+          name: nil,
+          session_id: to_string(uid)
+        )
+
+      Conversation.endpoint(pid, "okay")
+      assert_receive {:fake_brain_transcript, _}, 1000
+      Process.sleep(300)
+      stop_session(pid)
+    end
+  end
+
   describe "typed (quiet) turns" do
     setup do
       on_exit(fn ->

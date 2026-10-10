@@ -142,6 +142,17 @@ defmodule App.Timers do
 
   def stop_one(%Timer{state: state} = t), do: transition(t.id, state, stop_state(state))
 
+  @doc """
+  Silence every RINGING timer of the user (→ done) — "Henry, stop" / "okay" while the alarm
+  sounds. Returns how many were silenced (0 = nothing was ringing).
+  """
+  def silence_ringing(user_id) when is_integer(user_id) do
+    Timer
+    |> where([t], t.user_id == ^user_id and t.state == "ringing")
+    |> Repo.all()
+    |> Enum.count(fn t -> match?({:ok, _}, dismiss(user_id, t.id)) end)
+  end
+
   @doc "Is this timer still ringing? The guard a queued 'timer's done' notice re-checks."
   def ringing?(id), do: match?(%Timer{state: "ringing"}, Repo.get(Timer, id))
 
