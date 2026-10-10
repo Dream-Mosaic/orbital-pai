@@ -58,13 +58,31 @@ defmodule App.CardsTest do
       assert c.type == "weather"
       assert c.location == "Belleville, IL"
       assert c.temp == "72°"
-      assert c.feels_like == "69°"
       assert c.condition == "Partly cloudy"
       assert c.icon == "partly"
       assert c.hi == "78°"
       assert c.lo == "61°"
-      assert c.wind == "8 mph S"
-      assert c.precip == "35%"
+
+      # labelled server-side, so the client renders copy it was sent rather than its own
+      assert c.details == [
+               %{label: "Feels like", value: "69°"},
+               %{label: "Wind", value: "8 mph S"},
+               %{label: "Rain", value: "35%"}
+             ]
+    end
+
+    test "today's chance is shown even when low, and called snow on a snow day" do
+      dry =
+        weather_result()
+        |> put_in([:daily, Access.at(0), :precip_chance], 0)
+
+      assert %{label: "Rain", value: "0%"} in card("get_weather", %{}, dry).details
+
+      snowy =
+        weather_result()
+        |> put_in([:daily, Access.at(0), :conditions], "snow showers")
+
+      assert %{label: "Snow", value: "35%"} in card("get_weather", %{}, snowy).details
     end
 
     test "the hourly strip is the next six hours, with night glyphs after sunset" do

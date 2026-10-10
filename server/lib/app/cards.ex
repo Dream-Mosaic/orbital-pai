@@ -73,16 +73,29 @@ defmodule App.Cards do
       type: "weather",
       location: r[:location],
       temp: deg!(cur.temp_f),
-      feels_like: deg(cur[:feels_like_f]),
       condition: sentence(cur[:conditions]),
       icon: weather_icon(cur[:conditions], cur[:is_day] != false, cur[:wind_mph], cur[:gust_mph]),
       hi: deg(today[:high_f]),
       lo: deg(today[:low_f]),
-      wind: wind(cur[:wind_mph], cur[:wind_dir]),
-      precip: precip(today[:precip_chance]),
+      details: details(cur, today),
       hourly: r |> Map.get(:hourly, []) |> Enum.take(6) |> Enum.map(&hour(&1, sun)),
       daily: daily |> Enum.drop(1) |> Enum.take(5) |> Enum.map(&day/1)
     })
+  end
+
+  # The small labelled stats under the headline. Labelled HERE so the client renders copy it
+  # was sent. Today's chance shows even at 0% — "no rain today" is an answer, unlike a 5% hour.
+  defp details(cur, today) do
+    precip_label =
+      if String.contains?(today[:conditions] || "", "snow"), do: "Snow", else: "Rain"
+
+    [
+      {"Feels like", deg(cur[:feels_like_f])},
+      {"Wind", wind(cur[:wind_mph], cur[:wind_dir])},
+      {precip_label, pct(today[:precip_chance])}
+    ]
+    |> Enum.reject(fn {_label, value} -> is_nil(value) end)
+    |> Enum.map(fn {label, value} -> %{label: label, value: value} end)
   end
 
   defp hour(h, sun) do
@@ -148,8 +161,11 @@ defmodule App.Cards do
   defp deg(n), do: deg!(n)
   defp deg!(n) when is_number(n), do: "#{round(n)}°"
 
-  defp precip(n) when is_number(n) and n >= @precip_floor, do: "#{round(n)}%"
+  defp precip(n) when is_number(n) and n >= @precip_floor, do: pct(n)
   defp precip(_), do: nil
+
+  defp pct(n) when is_number(n), do: "#{round(n)}%"
+  defp pct(_), do: nil
 
   defp wind(mph, dir) when is_number(mph),
     do: Enum.join(Enum.reject(["#{round(mph)} mph", dir], &is_nil/1), " ")
