@@ -12,6 +12,8 @@ const Map<String, String> kToolLabels = {
   'read_email': 'checking your email',
   'send_email': 'sending an email',
   'recall_memory': 'thinking back',
+  'send_household_message': 'sending a message',
+  'check_household_messages': 'checking messages',
 };
 
 String toolLabel(String name) => kToolLabels[name] ?? name.replaceAll('_', ' ');
