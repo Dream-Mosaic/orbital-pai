@@ -87,7 +87,7 @@ void main() {
   testWidgets('a landscape tablet (1280x800) lays out without overflow (issue #8)',
       (tester) async {
     // Phones are locked to portrait (orientation_lock.dart); a tablet is not,
-    // so its landscape must fit the portrait column as-is until #14.
+    // and its landscape gets the two-pane wall layout (voice_screen_wall_test).
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
