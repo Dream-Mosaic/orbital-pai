@@ -5,7 +5,7 @@
 /// A plain const beats a plugin here — `app_version_test.dart` asserts it
 /// against `pubspec.yaml`, so drift is impossible. Bump both together with
 /// `./bump.sh app patch|minor|major`.
-const String kAppVersion = '0.2.0';
+const String kAppVersion = '0.3.0';
 
 /// What source this binary was actually built from — git SHA, plus `+` when the
 /// tree was dirty. Shown in Settings ▸ About beside the server's version.
