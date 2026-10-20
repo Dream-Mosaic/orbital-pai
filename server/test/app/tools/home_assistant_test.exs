@@ -126,6 +126,7 @@ defmodule App.Tools.HomeAssistantTest do
 
     assert [%{name: "Gaming lights", entity_id: "light.gaming_room_lights", set: "on"}] = r.done
     refute Map.has_key?(r, :note)
+    refute Map.has_key?(r, :as_of)
   end
 
   test "set_color blue → rgb_color [0, 0, 255], and the result says what was set" do
@@ -233,7 +234,7 @@ defmodule App.Tools.HomeAssistantTest do
     assert length(r.done) == 7
     # the 3D printer's chamber light is the Basement's one offline light
     assert r.offline == ["X1C_00M00A321800152 Chamber light"]
-    assert r.note =~ "only ever switch lights"
+    assert r.note =~ "only its lights, never plugs or switches"
     assert r.note =~ "offline"
   end
 
@@ -244,6 +245,42 @@ defmodule App.Tools.HomeAssistantTest do
     assert "light.gaming_room_lights" in ids
     refute "light.pantry_lighy" in ids
     assert "Pantry Lighy" in r.offline
+    # "all the lights" said lights itself: no plugs-and-switches disclaimer
+    refute r.note =~ "never plugs"
+  end
+
+  test "a room named on its own gets the lights-only policy; \"<room> lights\" doesn't" do
+    assert {:ok, r} = control(["living room"], "off")
+    assert length(r.done) == 3
+
+    assert r.note ==
+             "A room or the whole house switches only its lights, never plugs or switches; " <>
+               "anything named on its own was handled separately."
+
+    assert {:ok, r} = control(["living room lights"], "off")
+    assert length(r.done) == 3
+    refute Map.has_key?(r, :note)
+  end
+
+  test "a room plus a named switch: the note never contradicts what was done" do
+    assert {:ok, r} = control(["basement", "the fireplace"], "off")
+
+    assert "switch.fireplace_switch" in Enum.map(r.done, & &1.entity_id)
+    assert r.note =~ "only its lights, never plugs or switches"
+    refute r.note =~ "fireplace"
+    refute r.note =~ "left alone"
+  end
+
+  test "while the house connection is down, offline is last-known and the result says so" do
+    put_directory(Directory.set_connected(HomeFixture.directory(), false))
+
+    assert {:ok, r} = control(["pantry light"], "on")
+    assert posts() == []
+    assert r.offline == ["Pantry Lighy"]
+    assert r.as_of =~ "ago — the house connection is down"
+    assert r.note =~ "last seen offline"
+
+    assert {:ok, %{done: [_], as_of: _}} = control(["fireplace"], "on")
   end
 
   test "a lock is view-only: no call, view_only says so" do
@@ -311,6 +348,34 @@ defmodule App.Tools.HomeAssistantTest do
     assert {:ok, r} = control(["fireplace"], "on")
     assert r.cant == [%{name: "Fireplace Switch", why: "the home hub had trouble"}]
     refute Map.has_key?(r, :done)
+  end
+
+  @in_time "the home hub didn't answer in time — it may still happen"
+
+  test "a call that runs past its budget → it may still happen, never \"trouble\"" do
+    Application.put_env(:app, :home_assistant_call_timeout_ms, 50)
+    on_exit(fn -> Application.delete_env(:app, :home_assistant_call_timeout_ms) end)
+
+    Req.Test.stub(HaToolStub, fn conn ->
+      Process.sleep(500)
+      Req.Test.json(conn, [])
+    end)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, r} = control(["fireplace"], "on")
+        assert r.cant == [%{name: "Fireplace Switch", why: @in_time}]
+        refute Map.has_key?(r, :done)
+      end)
+
+    assert log =~ "[home] control switch.fireplace_switch switch.turn_on error (:timeout)"
+  end
+
+  test "an HTTP receive timeout is the same: HA may have acted" do
+    Req.Test.stub(HaToolStub, &Req.Test.transport_error(&1, :timeout))
+
+    assert {:ok, r} = control(["fireplace"], "on")
+    assert r.cant == [%{name: "Fireplace Switch", why: @in_time}]
   end
 
   test "missing targets or an unknown action → a guidance note, no call" do
@@ -587,10 +652,27 @@ defmodule App.Tools.HomeAssistantTest do
     [kitchen | _] = @ma_players
     with_states([%{kitchen | "state" => "unavailable"}])
 
-    assert {:ok, %{offline: ["Sonos Kitchen"]}} =
+    assert {:ok, %{offline: ["Sonos Kitchen"]} = r} =
              Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
 
+    refute Map.has_key?(r, :as_of)
     assert posts() == []
+
+    # house connection down: the same refusal, worded as last-known
+    put_directory(
+      Directory.set_connected(
+        Directory.build(
+          %{states: [%{kitchen | "state" => "unavailable"}]},
+          ~U[2026-10-19 20:00:00Z]
+        ),
+        false
+      )
+    )
+
+    assert {:ok, %{offline: ["Sonos Kitchen"], as_of: _, note: note}} =
+             Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+
+    assert note =~ "last seen offline"
   end
 
   test "a play_media failure flattens to an error note" do

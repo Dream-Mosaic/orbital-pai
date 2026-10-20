@@ -19,10 +19,12 @@ defmodule App.Tools.HomeAssistant do
   Outcomes are honest and first-class: an `unavailable` target is never called and comes back
   `offline` (`unknown` is NOT offline — write-only Govee toggles sit there); an unsure name
   comes back `ask` with candidates; nothing found is `not_found`; a bare "the lights" is
-  `which_room`; an action a device can't do is `cant` with a plain-English why. Keys appear only
-  when non-empty, `note` is one sentence for the brain. Every failure flattens to
-  `{:ok, %{note | error}}` the brain can relay — never a crash. No tool cache: the directory is
-  live.
+  `which_room`; an action a device can't do is `cant` with a plain-English why; a call that
+  doesn't answer within `:home_assistant_call_timeout_ms` is `cant` "may still happen", never a
+  plain failure. While the house connection is down, every result carries `as_of` (state, and so
+  "offline", is last-known). Keys appear only when non-empty, `note` is one sentence for the
+  brain. Every failure flattens to `{:ok, %{note | error}}` the brain can relay — never a crash.
+  No tool cache: the directory is live.
 
   After a successful on/off for a light, switch, input_boolean or fan, a fire-and-forget watch
   waits up to `:home_assistant_watch_ms` (default 5s; 0 = off) for the directory to show the new
@@ -43,18 +45,21 @@ defmodule App.Tools.HomeAssistant do
   @unreachable "couldn't reach the home hub (the house connection isn't up yet)"
   @not_configured "the home hub isn't configured on this server"
   @hub_trouble "the home hub had trouble"
+  # A timed-out call may still have reached HA, so it is never reported as a plain failure.
+  @not_in_time "the home hub didn't answer in time — it may still happen"
 
   # Each list a result can carry is capped (the overview's, and status rows).
   @cap 25
-  # One service call's budget: Req's 6s receive_timeout + the cold-pool retries, inside the
-  # registry's 8s tool cap. Calls for different groups run side by side.
+  # One service call's budget (`:home_assistant_call_timeout_ms`): Req's 6s receive_timeout +
+  # the cold-pool retries, inside the registry's 8s tool cap. Groups' calls run side by side.
   @call_timeout_ms 7_000
   @watch_poll_ms 500
   @watched_domains ~w(light switch input_boolean fan)
   @overview_on ~w(light switch fan input_boolean)
   @color_modes ~w(hs xy rgb rgbw rgbww)
 
-  # `note` is one sentence: the first of these that applies, then the fan-out note, then offline.
+  # `note` is one sentence: the first of these that applies, then the lights-only policy, then
+  # offline.
   @notes [
     ask: "Ask which one — name the top two or three, then call again with the exact entity_id.",
     which_room: "Ask which room, then call again with it (e.g. \"kitchen lights\").",
@@ -65,12 +70,12 @@ defmodule App.Tools.HomeAssistant do
       "Locks, the alarm and the garage door are view-only: say you're not set up to operate " <>
         "them (you can report their state)."
   ]
-  @offline_note "Nothing was sent to the offline devices — say so plainly, never that it worked."
-  @lights_only_note "Rooms and the whole house only ever switch lights — plugs, switches and " <>
-                      "the fireplace were left alone."
-  @lights_only_offline_note "Rooms and the whole house only ever switch lights (plugs, " <>
-                              "switches and the fireplace were left alone), and the offline " <>
-                              "ones were sent nothing — say which."
+  # A policy, never a claim about this call: "the fireplace was left alone" was false the moment
+  # the user named the fireplace alongside a room.
+  @lights_only "A room or the whole house switches only its lights, never plugs or switches"
+  @named_apart "anything named on its own was handled separately"
+  # Only a room/house ask that didn't itself say "lights" gets the policy line.
+  @light_nouns ~w(light lights lamp lamps)
 
   @target_items %{type: "array", items: %{type: "string"}}
 
@@ -247,8 +252,10 @@ defmodule App.Tools.HomeAssistant do
             query,
             str(Map.get(args, "player")),
             str(Map.get(args, "media_type")),
-            str(Map.get(args, "enqueue"))
+            str(Map.get(args, "enqueue")),
+            dir.connected?
           )
+          |> then(fn {:ok, result} -> {:ok, put_as_of(result, dir)} end)
       end
     end)
   end
@@ -283,7 +290,9 @@ defmodule App.Tools.HomeAssistant do
 
     (outcomes ++ Enum.map(offline, &{:offline, &1.name}) ++ refused ++ called)
     |> shape()
-    |> put_note(fan_out?(resolved))
+    |> put_note(disclaim?(resolved), dir.connected?)
+    # Offline is decided from last-known state while the house connection is down.
+    |> put_as_of(dir)
   end
 
   # One target's resolution → tagged outcomes; `{:act, entry}` entries are acted on.
@@ -329,7 +338,7 @@ defmodule App.Tools.HomeAssistant do
         call(domain, service, Map.put(data, :entity_id, Enum.map(entries, & &1.entity_id)))
       end,
       max_concurrency: length(groups),
-      timeout: @call_timeout_ms,
+      timeout: Application.get_env(:app, :home_assistant_call_timeout_ms, @call_timeout_ms),
       on_timeout: :kill_task
     )
     |> Enum.zip(groups)
@@ -349,9 +358,15 @@ defmodule App.Tools.HomeAssistant do
           )
         end
 
-        Enum.map(entries, &{:cant, %{name: &1.name, why: @hub_trouble}})
+        why = if timed_out?(failed), do: @not_in_time, else: @hub_trouble
+        Enum.map(entries, &{:cant, %{name: &1.name, why: why}})
     end)
   end
+
+  # Killed past its budget, or Req's own receive timeout: the request may have executed.
+  defp timed_out?({:exit, :timeout}), do: true
+  defp timed_out?({:ok, {:error, %Req.TransportError{reason: :timeout}}}), do: true
+  defp timed_out?(_failed), do: false
 
   defp set(action, data) when data == %{}, do: action
   defp set(_action, data), do: data
@@ -364,24 +379,47 @@ defmodule App.Tools.HomeAssistant do
   end
 
   # One sentence: the most pressing thing the brain must do with this result.
-  defp put_note(result, fan_out?) do
+  defp put_note(result, disclaim?, connected?) do
     offline? = Map.has_key?(result, :offline)
 
     note =
       first_note(result) ||
-        (fan_out? and Map.has_key?(result, :done) and
-           if(offline?, do: @lights_only_offline_note, else: @lights_only_note)) ||
-        (offline? && @offline_note) ||
+        (disclaim? and Map.has_key?(result, :done) and lights_only_note(offline?, connected?)) ||
+        (offline? && offline_note(connected?)) ||
         (result == %{} && "Nothing matched — ask the user what they meant.")
 
     if note, do: Map.put(result, :note, note), else: result
   end
 
+  defp lights_only_note(false, _connected?), do: "#{@lights_only}; #{@named_apart}."
+
+  defp lights_only_note(true, connected?),
+    do:
+      "#{@lights_only} (#{@named_apart}), and nothing was sent to " <>
+        "#{offline_ones(connected?)} — say which."
+
+  defp offline_note(connected?),
+    do: "Nothing was sent to #{offline_ones(connected?)} — say so plainly, never that it worked."
+
+  defp offline_ones(true), do: "the offline ones"
+  defp offline_ones(false), do: "the ones last seen offline (the house connection is down)"
+
   defp first_note(result),
     do: Enum.find_value(@notes, fn {key, note} -> Map.has_key?(result, key) && note end)
 
-  defp fan_out?(resolved),
-    do: Enum.any?(resolved, &match?({_, {:ok, _, how}} when how in [:room, :house], &1))
+  defp disclaim?(resolved) do
+    Enum.any?(resolved, fn
+      {phrase, {:ok, _, how}} when how in [:room, :house] -> not light_words?(phrase)
+      _ -> false
+    end)
+  end
+
+  defp light_words?(phrase),
+    do:
+      phrase
+      |> String.downcase()
+      |> String.split(~r/[^a-z]+/, trim: true)
+      |> Enum.any?(&(&1 in @light_nouns))
 
   defp action_note(nil),
     do: "home_control needs an action — one of: #{Enum.join(Actions.actions(), ", ")}"
@@ -534,10 +572,10 @@ defmodule App.Tools.HomeAssistant do
 
   # -- play_music --
 
-  defp play([], _query, _player, _media_type, _enqueue),
+  defp play([], _query, _player, _media_type, _enqueue, _connected?),
     do: {:ok, %{note: "no music players are set up (Music Assistant not configured?)"}}
 
-  defp play(players, query, player_name, media_type, enqueue) do
+  defp play(players, query, player_name, media_type, enqueue, connected?) do
     case Media.resolve_player(players, player_name) do
       {:error, :none} ->
         {:ok,
@@ -553,7 +591,7 @@ defmodule App.Tools.HomeAssistant do
          }}
 
       {:ok, %{state: "unavailable"} = p} ->
-        {:ok, %{offline: [p.name], note: @offline_note}}
+        {:ok, %{offline: [p.name], note: offline_note(connected?)}}
 
       {:ok, p} ->
         data =
