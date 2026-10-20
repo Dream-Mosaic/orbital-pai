@@ -20,7 +20,7 @@ void main() {
     expect(toolLabel('cancel_timer'), 'stopping a timer');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(48));
+    expect(kToolLabels, hasLength(47));
   });
 
   test('every registered server tool has a friendly label', () {
@@ -36,7 +36,7 @@ void main() {
       'add_to_list', 'check_off', 'read_list', 'clear_checked', 'remove_item',
       'add_plant', 'note_plant', 'list_garden', 'archive_plant', 'close_season',
       'remove_plant', 'update_plant',
-      'home_index', 'home_find', 'home_control', 'play_music',
+      'home_status', 'home_control', 'play_music',
       'set_timer', 'list_timers', 'cancel_timer', 'add_to_timer',
       'send_household_message', 'check_household_messages',
       'log_tracker_entry', 'get_tracker_entries', 'list_trackers', 'undo_tracker_entry',

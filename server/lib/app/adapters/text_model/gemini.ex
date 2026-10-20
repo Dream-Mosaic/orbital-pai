@@ -14,10 +14,12 @@ defmodule App.Adapters.TextModel.Gemini do
   # Safety valve: stop looping after this many tool round-trips in one turn.
   @max_tool_hops 3
   # A routine ("good night") spends a whole hop on run_routine before any step runs, and its
-  # steps are often find-then-act (Home Assistant). The FIRST run_routine of a turn gives back
-  # its hop plus this many, so a realistic routine has slack instead of landing exactly on the
-  # cap. Once per turn, so a model re-calling run_routine can't loop on the refund.
+  # steps may read state before acting. The FIRST run_routine of a turn gives back its hop plus
+  # this many, so a realistic routine has slack instead of landing exactly on the cap. Once per
+  # turn, so a model re-calling run_routine can't loop on the refund.
   @routine_bonus_hops 2
+  # Tool calls that are loop plumbing, not work: no live UI chip (and they declare no bridge).
+  @plumbing ["use_toolkit"]
 
   @impl true
   def generate(transcript, ctx, opts) do
@@ -55,17 +57,37 @@ defmodule App.Adapters.TextModel.Gemini do
   Stream a brain reply token-by-token (SSE), running any tool calls inline. Sends `target`:
   `{:gemini_delta, text}` per text delta, then `{:gemini_done}` — or `{:gemini_error, reason}`.
   A tool round just looks like a pause before deltas arrive (no new message types). Blocks
-  the caller, so run it in a task.
+  the caller, so run it in a task. (`:round_fun` in `opts` replaces the HTTP round; tests only.)
   """
   def stream_brain(transcript, ctx, opts, target) do
     cfg = Keyword.fetch!(opts, :config)
     thinking = Keyword.fetch!(opts, :thinking)
     sid = Keyword.get(opts, :session_id)
+
+    # The system prompt is built from the BASE config: it carries only the static toolkit catalog,
+    # so a kit opened this turn never changes it (Gemini's implicit prefix cache, see time_note/1).
+    system = system_for(:brain, cfg, ctx)
+    {cfg, note} = brain_setup(transcript, ctx, cfg, DateTime.utc_now())
     tool_ctx = %{session_id: sid, user_id: App.Users.id_from_session(sid), config: cfg}
 
-    system = system_for(:brain, cfg, ctx)
-    contents = build_contents(ctx, time_note(cfg) <> quiet_note(opts) <> transcript)
-    run_rounds(contents, system, cfg, thinking, tool_ctx, target, 0)
+    contents = build_contents(ctx, time_note(cfg) <> note <> quiet_note(opts) <> transcript)
+    round_fun = Keyword.get(opts, :round_fun, &stream_round/6)
+    run_rounds(contents, system, cfg, thinking, tool_ctx, target, 0, round_fun)
+  end
+
+  @doc false
+  # Before round 1: open every kit whose `wants?/2` claims this turn (the utterance plus recent
+  # follow-up context), so "turn on the gaming lights" needs no use_toolkit round. Returns the
+  # widened config and the kits' guidance note, which rides the final user message (never the
+  # system instruction) — "" when nothing opened.
+  def brain_setup(transcript, ctx, cfg, now) do
+    case App.Toolkits.preselect(cfg, transcript, ctx, now) do
+      [] ->
+        {cfg, ""}
+
+      kits ->
+        {open_kits(cfg, Enum.map(kits, &{&1, :preselect})), App.Toolkits.guidance_note(kits)}
+    end
   end
 
   @doc false
@@ -100,8 +122,11 @@ defmodule App.Adapters.TextModel.Gemini do
         end
 
       {:ok, calls} ->
-        # announce each call so the UI can show a live "checking your calendar…" chip
-        Enum.each(calls, fn %{name: name} -> send(target, {:gemini_tool_call, name}) end)
+        # announce each call so the UI can show a live "checking your calendar…" chip — except
+        # plumbing (use_toolkit), which the user never needs to see
+        Enum.each(calls, fn %{name: name} ->
+          if name not in @plumbing, do: send(target, {:gemini_tool_call, name})
+        end)
 
         if phrase = bridge_phrase(calls, cfg), do: send(target, {:gemini_bridge, phrase})
 
@@ -146,14 +171,100 @@ defmodule App.Adapters.TextModel.Gemini do
               %{error: "timeout"}
           end)
 
+        # Kits this round opens (use_toolkit, or a routine's steps), judged against the PRE-round
+        # config. A kit a routine opened has its guidance put in that run_routine's response
+        # (use_toolkit's own response already carries it) — never in the system instruction.
+        openings = round_openings(cfg, calls, responses)
+        responses = with_routine_guidance(calls, responses, openings)
+
         contents =
           contents ++
             [%{role: "model", parts: model_call_parts(calls)}] ++
             [%{role: "user", parts: function_response_parts(calls, responses)}]
 
-        {next_hops, tool_ctx} = spend_hop(calls, hops, tool_ctx)
+        # Judged against the PRE-round config: opening a new kit is free, re-opening one isn't.
+        {next_hops, tool_ctx} =
+          if opens_only_new_kits?(calls, cfg),
+            do: {hops, tool_ctx},
+            else: spend_hop(calls, hops, tool_ctx)
+
+        # The kits are open from the next round on — their declarations in the request, and in
+        # tool_ctx so use_toolkit sees them open.
+        cfg = open_kits(cfg, openings)
+        tool_ctx = %{tool_ctx | config: cfg}
+
         run_rounds(contents, system, cfg, thinking, tool_ctx, target, next_hops, round_fun)
     end
+  end
+
+  @doc false
+  # The kits a finished tool round opens, in order and once each: every use_toolkit naming an
+  # enabled kit, plus any kit a run_routine's steps text preselects (so "turn off the gaming
+  # lights" in a routine needs no use_toolkit round). Kits already open in `cfg` are left out.
+  # `responses` align with `calls`: `%{result: r}` (maybe with `:display`) or `%{error: _}`.
+  def kits_from_round(cfg, calls, responses),
+    do: cfg |> round_openings(calls, responses) |> Enum.map(&elem(&1, 0))
+
+  defp round_openings(cfg, calls, responses) do
+    calls
+    |> Enum.zip(responses)
+    |> Enum.flat_map(fn
+      {%{name: "use_toolkit", args: args}, _response} ->
+        for kit <- List.wrap(App.Toolkits.find(cfg, toolkit_arg(args))), do: {kit, :brain}
+
+      {%{name: "run_routine"}, %{result: %{steps: steps}}} when is_binary(steps) ->
+        for kit <- App.Toolkits.preselect(cfg, steps, %{}, DateTime.utc_now()),
+            do: {kit, :routine}
+
+      _other ->
+        []
+    end)
+    |> Enum.uniq_by(&elem(&1, 0))
+    |> Enum.reject(fn {kit, _how} -> App.Toolkits.open?(cfg, kit.id()) end)
+  end
+
+  # The first run_routine response with steps carries the guidance of the kits the round's
+  # routine steps opened: without it the brain has the kit's declarations but not how to use them.
+  defp with_routine_guidance(calls, responses, openings) do
+    with [_ | _] = kits <- for({kit, :routine} <- openings, do: kit),
+         i when is_integer(i) <- Enum.find_index(Enum.zip(calls, responses), &routine_steps?/1) do
+      note = kits |> App.Toolkits.guidance_note() |> String.trim()
+      List.update_at(responses, i, &Map.put(&1, :toolkit, note))
+    else
+      _ -> responses
+    end
+  end
+
+  defp routine_steps?({%{name: "run_routine"}, %{result: %{steps: steps}}}), do: is_binary(steps)
+  defp routine_steps?(_call_and_response), do: false
+
+  # A round of nothing but use_toolkit calls, each naming a kit that isn't open yet, spends no
+  # hop: it's plumbing, and there are only so many kits. Re-opening an open kit (or naming an
+  # unknown one) is an ordinary hop, so a model can't loop on it.
+  defp opens_only_new_kits?(calls, cfg) do
+    Enum.all?(calls, fn
+      %{name: "use_toolkit", args: args} ->
+        case App.Toolkits.find(cfg, toolkit_arg(args)) do
+          nil -> false
+          kit -> not App.Toolkits.open?(cfg, kit.id())
+        end
+
+      _other ->
+        false
+    end)
+  end
+
+  defp toolkit_arg(%{"name" => name}), do: name
+  defp toolkit_arg(_args), do: nil
+
+  defp open_kits(cfg, []), do: cfg
+
+  defp open_kits(cfg, openings) do
+    Enum.each(openings, fn {kit, how} ->
+      Logger.info("[toolkit] #{kit.id()} opened (#{how})")
+    end)
+
+    App.Toolkits.open(cfg, Enum.map(openings, &elem(&1, 0)))
   end
 
   @card_note "This result is ALSO shown to the user as a visual card on their screen " <>
@@ -426,7 +537,7 @@ defmodule App.Adapters.TextModel.Gemini do
   defp system_for(:brain, cfg, ctx),
     do:
       brain_prompt(cfg.name) <>
-        home_block(cfg) <> tools_prompt(cfg) <> memory_block(ctx) <> routines_block(ctx)
+        toolkits_block(cfg) <> tools_prompt(cfg) <> memory_block(ctx) <> routines_block(ctx)
 
   defp system_for(:memory, _cfg, _ctx),
     do: "You maintain a concise rolling memory of a user and conversation."
@@ -441,22 +552,18 @@ defmodule App.Adapters.TextModel.Gemini do
   end
 
   @doc false
-  # Rendered ONLY when the HomeAssistant tool is registered (App.Config.default/0 gates that on
-  # url+token) — a disabled instance must not advertise a capability it doesn't have. The
-  # view-only line here is UX (answer dryly without burning a tool round); the ENFORCEMENT is
-  # structural in App.HomeAssistant.Entities.service_for/3 (no lock/alarm/garage mapping).
-  def home_block(%App.Config{tools: tools}) do
-    if App.Tools.HomeAssistant in tools do
-      ~s| You can also see and control the smart home. It's large — don't ask for everything at once. Use home_index to learn the rooms and device types, home_find to search — pass the room (area) AND device type (domain) on the FIRST call whenever you know them (e.g. area:"Kitchen", domain:"light"), so one search pins it — then home_control to act (on/off/toggle, brightness, temperature, covers/blinds position, fan speed, volume, play/pause, scenes/scripts). If a find returns close_matches, pick the right one and act in the same turn; if it returns nothing and no close matches, ASK the user what the device is called — don't guess and don't keep searching. Locks, the alarm, and the garage door are VIEW-ONLY: report their state freely, but you cannot operate them — if asked to, say you're not set up for that, briefly. To play music, use play_music — give what to play and, if they name a room, the player; infer whether it's an artist, song, album, playlist, or radio station (omit media_type if unsure); to pause, skip, change volume, or ask what's playing, use home_control on that speaker instead.|
-    else
-      ""
+  # The toolkit catalog: one sentence naming each ENABLED kit (a disabled instance advertises
+  # nothing). Static per config — whether a kit is open this turn never changes it, so it stays
+  # prefix-cache friendly; a kit's guidance rides the user message or use_toolkit's response.
+  def toolkits_block(cfg) do
+    case App.Toolkits.catalog_line(cfg) do
+      "" -> ""
+      line -> " " <> line
     end
   end
 
-  def home_block(_), do: ""
-
-  # Per-tool prompt fragments (App.Tools.Tool.prompt/0). Guarded like home_block: a bare map
-  # config (some tests) has no tools to advertise.
+  # Per-tool prompt fragments (App.Tools.Tool.prompt/0). A bare map config (some tests) has no
+  # tools to advertise.
   defp tools_prompt(%App.Config{} = cfg), do: App.Tools.prompt_block(cfg)
   defp tools_prompt(_), do: ""
 

@@ -143,7 +143,7 @@ defmodule App.HomeAssistant.EntitiesTest do
     end
   end
 
-  describe "compact/1 + compact_states/2" do
+  describe "compact/1" do
     test "keeps the brain-relevant core and drops nil fields" do
       c =
         Entities.compact(
@@ -192,32 +192,9 @@ defmodule App.HomeAssistant.EntitiesTest do
 
       assert g.device_class == "garage" and g.position == 0
     end
-
-    test "compact_states drops :ignore entities and applies the query filter (name/entity_id/domain, case-insensitive)" do
-      raw = [
-        entity("light.kitchen", %{"friendly_name" => "Kitchen Light"}),
-        entity("light.bedroom", %{"friendly_name" => "Bedroom Lamp"}),
-        entity("lock.front_door", %{"friendly_name" => "Front Door"}),
-        entity("sun.sun")
-      ]
-
-      all = Entities.compact_states(raw, nil)
-
-      assert Enum.map(all, & &1.entity_id) == [
-               "light.kitchen",
-               "light.bedroom",
-               "lock.front_door"
-             ]
-
-      assert [%{entity_id: "light.kitchen"}] = Entities.compact_states(raw, "Kitchen")
-      # domain query
-      assert length(Entities.compact_states(raw, "light")) == 2
-      # blank query = no filter
-      assert length(Entities.compact_states(raw, "  ")) == 3
-    end
   end
 
-  # Build a compacted + area-enriched entity, the shape match_name/filter operate on.
+  # Build a compacted + area-enriched entity, the shape match_name operates on.
   defp enriched(id, area, attrs \\ %{}, state \\ "on") do
     entity(id, attrs, state) |> Entities.compact() |> Map.put(:area, area)
   end
@@ -293,121 +270,6 @@ defmodule App.HomeAssistant.EntitiesTest do
     test "empty / blank name returns the input order unchanged" do
       ents = [enriched("light.a", nil), enriched("light.b", nil)]
       assert Entities.match_name(ents, "") == ents
-    end
-  end
-
-  describe "close_matches/3 — word-anchored suggestions ignoring the ALL-tokens gate (C3)" do
-    test "suggests names that share a query WORD, ranked by token overlap" do
-      ents = [
-        enriched("light.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Light"}),
-        enriched("fan.mbr", "Bedroom", %{"friendly_name" => "Master Bedroom Fan"}),
-        enriched("light.kit", "Kitchen", %{"friendly_name" => "Kitchen Light"}),
-        enriched("light.gar", "Garage", %{"friendly_name" => "Garage Bulb"})
-      ]
-
-      # "lite" is no exact token of any name (match_name's gate misses it), but "master" +
-      # "bedroom" anchor the two MBR entities (Kitchen/Garage share no word → excluded). Among
-      # the survivors, "Light" outranks "Fan" on token overlap ("lite"≈"light"). Anchoring on a
-      # shared word — not whole-string Jaro — is what makes noise return [] (next test).
-      assert Entities.close_matches(ents, "master bedroom lite", 3) ==
-               ["Master Bedroom Light", "Master Bedroom Fan"]
-    end
-
-    test "gibberish that shares no word returns [] — the brain asks instead of suggesting noise" do
-      ents = [
-        enriched("light.kit", "Kitchen", %{"friendly_name" => "Kitchen Light"}),
-        enriched("sensor.ipad", "Office", %{"friendly_name" => "iPad Z Battery"})
-      ]
-
-      assert Entities.close_matches(ents, "zzznosuchthing", 3) == []
-      assert Entities.close_matches(ents, "", 3) == []
-    end
-  end
-
-  describe "enrich/2" do
-    test "adds :area from the map, or leaves it off when absent" do
-      c = Entities.compact(entity("light.kitchen", %{"friendly_name" => "Kitchen Light"}))
-      assert Entities.enrich(c, %{"light.kitchen" => "Kitchen"}).area == "Kitchen"
-      refute Map.has_key?(Entities.enrich(c, %{}), :area)
-    end
-  end
-
-  describe "filter/2 — area (exact-or-unique-substring), domain, state, then name (M2)" do
-    test "area: exact match, unique substring, ambiguous → none" do
-      ents = [
-        enriched("light.kitchen", "Kitchen"),
-        enriched("light.family", "Family Room"),
-        enriched("light.living", "Living Room")
-      ]
-
-      # exact (case-insensitive)
-      assert Entities.filter(ents, %{area: "kitchen"}) |> Enum.map(& &1.entity_id) ==
-               ["light.kitchen"]
-
-      # unique substring
-      assert Entities.filter(ents, %{area: "famil"}) |> Enum.map(& &1.entity_id) ==
-               ["light.family"]
-
-      # ambiguous substring ("room" ⊂ both Family Room and Living Room) → no match, no widening
-      assert Entities.filter(ents, %{area: "room"}) == []
-    end
-
-    test "domain + state compose; nil dimensions are unfiltered" do
-      ents = [
-        enriched("light.a", "Kitchen", %{}, "on"),
-        enriched("light.b", "Kitchen", %{}, "off"),
-        enriched("switch.c", "Kitchen", %{}, "on")
-      ]
-
-      assert Entities.filter(ents, %{domain: "light"}) |> Enum.map(& &1.entity_id) ==
-               ["light.a", "light.b"]
-
-      assert Entities.filter(ents, %{domain: "light", state: "off"}) |> Enum.map(& &1.entity_id) ==
-               ["light.b"]
-
-      assert Entities.filter(ents, %{}) == ents
-    end
-
-    test "name filter runs last and sets the result order (rank)" do
-      ents = [
-        enriched("light.kitchen_main", "Kitchen", %{"friendly_name" => "Kitchen Main Light"}),
-        enriched("light.kitchen_under", "Kitchen", %{"friendly_name" => "Under Cabinet Light"}),
-        enriched("switch.kitchen_fan", "Kitchen", %{"friendly_name" => "Kitchen Fan"})
-      ]
-
-      assert Entities.filter(ents, %{area: "Kitchen", domain: "light", name: "main"})
-             |> Enum.map(& &1.entity_id) == ["light.kitchen_main"]
-    end
-  end
-
-  describe "index/2 — house map with no_area (M2)" do
-    test "counts areas + domains, total, and no_area over the visible set (noise dropped)" do
-      raw = [
-        entity("light.kitchen"),
-        entity("light.bedroom"),
-        entity("switch.fan"),
-        entity("climate.hall"),
-        entity("sun.sun")
-      ]
-
-      area_map = %{
-        "light.kitchen" => "Kitchen",
-        "switch.fan" => "Kitchen",
-        "light.bedroom" => "Bedroom"
-      }
-
-      idx = Entities.index(raw, area_map)
-
-      assert idx.total == 4
-      assert idx.no_area == 1
-      assert %{name: "Kitchen", count: 2} in idx.areas
-      assert %{name: "Bedroom", count: 1} in idx.areas
-
-      assert Enum.sort_by(idx.domains, & &1.name) == [
-               %{name: "climate", count: 1},
-               %{name: "light", count: 2},
-               %{name: "switch", count: 1}
-             ]
     end
   end
 

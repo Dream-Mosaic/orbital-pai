@@ -41,8 +41,7 @@ const Map<String, String> kToolLabels = {
   'remove_plant': 'removing a plant',
   'update_plant': 'updating the garden',
   // home assistant
-  'home_index': 'checking the house',
-  'home_find': 'looking around the house',
+  'home_status': 'checking the house',
   'home_control': 'adjusting the house',
   'play_music': 'starting the music',
   // trackers

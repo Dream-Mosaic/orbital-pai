@@ -1,47 +1,23 @@
 defmodule App.HomeAssistant do
   @moduledoc """
-  Home Assistant REST adapter — the one HTTP surface for the smart home. Reads all entity
-  states (`GET /api/states`) and calls services (`POST /api/services/<domain>/<service>`)
-  against a public HA URL (Nabu Casa / tunnel) with a long-lived access token.
+  Home Assistant adapter — the house's one write surface and its read seam. Writes go over REST
+  (`POST /api/services/<domain>/<service>`, `call_service/3`) against a public HA URL (Nabu
+  Casa / tunnel) with a long-lived access token. Reads come from the in-memory directory
+  (`directory/0` → `App.HomeAssistant.Directory`, kept live over HA's WebSocket by
+  `App.HomeAssistant.Live`) — never a per-question fetch of every state.
 
   Instance-wide shared infrastructure: one house, one URL, one token — NOT per-user (unlike
   Google accounts). Config: `:app, :home_assistant` → `%{url: ..., token: ...}` (set from
-  HOME_ASSISTANT_URL / HOME_ASSISTANT_TOKEN in config/runtime.exs; absent = unconfigured and
-  the tool isn't registered — see App.Config.home_assistant?/0). Req options are overridable
-  via `:home_assistant_req_opts` (test seam, same as `:google_req_opts`). Errors flatten to
-  tagged tuples (`:not_configured`, `:unauthorized`, `:not_found`, `{:http, status}`,
-  transport reasons) — never a raw crash. `App.Http.Retry.opts/0` covers the cold-Finch-pool
-  `:pool_not_available` first-call race (retries only request-never-executed failures, so the
-  service POST is safe).
-  """
-
-  # ONE template that loops areas() (12) not states (553): linear, small payload, area-less
-  # entities skipped for free. Renders JSON `[["light.kitchen","Kitchen"], …]`. See areas_map/0.
-  @areas_template """
-  {% set ns = namespace(items=[]) %}
-  {%- for a in areas() -%}
-  {%- for e in area_entities(a) -%}
-  {% set ns.items = ns.items + [[e, area_name(a)]] %}
-  {%- endfor -%}
-  {%- endfor -%}
-  {{ ns.items | tojson }}
+  HOME_ASSISTANT_URL / HOME_ASSISTANT_TOKEN in config/runtime.exs; absent = unconfigured — see
+  App.Config.home_assistant?/0). Req options are overridable via `:home_assistant_req_opts`
+  (test seam, same as `:google_req_opts`). Errors flatten to tagged tuples (`:not_configured`,
+  `:unauthorized`, `:not_found`, `{:http, status}`, transport reasons) — never a raw crash.
+  `App.Http.Retry.opts/0` covers the cold-Finch-pool `:pool_not_available` first-call race
+  (retries only request-never-executed failures, so the service POST is safe).
   """
 
   @doc "True when both URL and token are configured (App.Config.home_assistant?/0 gates on this)."
   def configured?, do: match?({:ok, _}, config())
-
-  @doc "All entity states: `{:ok, [entity]}` — each a decoded map with entity_id/state/attributes."
-  def states do
-    with {:ok, %{url: url, token: token}} <- config() do
-      case Req.get("#{url}/api/states", req_opts(token, [])) do
-        {:ok, %{status: 200, body: body}} when is_list(body) -> {:ok, body}
-        {:ok, %{status: 200}} -> {:error, :bad_body}
-        {:ok, %{status: 401}} -> {:error, :unauthorized}
-        {:ok, %{status: s}} -> {:error, {:http, s}}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
 
   @doc """
   Call a service: `POST /api/services/<domain>/<service>` with a JSON body (include
@@ -60,51 +36,75 @@ defmodule App.HomeAssistant do
   end
 
   @doc """
-  Render a Jinja template server-side: `POST /api/template` with `%{template: jinja}` →
-  `{:ok, rendered_plaintext}`. HA returns text/plain; the body stays a string. A template
-  render error surfaces as HA's `400` → `{:error, {:http, 400}}`.
+  The house directory (`App.HomeAssistant.Directory`), the read seam for the resolver and tools.
+  App env `:home_assistant_directory` (a `%Directory{}` or a 0-arity fun returning the tuple)
+  wins — the test seam. Otherwise: unconfigured → `:not_configured`; the live client
+  (`App.HomeAssistant.Live`) if running; else `:not_loaded`.
   """
-  def template(jinja) when is_binary(jinja) do
-    with {:ok, %{url: url, token: token}} <- config() do
-      case Req.post("#{url}/api/template", req_opts(token, json: %{template: jinja})) do
-        {:ok, %{status: 200, body: body}} -> {:ok, to_string(body)}
-        {:ok, %{status: 401}} -> {:error, :unauthorized}
-        {:ok, %{status: s}} -> {:error, {:http, s}}
-        {:error, reason} -> {:error, reason}
-      end
+  def directory do
+    case Application.get_env(:app, :home_assistant_directory) do
+      %App.HomeAssistant.Directory{} = dir -> {:ok, dir}
+      fun when is_function(fun, 0) -> fun.()
+      _ -> live_directory()
     end
   end
 
+  @phrases {__MODULE__, :phrases}
+
   @doc """
-  ONE entity's live state: `GET /api/states/<entity_id>` → `{:ok, entity_map}` (carries
-  `attributes` incl. `device_class` for the garage check + the attrs `service_for` needs).
-  `home_control` uses this instead of pulling all 553 states per call. 404 → `:not_found`.
+  The phrases the house answers to (`App.HomeAssistant.Phrases`), for preselecting the home kit
+  without a call to the live client: `App.HomeAssistant.Live` publishes them to
+  `:persistent_term` on each directory build; `[]` until the first. The
+  `:home_assistant_directory` test seam wins, as it does for `directory/0`.
   """
-  def state(entity_id) when is_binary(entity_id) do
-    with {:ok, %{url: url, token: token}} <- config() do
-      case Req.get("#{url}/api/states/#{entity_id}", req_opts(token, [])) do
-        {:ok, %{status: 200, body: body}} when is_map(body) -> {:ok, body}
-        {:ok, %{status: 200}} -> {:error, :bad_body}
-        {:ok, %{status: 401}} -> {:error, :unauthorized}
-        {:ok, %{status: 404}} -> {:error, :not_found}
-        {:ok, %{status: s}} -> {:error, {:http, s}}
-        {:error, reason} -> {:error, reason}
-      end
+  @spec phrases() :: [String.t()]
+  def phrases do
+    case Application.get_env(:app, :home_assistant_directory) do
+      %App.HomeAssistant.Directory{} = dir -> App.HomeAssistant.Phrases.from_directory(dir)
+      fun when is_function(fun, 0) -> phrases_from(fun.())
+      _ -> :persistent_term.get(@phrases, [])
     end
   end
 
-  @doc """
-  `%{entity_id => area_name}` for every area-assigned entity, via ONE `/api/template` render
-  that loops `areas()`. This is the SOLE area source — no separate cache; the tool-level
-  caches gate its fetch frequency. Area-less entities are simply absent from the map.
-  """
-  def areas_map do
-    with {:ok, rendered} <- template(@areas_template),
-         {:ok, pairs} when is_list(pairs) <- Jason.decode(rendered) do
-      {:ok, Map.new(pairs, fn [id, area] -> {id, area} end)}
+  defp phrases_from({:ok, %App.HomeAssistant.Directory{} = dir}),
+    do: App.HomeAssistant.Phrases.from_directory(dir)
+
+  defp phrases_from(_), do: []
+
+  @doc false
+  # Only a changed list is written: a :persistent_term update makes every process check its heap
+  # for the old term, so it must stay a once-per-build event (the backstop rebuild every 10 min
+  # usually changes nothing).
+  @spec publish_phrases([String.t()]) :: :ok | :unchanged
+  def publish_phrases(phrases) when is_list(phrases) do
+    if :persistent_term.get(@phrases, nil) == phrases do
+      :unchanged
     else
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :bad_body}
+      :persistent_term.put(@phrases, phrases)
+    end
+  end
+
+  @doc false
+  # Test seam: forget the published phrases.
+  def forget_phrases do
+    :persistent_term.erase(@phrases)
+    :ok
+  end
+
+  defp live_directory do
+    cond do
+      not configured?() ->
+        {:error, :not_configured}
+
+      Process.whereis(App.HomeAssistant.Live) ->
+        try do
+          GenServer.call(App.HomeAssistant.Live, :directory, 2_000)
+        catch
+          :exit, _ -> {:error, :not_loaded}
+        end
+
+      true ->
+        {:error, :not_loaded}
     end
   end
 

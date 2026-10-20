@@ -31,7 +31,7 @@ defmodule App.Tools do
 
   # run_routine only RETURNS the steps (their own write tools are what get recorded);
   # check_household_messages is a read despite check_off being a write — hence no check_ prefix.
-  @read_only ~w(home_index home_find recall_memory check_household_messages run_routine)
+  @read_only ~w(home_status use_toolkit recall_memory check_household_messages run_routine)
   @read_prefixes ~w(get_ list_ read_ search_)
 
   @doc """
@@ -132,7 +132,11 @@ defmodule App.Tools do
   end
 
   defp find_module(name, config) do
-    Enum.find(enabled(config), fn m -> Enum.any?(m.declarations(), &(&1.name == name)) end)
+    # Permissive: a toolkit's tools dispatch whether or not the kit is open (the brain may call one
+    # before its declarations are advertised); `declarations/1` stays `config.tools` only.
+    Enum.find(enabled(config) ++ App.Toolkits.all_tools(config), fn m ->
+      Enum.any?(m.declarations(), &(&1.name == name))
+    end)
   end
 
   defp run_with_timeout(mod, name, args, ctx, timeout) do

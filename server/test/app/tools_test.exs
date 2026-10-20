@@ -36,7 +36,7 @@ defmodule App.ToolsTest do
   test "read_only?/1 tells lookups from tools that change something" do
     for name <-
           ~w(get_weather get_calendar_events list_timers read_list search_email read_email
-                   recall_memory home_find home_index check_household_messages run_routine get_recipe),
+                   recall_memory home_status check_household_messages run_routine get_recipe),
         do: assert(App.Tools.read_only?(name), name)
 
     for name <- ~w(set_timer add_to_list check_off create_reminder send_email

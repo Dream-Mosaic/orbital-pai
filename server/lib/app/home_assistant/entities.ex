@@ -6,15 +6,16 @@ defmodule App.HomeAssistant.Entities do
       `:read_only` (sensors — reportable, nothing to control), `:sensitive_read_only`
       (locks, alarm panels, garage covers — reportable but STRUCTURALLY uncontrollable),
       `:ignore` (noise the brain never sees).
-    * `compact/1` / `compact_states/2` — squeeze raw `/api/states` entities into the small
-      maps the brain reads (name, entity_id, domain, state, key attributes; nils dropped).
+    * `compact/1` — squeeze a raw HA state into the small map the brain reads (name,
+      entity_id, domain, state, key attributes; nils dropped). `match_name/2` is the fuzzy
+      name match `Media` resolves Music Assistant players with.
     * `service_for/3` — map a semantic action (`on`/`set_brightness`/…) to the HA
       `{service_domain, service, data}` for the entity's domain. **Sensitive domains have NO
       mapping here — that absence is the v1 safety model** (a misheard "unlock the door" has
       no code path to a service call). Don't add one.
   """
 
-  @controllable ~w(light switch scene script media_player climate cover fan)
+  @controllable ~w(light switch scene script media_player climate cover fan input_boolean)
   @sensitive ~w(lock alarm_control_panel)
   @read_only ~w(sensor binary_sensor)
 
@@ -60,6 +61,14 @@ defmodule App.HomeAssistant.Entities do
 
   defp map_action("light", "set_brightness", _, _e), do: {:error, :needs_value}
 
+  # Relative brightness: HA adds `brightness_step_pct` to the current level. nil → 20.
+  defp map_action("light", "brighten", v, _e), do: {:ok, {"light", "turn_on", step(v)}}
+  defp map_action("light", "dim", v, _e), do: {:ok, {"light", "turn_on", step(v, -1)}}
+
+  defp map_action("input_boolean", "on", _, _e), do: {:ok, {"input_boolean", "turn_on", %{}}}
+  defp map_action("input_boolean", "off", _, _e), do: {:ok, {"input_boolean", "turn_off", %{}}}
+  defp map_action("input_boolean", "toggle", _, _e), do: {:ok, {"input_boolean", "toggle", %{}}}
+
   defp map_action("switch", "on", _, _e), do: {:ok, {"switch", "turn_on", %{}}}
   defp map_action("switch", "off", _, _e), do: {:ok, {"switch", "turn_off", %{}}}
   defp map_action("switch", "toggle", _, _e), do: {:ok, {"switch", "toggle", %{}}}
@@ -93,6 +102,9 @@ defmodule App.HomeAssistant.Entities do
 
   defp map_action("cover", "on", _, _e), do: {:ok, {"cover", "open_cover", %{}}}
   defp map_action("cover", "off", _, _e), do: {:ok, {"cover", "close_cover", %{}}}
+  # Garage covers never get here: classify/1 makes them :sensitive_read_only first.
+  defp map_action("cover", "open", _, _e), do: {:ok, {"cover", "open_cover", %{}}}
+  defp map_action("cover", "close", _, _e), do: {:ok, {"cover", "close_cover", %{}}}
   defp map_action("cover", "toggle", _, _e), do: {:ok, {"cover", "toggle", %{}}}
 
   defp map_action("cover", "set_position", v, _e) when is_number(v),
@@ -138,36 +150,6 @@ defmodule App.HomeAssistant.Entities do
   end
 
   @doc """
-  Raw `/api/states` list → compacted brain view: `:ignore` entities dropped, then an optional
-  case-insensitive substring query over name / entity_id / domain (HA REST doesn't expose the
-  area registry, so "kitchen" matches by naming convention — see the spec).
-  """
-  def compact_states(entities, query \\ nil) do
-    entities
-    |> Enum.filter(&(classify(&1) != :ignore))
-    |> Enum.map(&compact/1)
-    |> filter_query(query)
-  end
-
-  defp filter_query(list, nil), do: list
-
-  defp filter_query(list, query) when is_binary(query) do
-    q = query |> String.downcase() |> String.trim()
-
-    if q == "" do
-      list
-    else
-      Enum.filter(list, fn e ->
-        String.contains?(String.downcase(e.name), q) or
-          String.contains?(e.entity_id, q) or
-          String.contains?(e.domain, q)
-      end)
-    end
-  end
-
-  defp filter_query(list, _), do: list
-
-  @doc """
   Fuzzy name match, RANK-ORDERED (best Jaro first, so callers truncate by rank). Tokenize
   `name` (downcase, strip punctuation, plural-fold each token), keep entities whose
   name+entity_id contains ALL tokens, then order by `String.jaro_distance/2` (entity name vs
@@ -188,141 +170,6 @@ defmodule App.HomeAssistant.Entities do
   end
 
   def match_name(entities, _), do: entities
-
-  @doc """
-  Up to `k` entity NAMES that plausibly match `name`, IGNORING the ALL-tokens gate — the "no exact
-  match, did you mean…" list so the brain self-corrects in the same round. A candidate must share at
-  least ONE query WORD with the entity (substring). That anchor is what whole-string Jaro lacked
-  (Jaro floored noise at ~0.6 and ranked "Home" over "Living Room Thermostat" for "thermostat"):
-  gibberish shares no word → returns [] and the brain just asks; real near-misses ("kitchen sink" →
-  "Kitchen light (sink)") survive and rank by token overlap.
-  """
-  def close_matches(entities, name, k \\ 3)
-
-  def close_matches(entities, name, k) when is_binary(name) do
-    case tokens(name) do
-      [] ->
-        []
-
-      toks ->
-        entities
-        |> Enum.filter(&any_token?(&1, toks))
-        |> Enum.sort_by(&token_score(&1, toks), :desc)
-        |> Enum.take(k)
-        |> Enum.map(& &1.name)
-    end
-  end
-
-  def close_matches(_entities, _name, _k), do: []
-
-  # At least one query token appears (substring) in the entity's name/id.
-  defp any_token?(entity, toks) do
-    hay = String.downcase("#{entity.name} #{entity.entity_id}")
-    Enum.any?(toks, &String.contains?(hay, &1))
-  end
-
-  # Rank survivors: average, over the query tokens, of the best per-word Jaro against the name words.
-  defp token_score(entity, toks) do
-    case tokens(entity.name) do
-      [] ->
-        0.0
-
-      words ->
-        toks
-        |> Enum.map(fn t -> words |> Enum.map(&String.jaro_distance(t, &1)) |> Enum.max() end)
-        |> then(&(Enum.sum(&1) / length(&1)))
-    end
-  end
-
-  @doc "Add `:area` to a compacted entity from `area_map` (left off when the entity has no area)."
-  def enrich(entity, area_map) do
-    case Map.get(area_map, entity.entity_id) do
-      nil -> entity
-      area -> Map.put(entity, :area, area)
-    end
-  end
-
-  @doc """
-  Compose filters over compacted+enriched entities: area (case-insensitive exact, else UNIQUE
-  substring — ambiguous matches nothing, never widens), domain (exact), state (exact), then
-  `match_name` (which sets the final order). Any nil/blank criterion leaves that dimension open.
-  """
-  def filter(entities, criteria) do
-    entities
-    |> filter_area(Map.get(criteria, :area))
-    |> filter_domain(Map.get(criteria, :domain))
-    |> filter_state(Map.get(criteria, :state))
-    |> filter_name(Map.get(criteria, :name))
-  end
-
-  @doc """
-  House map over the model-visible set (`:ignore` dropped): `%{areas: [%{name, count}],
-  domains: [%{name, count}], total: n, no_area: n}`. `no_area` = devices unreachable by an
-  area filter. `entities` are RAW `/api/states` maps; `area_map` supplies the areas.
-  """
-  def index(entities, area_map) do
-    visible =
-      entities
-      |> Enum.filter(&(classify(&1) != :ignore))
-      |> Enum.map(&compact/1)
-      |> Enum.map(&enrich(&1, area_map))
-
-    %{
-      areas: counts(visible, & &1[:area]),
-      domains: counts(visible, & &1.domain),
-      total: length(visible),
-      no_area: Enum.count(visible, &is_nil(&1[:area]))
-    }
-  end
-
-  # -- filter helpers --
-
-  defp filter_area(entities, area) when is_binary(area) do
-    q = area |> String.downcase() |> String.trim()
-
-    cond do
-      q == "" ->
-        entities
-
-      Enum.any?(entities, &(&1[:area] && String.downcase(&1[:area]) == q)) ->
-        Enum.filter(entities, &(&1[:area] && String.downcase(&1[:area]) == q))
-
-      true ->
-        matching =
-          entities
-          |> Enum.map(& &1[:area])
-          |> Enum.reject(&is_nil/1)
-          |> Enum.filter(&String.contains?(String.downcase(&1), q))
-          |> Enum.uniq()
-
-        case matching do
-          [only] -> Enum.filter(entities, &(&1[:area] == only))
-          _ -> []
-        end
-    end
-  end
-
-  defp filter_area(entities, _), do: entities
-
-  defp filter_domain(entities, domain) when is_binary(domain) do
-    d = domain |> String.downcase() |> String.trim()
-    if d == "", do: entities, else: Enum.filter(entities, &(&1.domain == d))
-  end
-
-  defp filter_domain(entities, _), do: entities
-
-  defp filter_state(entities, state) when is_binary(state) do
-    s = String.trim(state)
-    if s == "", do: entities, else: Enum.filter(entities, &(&1.state == s))
-  end
-
-  defp filter_state(entities, _), do: entities
-
-  defp filter_name(entities, name) when is_binary(name) do
-    if String.trim(name) == "", do: entities, else: match_name(entities, name)
-  end
-
-  defp filter_name(entities, _), do: entities
 
   # -- name matching helpers --
 
@@ -350,15 +197,6 @@ defmodule App.HomeAssistant.Entities do
   end
 
   defp name_jaro(entity, query), do: String.jaro_distance(String.downcase(entity.name), query)
-
-  defp counts(entities, keyfun) do
-    entities
-    |> Enum.map(keyfun)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.frequencies()
-    |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
-    |> Enum.sort_by(& &1.name)
-  end
 
   defp device_class(%{"attributes" => %{"device_class" => dc}}), do: dc
   defp device_class(_), do: nil
@@ -430,6 +268,10 @@ defmodule App.HomeAssistant.Entities do
   end
 
   defp normalize_number(n), do: n
+
+  defp step(v, sign \\ 1)
+  defp step(v, sign) when is_number(v), do: %{brightness_step_pct: sign * round(clamp(v, 1, 100))}
+  defp step(_, sign), do: %{brightness_step_pct: sign * 20}
 
   defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
 

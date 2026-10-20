@@ -120,6 +120,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   (intercom between household members), `lib/app/trackers*`, `lib/app/routines*`, `lib/app/recipes*`,
   each with its tool in `lib/app/tools/`. `lib/app/cards.ex` (tool result → display-ready card),
   `lib/app/glance.ex` (the idle orb's weather + next event), `lib/app/backup.ex` (nightly snapshots).
+- Toolkits + home (2026-10-19): `lib/app/toolkits.ex` (catalog, preselection, the per-turn open
+  set), `toolkits/toolkit.ex` (behaviour), `toolkits/home.ex`, `tools/use_toolkit.ex`;
+  `lib/app/home_assistant/{directory,resolve,actions,socket,live,phrases,media}.ex` (live WS
+  directory, the words → entities resolver, REST writes, the socket, the supervised glue, the
+  names preselection matches, Music Assistant players).
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
@@ -389,6 +394,40 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   "'orbital://auth?code=<App.Auth.AppCode.mint(uid) via :rpc>'"`. A Phoenix-channel client script
   can push `"text"` for fully scripted typed turns. The debug APK (~260 MB) doesn't fit the stock
   AVD's /data — install a release `--target-platform android-arm64` build (~100 MB) instead.
+- **Toolkits are opened per turn, and their guidance never enters the system instruction.** The
+  catalog line is the only always-on text; a kit's guidance rides the user message (preselected)
+  or the `use_toolkit` response, because anything in the system instruction busts Gemini's prefix
+  cache for every turn. Declarations are GATED to opened kits but dispatch is PERMISSIVE (a call
+  to a known tool works even if its kit was not opened), so a model that guesses a name is never
+  punished with an error. A round containing only `use_toolkit` calls for NEW kits is a free hop
+  (otherwise opening a kit eats the 3-hop budget), and a routine's steps can open a kit.
+  Preselection (`wants?`) looks at the utterance plus the last 2 user turns within 10 minutes, so
+  "make them blue" after "turn on the gaming lights" still opens the house. `wants?` runs before
+  EVERY turn, so it must not do I/O or call another process: the house's names are computed once
+  per directory build and read from `:persistent_term` (`App.HomeAssistant.phrases/0`). A kit a
+  routine opens gets its guidance in that `run_routine` response. `use_toolkit` gets no UI chip
+  on purpose.
+- **The home directory is live over Home Assistant's WebSocket; writes stay REST.** The directory
+  subscribes BEFORE it snapshots (else an event in the gap is lost), rebuilds on
+  `*_registry_updated` and `homeassistant_started`, and when the socket drops keeps the last-known
+  data with `as_of` from the DROP time (heartbeat 25s/75s; passive handoff of the socket).
+  Henry sees only entities exposed to Assist: ABSENT from the exposure list = not exposed (unless
+  the list itself failed to load), and hidden / disabled / entity_category / Govee "Segment NNN"
+  entities never appear. Room and house fan-out is LIGHTS ONLY because the Basement holds the
+  homelab outlets (`switch.homelab_surge_protector_l2..l5`) — "turn off the basement" must never
+  cut the servers. `lock`, `alarm_control_panel` and garage covers have no action→service mapping
+  anywhere (view-only); don't add one. `unavailable` = offline and is never called; `unknown` is
+  NOT offline (plenty of healthy entities report it). The resolver acts only on a clear winner
+  with no unmatched words, else asks; a timeout answers "it may still happen", not "failed".
+  Media actions (play/pause/next/volume_set) resolve among media players only (`Resolve`
+  `:media`): "pause the kitchen" is the kitchen speaker, never the kitchen's lights.
+  `HOME_ASSISTANT=false` is still the kill switch; no new env vars. Grep `[home]` / `[toolkit]`.
+- **The integration pattern** (spec `docs/superpowers/specs/2026-10-19-toolkits-and-home-v2-design.md`,
+  "The integration pattern", 10 rules): a toolkit with curated verbs rather than passthrough,
+  resolve the user's words in code not in the model, one call for the common case, a local mirror,
+  honest outcomes as first-class results, safety as absent code paths, one greppable log line per
+  decision, a fixture eval from a real snapshot, and degrade rather than die. The repos toolkit
+  (and any later connector) should follow it; the home kit is the reference implementation.
 
 ## Testing patterns
 
@@ -398,6 +437,14 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   asserting the PTT reconnect/finalize paths. The fake brain has app-env knobs (`:fake_brain_done_ms`,
   `:fake_brain_error`, `:fake_brain_text_deltas`) and notifies `:fake_brain_observer`.
 - HTTP adapters stub `Req` via app-env keys: `:weather_req_opts`, `:google_req_opts` (Req.Test plug).
+- Home Assistant tests never reach a real HA and are `async: false` (global app env). The
+  directory comes from the `:home_assistant_directory` override (a `%Directory{}` or a 0-arity
+  fun returning `{:ok, dir}`), usually `App.Test.HomeFixture.directory()`, the sanitized
+  real-house snapshot (`with_alias/2` returns its payloads with an alias added, for
+  `Directory.build/2`); service calls go through `:home_assistant_req_opts` (a `Req.Test`
+  stub). `config/test.exs` sets `start_home_assistant_live: false` and `:home_assistant_watch_ms`
+  0. `LiveTest` runs `Live` against a local fake HA (Bandit + WebSock); call
+  `App.HomeAssistant.forget_phrases/0` around anything that publishes phrases.
 - Pure helpers are exposed `@doc false def` so tests call them directly (e.g. `Stt.Cartesia.route/2`,
   `Calendar.account_matches?/2`, `Gemini.tools_block/1`, `Weather.build_*`).
 
