@@ -47,7 +47,8 @@ defmodule App.Application do
         rain_alerts() ++
         memory_consolidator() ++
         memory_embedder() ++
-        source_ingester() ++ pool_warmer() ++ speaker_verifier() ++ backup()
+        source_ingester() ++
+        pool_warmer() ++ speaker_verifier() ++ backup() ++ home_assistant_live()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -121,6 +122,14 @@ defmodule App.Application do
     if Application.get_env(:app, :start_backup, false),
       do: [App.Backup],
       else: []
+  end
+
+  # The live house directory over Home Assistant's WebSocket (see App.HomeAssistant.Live).
+  defp home_assistant_live do
+    if App.Config.home_assistant?() and
+         Application.get_env(:app, :start_home_assistant_live, true),
+       do: [App.HomeAssistant.Live],
+       else: []
   end
 
   # Tell Phoenix to update the endpoint configuration
