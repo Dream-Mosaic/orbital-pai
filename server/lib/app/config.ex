@@ -61,6 +61,10 @@ defmodule App.Config do
               App.Tools.Messages,
               App.Tools.Recipes
             ],
+            # Toolkits (App.Toolkits.Toolkit): suites opened on demand via `use_toolkit`.
+            # `open_toolkits` holds the ids opened so far this turn.
+            toolkits: [App.Toolkits.Home],
+            open_toolkits: [],
             # Google-Search grounding on the brain request (web search). Toggle off if the model
             # ever rejects googleSearch alongside function tools.
             web_search: true,
@@ -132,9 +136,11 @@ defmodule App.Config do
       household_named_targets: household_named_targets?()
     }
 
-    # Guarded registration: the smart-home tool exists for the brain ONLY when the hub is
-    # configured (URL + token). A missing token can't crash boot — the tool simply isn't there.
-    if home_assistant?(), do: %{base | tools: base.tools ++ [App.Tools.HomeAssistant]}, else: base
+    # `use_toolkit` is registered iff some toolkit is enabled (the house needs URL + token), so a
+    # missing token can't crash boot — the tool and its catalog entry simply aren't there.
+    if App.Toolkits.enabled(base) != [],
+      do: %{base | tools: base.tools ++ [App.Tools.UseToolkit]},
+      else: base
   end
 
   @doc """

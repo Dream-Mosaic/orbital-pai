@@ -36,14 +36,18 @@ defmodule App.ConfigTest do
     test "default/0 leaves the tool OFF when :home_assistant is unconfigured" do
       refute Config.home_assistant?()
       refute App.Tools.HomeAssistant in Config.default().tools
+      refute App.Toolkits.Home in App.Toolkits.enabled(Config.default())
+      refute App.Tools.UseToolkit in Config.default().tools
     end
 
-    test "default/0 registers the tool when url+token are configured" do
+    test "default/0 offers the home toolkit (not its tools) when url+token are configured" do
       Application.put_env(:app, :home_assistant, %{url: "https://ha.example.test", token: "tok"})
       on_exit(fn -> Application.delete_env(:app, :home_assistant) end)
 
       assert Config.home_assistant?()
-      assert App.Tools.HomeAssistant in Config.default().tools
+      refute App.Tools.HomeAssistant in Config.default().tools
+      assert App.Toolkits.Home in App.Toolkits.enabled(Config.default())
+      assert App.Tools.UseToolkit in Config.default().tools
     end
 
     test "an empty url or token does not count as configured (no boot crash, no tool)" do
