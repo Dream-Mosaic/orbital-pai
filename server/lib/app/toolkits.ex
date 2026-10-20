@@ -3,9 +3,9 @@ defmodule App.Toolkits do
   Registry for toolkits (`App.Toolkits.Toolkit`): enabled kits, the catalog line for the
   system prompt, pre-selection from the user's words, and opening a kit into a config.
   A kit's tools are always dispatchable (`App.Tools.execute/3` searches `all_tools/1`);
-  opening one only decides whether their declarations are advertised to the brain.
+  opening one only decides whether their declarations are advertised to the brain. The brain
+  loop (`App.Adapters.TextModel.Gemini`) logs each open with how it happened.
   """
-  require Logger
 
   @recent_window_s 600
 
@@ -55,7 +55,6 @@ defmodule App.Toolkits do
         kit.id() not in open,
         Code.ensure_loaded?(kit) and function_exported?(kit, :wants?, 2),
         kit.wants?(text, ctx) do
-      Logger.info("[toolkit] preselect #{kit.id()}")
       kit
     end
   end

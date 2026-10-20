@@ -514,19 +514,6 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert prompt =~ ~r/daily\/weekly\/monthly\/yearly/
   end
 
-  test "home_block teaches find-then-act ONLY when the tool is registered" do
-    with_ha = %App.Config{tools: [App.Tools.Weather, App.Tools.HomeAssistant]}
-    block = Gemini.home_block(with_ha)
-    assert block =~ "home_index"
-    assert block =~ "home_find"
-    assert block =~ "home_control"
-    refute block =~ "home_state"
-    assert block =~ ~r/view-only/i
-    assert block =~ "play_music"
-
-    assert Gemini.home_block(%App.Config{}) == ""
-  end
-
   test "memory_block names the rest of the household after the speaker" do
     block =
       Gemini.memory_block(%{user_name: "David", household: ["Tanya"], profile: "", summary: ""})
@@ -679,4 +666,354 @@ defmodule App.Adapters.TextModel.GeminiTest do
     block = Gemini.routines_block(%{routines: [%{name: ~s|the "big" one|, triggers: []}]})
     assert block =~ ~s|"the big one"|
   end
+end
+
+defmodule App.Adapters.TextModel.GeminiToolkitsTest do
+  # async: false — mutates global app env (:home_assistant, req opts, the directory seam) and
+  # the global Logger level.
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias App.Adapters.TextModel.Gemini
+  alias App.Config
+  alias App.Test.HomeFixture
+  alias App.Toolkits.Home
+
+  # A stand-in run_routine (the real one needs a user + DB): returns stored steps that name the house.
+  defmodule FakeRoutine do
+    @behaviour App.Tools.Tool
+    def declarations do
+      [
+        %{
+          name: "run_routine",
+          description: "run_routine",
+          parameters: %{type: "object", properties: %{}, required: []}
+        }
+      ]
+    end
+
+    def execute("run_routine", _args, _ctx),
+      do: {:ok, %{name: "good night", steps: "turn off the gaming lights", instructions: "do it"}}
+  end
+
+  setup do
+    Application.put_env(:app, :home_assistant, %{
+      url: "https://ha.example.test",
+      token: "test-token"
+    })
+
+    Application.put_env(:app, :home_assistant_req_opts, plug: {Req.Test, GeminiHaStub})
+    Application.put_env(:app, :home_assistant_directory, HomeFixture.directory())
+
+    on_exit(fn ->
+      Application.delete_env(:app, :home_assistant)
+      Application.delete_env(:app, :home_assistant_req_opts)
+      Application.delete_env(:app, :home_assistant_directory)
+    end)
+
+    Req.Test.stub(GeminiHaStub, fn conn -> Req.Test.json(conn, []) end)
+
+    {:ok, cfg: %{Config.default() | web_search: false, tool_cache: false}}
+  end
+
+  defp call(name, args \\ %{}), do: %{name: name, args: args, sig: nil, id: nil}
+
+  defp use_home, do: call("use_toolkit", %{"name" => "home"})
+
+  # A round runner that plays `script` (one call list per tools-on round; [] once it runs out).
+  # The script's tail may be a 0-arity fun instead — then every later round calls it, forever.
+  # It reports every round's tools? flag and cfg.tools, and bails after 12 rounds so a broken
+  # hop rule fails the counts instead of hanging the suite.
+  defp scripted(script) do
+    parent = self()
+    Process.put(:script, script)
+    Process.put(:rounds, 0)
+
+    fn _contents, _system, cfg, _thinking, _target, tools? ->
+      n = Process.get(:rounds) + 1
+      Process.put(:rounds, n)
+      send(parent, {:round, tools?})
+      send(parent, {:cfg_tools, n, cfg.tools})
+
+      case {tools?, Process.get(:script)} do
+        {false, _} ->
+          {:ok, []}
+
+        _ when n > 12 ->
+          {:ok, []}
+
+        {true, [calls | rest]} ->
+          Process.put(:script, rest)
+          {:ok, calls}
+
+        {true, fun} when is_function(fun, 0) ->
+          {:ok, fun.()}
+
+        {true, []} ->
+          {:ok, []}
+      end
+    end
+  end
+
+  defp run(cfg, round_fun) do
+    tool_ctx = %{session_id: nil, user_id: nil, config: cfg}
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, self(), 0, round_fun)
+  end
+
+  defp count(msg_match) do
+    Stream.repeatedly(fn ->
+      receive do
+        msg -> if msg_match.(msg), do: :hit, else: :miss
+      after
+        0 -> :done
+      end
+    end)
+    |> Enum.take_while(&(&1 != :done))
+    |> Enum.count(&(&1 == :hit))
+  end
+
+  test "use_toolkit puts the kit's declarations in the NEXT round", %{cfg: cfg} do
+    refute App.Tools.HomeAssistant in cfg.tools
+    run(cfg, scripted([[use_home()]]))
+
+    assert_received {:cfg_tools, 1, round1}
+    refute App.Tools.HomeAssistant in round1
+    assert_received {:cfg_tools, 2, round2}
+    assert App.Tools.HomeAssistant in round2
+    assert_received {:gemini_tool_result, "use_toolkit", _, %{opened: "home"}}
+    assert_received {:gemini_done}
+  end
+
+  test "use_toolkit is plumbing: no chip, no bridge", %{cfg: cfg} do
+    run(%{cfg | tool_bridges: true}, scripted([[use_home()], [call("home_status")]]))
+
+    refute_received {:gemini_tool_call, "use_toolkit"}
+    assert_received {:gemini_tool_call, "home_status"}
+    assert_received {:gemini_bridge, phrase}
+    assert phrase in App.Tools.HomeAssistant.bridge("home_status")
+    refute_received {:gemini_bridge, _}
+  end
+
+  test "opening a kit spends no hop: three home_status rounds still run before the forced answer",
+       %{cfg: cfg} do
+    run(cfg, scripted([[use_home()] | fn -> [call("home_status")] end]))
+
+    # the free use_toolkit round + 3 hop-spending home_status rounds + the capped ask, then tools-off
+    for _ <- 1..5, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
+    assert_received {:gemini_done}
+    assert count(&match?({:gemini_tool_result, "home_status", _, _}, &1)) == 3
+  end
+
+  test "re-opening an already-open kit spends a hop (and the tool context sees it open)",
+       %{cfg: cfg} do
+    run(cfg, scripted(fn -> [use_home()] end))
+
+    # the first (free) open + 3 counted re-opens + the capped ask, then tools-off
+    for _ <- 1..5, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
+    assert_received {:gemini_tool_result, "use_toolkit", _, %{opened: "home"}}
+    # tool_ctx.config was widened, so use_toolkit itself reports the kit as open
+    assert_received {:gemini_tool_result, "use_toolkit", _, %{already_open: "home"}}
+  end
+
+  test "a kit preselected before the turn is already open: use_toolkit spends a hop",
+       %{cfg: cfg} do
+    {cfg, _note} = Gemini.brain_setup("turn on the gaming lights", %{recent: []}, cfg, now())
+    run(cfg, scripted(fn -> [use_home()] end))
+
+    for _ <- 1..4, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
+  end
+
+  test "an unknown toolkit name is not a free round", %{cfg: cfg} do
+    run(cfg, scripted(fn -> [call("use_toolkit", %{"name" => "garage band"})] end))
+
+    for _ <- 1..4, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
+  end
+
+  test "a routine whose steps name the house opens the kit for the next round", %{cfg: cfg} do
+    cfg = %{cfg | tools: [FakeRoutine, App.Tools.UseToolkit]}
+    run(cfg, scripted([[call("run_routine")]]))
+
+    assert_received {:cfg_tools, 1, round1}
+    refute App.Tools.HomeAssistant in round1
+    assert_received {:cfg_tools, 2, round2}
+    assert App.Tools.HomeAssistant in round2
+  end
+
+  test "opening logs once per kit, tagged with how it opened", %{cfg: cfg} do
+    prev = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: prev) end)
+
+    brain = capture_log(fn -> run(cfg, scripted([[use_home(), use_home()], [use_home()]])) end)
+    assert length(String.split(brain, "[toolkit] home opened (brain)")) == 2
+
+    routine =
+      capture_log(fn ->
+        run(
+          %{cfg | tools: [FakeRoutine, App.Tools.UseToolkit]},
+          scripted([[call("run_routine")]])
+        )
+      end)
+
+    assert routine =~ "[toolkit] home opened (routine)"
+
+    pre =
+      capture_log(fn -> Gemini.brain_setup("turn on the gaming lights", %{}, cfg, now()) end)
+
+    assert length(String.split(pre, "[toolkit] home opened (preselect)")) == 2
+  end
+
+  describe "kits_from_round/3" do
+    test "a run_routine whose steps need the house", %{cfg: cfg} do
+      assert Gemini.kits_from_round(
+               cfg,
+               [%{name: "run_routine", args: %{}}],
+               [%{result: %{steps: "turn off the gaming lights"}}]
+             ) == [Home]
+
+      # a carded/annotated response still counts
+      assert Gemini.kits_from_round(
+               cfg,
+               [%{name: "run_routine", args: %{}}],
+               [%{result: %{steps: "turn off the gaming lights"}, display: "x"}]
+             ) == [Home]
+    end
+
+    test "tolerates errored and step-less routine responses", %{cfg: cfg} do
+      routine = [%{name: "run_routine", args: %{}}]
+      assert Gemini.kits_from_round(cfg, routine, [%{error: "timeout"}]) == []
+      assert Gemini.kits_from_round(cfg, routine, [%{result: %{note: "no such routine"}}]) == []
+      assert Gemini.kits_from_round(cfg, routine, [%{result: %{steps: "water the plants"}}]) == []
+    end
+
+    test "use_toolkit names an enabled kit; unknown names and open kits add nothing",
+         %{cfg: cfg} do
+      ok = %{result: %{opened: "home"}}
+      assert Gemini.kits_from_round(cfg, [use_home()], [ok]) == [Home]
+      assert Gemini.kits_from_round(cfg, [use_home(), use_home()], [ok, ok]) == [Home]
+
+      assert Gemini.kits_from_round(cfg, [call("use_toolkit", %{"name" => "nope"})], [ok]) == []
+
+      open = App.Toolkits.open(cfg, [Home])
+      assert Gemini.kits_from_round(open, [use_home()], [ok]) == []
+
+      assert Gemini.kits_from_round(
+               open,
+               [%{name: "run_routine", args: %{}}],
+               [%{result: %{steps: "turn off the gaming lights"}}]
+             ) == []
+    end
+  end
+
+  describe "brain_setup/4" do
+    test "preselects the house for a house request: tools + guidance note" do
+      {cfg, note} =
+        Gemini.brain_setup("turn on the gaming lights", %{recent: []}, Config.default(), now())
+
+      assert App.Tools.HomeAssistant in cfg.tools
+      assert cfg.open_toolkits == ["home"]
+      assert note =~ "Toolkit open: home"
+    end
+
+    test "leaves an unrelated request alone" do
+      base = Config.default()
+      {cfg, note} = Gemini.brain_setup("what's the weather", %{recent: []}, base, now())
+
+      assert note == ""
+      refute App.Tools.HomeAssistant in cfg.tools
+      assert cfg == base
+    end
+  end
+
+  describe "the brain request (stream_brain/4)" do
+    defp first_round(transcript, cfg, opts \\ []) do
+      parent = self()
+
+      round_fun = fn contents, system, round_cfg, _thinking, _target, _tools? ->
+        send(parent, {:first_round, contents, system, round_cfg})
+        {:ok, []}
+      end
+
+      Gemini.stream_brain(
+        transcript,
+        %{recent: []},
+        [config: cfg, thinking: "low", round_fun: round_fun] ++ opts,
+        self()
+      )
+
+      assert_received {:first_round, contents, system, round_cfg}
+      assert_received {:gemini_done}
+      [%{role: "user", parts: [%{text: text}]}] = contents
+      {text, system, round_cfg}
+    end
+
+    test "carries the toolkit catalog in the system prompt, never the old home block or guidance",
+         %{cfg: cfg} do
+      {_text, system, _} = first_round("turn on the gaming lights", cfg)
+
+      assert system =~ "use_toolkit"
+      assert system =~ "home (the house:"
+      refute system =~ "home_index"
+      refute system =~ "home_find"
+      # guidance rides the user message, never the (prefix-cached) system instruction
+      refute system =~ "Toolkit open"
+      refute system =~ Home.guidance()
+    end
+
+    test "the system prompt is identical whether or not a kit was preselected", %{cfg: cfg} do
+      {_, house, _} = first_round("turn on the gaming lights", cfg)
+      {_, weather, _} = first_round("what's the weather", cfg)
+      assert house == weather
+    end
+
+    test "a preselected kit is open for round 1 and its note rides the final user message",
+         %{cfg: cfg} do
+      {text, _system, round_cfg} = first_round("turn on the gaming lights", cfg, quiet: true)
+
+      assert App.Tools.HomeAssistant in round_cfg.tools
+      assert String.starts_with?(text, "(Current time: ")
+      assert String.ends_with?(text, "turn on the gaming lights")
+
+      # time_note <> note <> quiet_note <> transcript
+      {time_at, _} = :binary.match(text, "(Current time: ")
+      {kit_at, _} = :binary.match(text, "(Toolkit open: home.")
+      {quiet_at, _} = :binary.match(text, "(The user TYPED")
+      assert time_at < kit_at and kit_at < quiet_at
+    end
+
+    test "an unrelated request gets no note and no house tools", %{cfg: cfg} do
+      {text, _system, round_cfg} = first_round("what's the weather", cfg)
+
+      refute text =~ "Toolkit open"
+      refute App.Tools.HomeAssistant in round_cfg.tools
+    end
+
+    test "with no kit configured there is no catalog and no use_toolkit" do
+      Application.delete_env(:app, :home_assistant)
+      cfg = %{Config.default() | web_search: false}
+
+      assert Gemini.toolkits_block(cfg) == ""
+      {text, system, round_cfg} = first_round("turn on the gaming lights", cfg)
+
+      refute system =~ "use_toolkit"
+      refute text =~ "Toolkit open"
+      refute App.Tools.HomeAssistant in round_cfg.tools
+    end
+  end
+
+  test "toolkits_block is the catalog line with a leading space when a kit is enabled",
+       %{cfg: cfg} do
+    assert Gemini.toolkits_block(cfg) == " " <> App.Toolkits.catalog_line(cfg)
+  end
+
+  defp now, do: DateTime.utc_now()
 end
