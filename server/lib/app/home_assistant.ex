@@ -49,6 +49,48 @@ defmodule App.HomeAssistant do
     end
   end
 
+  @phrases {__MODULE__, :phrases}
+
+  @doc """
+  The phrases the house answers to (`App.HomeAssistant.Phrases`), for preselecting the home kit
+  without a call to the live client: `App.HomeAssistant.Live` publishes them to
+  `:persistent_term` on each directory build; `[]` until the first. The
+  `:home_assistant_directory` test seam wins, as it does for `directory/0`.
+  """
+  @spec phrases() :: [String.t()]
+  def phrases do
+    case Application.get_env(:app, :home_assistant_directory) do
+      %App.HomeAssistant.Directory{} = dir -> App.HomeAssistant.Phrases.from_directory(dir)
+      fun when is_function(fun, 0) -> phrases_from(fun.())
+      _ -> :persistent_term.get(@phrases, [])
+    end
+  end
+
+  defp phrases_from({:ok, %App.HomeAssistant.Directory{} = dir}),
+    do: App.HomeAssistant.Phrases.from_directory(dir)
+
+  defp phrases_from(_), do: []
+
+  @doc false
+  # Only a changed list is written: a :persistent_term update makes every process check its heap
+  # for the old term, so it must stay a once-per-build event (the backstop rebuild every 10 min
+  # usually changes nothing).
+  @spec publish_phrases([String.t()]) :: :ok | :unchanged
+  def publish_phrases(phrases) when is_list(phrases) do
+    if :persistent_term.get(@phrases, nil) == phrases do
+      :unchanged
+    else
+      :persistent_term.put(@phrases, phrases)
+    end
+  end
+
+  @doc false
+  # Test seam: forget the published phrases.
+  def forget_phrases do
+    :persistent_term.erase(@phrases)
+    :ok
+  end
+
   defp live_directory do
     cond do
       not configured?() ->

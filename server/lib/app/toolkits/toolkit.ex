@@ -16,7 +16,11 @@ defmodule App.Toolkits.Toolkit do
   @callback tools() :: [module()]
   @doc "How to use the kit; returned to the brain when it opens the kit."
   @callback guidance() :: String.t()
-  @doc "Optional: do the window `text` (and `ctx`) clearly need this kit? Over-opening beats under-opening."
+  @doc """
+  Optional: do the window `text` (and `ctx`) clearly need this kit? Over-opening beats
+  under-opening. Runs before EVERY brain turn, so it must be local and cheap: no I/O and no call
+  to another process (read anything precomputed from `:persistent_term`, as the home kit does).
+  """
   @callback wants?(text :: String.t(), ctx :: map()) :: boolean()
   @optional_callbacks wants?: 2
 end

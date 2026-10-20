@@ -47,6 +47,22 @@ defmodule App.ToolkitsTest do
       assert Toolkits.preselect(cfg, "what's the weather tomorrow", %{}, now) == []
     end
 
+    for text <- [
+          "play some jazz",
+          "pause",
+          "skip this song",
+          "turn it up",
+          "turn it down",
+          "resume",
+          "mute the tv",
+          "louder"
+        ] do
+      @text text
+      test "music verbs: #{inspect(text)}", %{cfg: cfg, now: now} do
+        assert Toolkits.preselect(cfg, @text, %{}, now) == [Home]
+      end
+    end
+
     test "follow-up within 10 minutes uses the recent turn", %{cfg: cfg, now: now} do
       recent = fn secs ->
         %{
@@ -63,6 +79,48 @@ defmodule App.ToolkitsTest do
     test "an already-open kit is skipped", %{cfg: cfg, now: now} do
       cfg = Toolkits.open(cfg, [Home])
       assert Toolkits.preselect(cfg, "turn on the gaming lights", %{}, now) == []
+    end
+  end
+
+  describe "preselection reads the house's names locally (no call to the live client)" do
+    setup do
+      Application.delete_env(:app, :home_assistant_directory)
+      App.HomeAssistant.forget_phrases()
+      on_exit(&App.HomeAssistant.forget_phrases/0)
+    end
+
+    test "with nothing published, the generic vocabulary still works and names don't" do
+      assert App.HomeAssistant.phrases() == []
+      assert Home.wants?("turn on the lights", %{})
+      refute Home.wants?("kill the dining table", %{})
+    end
+
+    test "published phrases are what wants? matches" do
+      App.HomeAssistant.publish_phrases(
+        App.HomeAssistant.Phrases.from_directory(HomeFixture.directory())
+      )
+
+      assert Home.wants?("kill the dining table", %{})
+      refute Home.wants?("what's the weather tomorrow", %{})
+    end
+
+    test "wants? never calls the live client, even when it's running" do
+      test = self()
+
+      # A stand-in registered as the live client: it reports anything it's sent, answers nothing.
+      stand_in =
+        spawn(fn ->
+          receive do
+            msg -> send(test, {:live_got, msg})
+          end
+        end)
+
+      Process.register(stand_in, App.HomeAssistant.Live)
+      on_exit(fn -> Process.exit(stand_in, :kill) end)
+
+      assert Home.wants?("turn on the gaming lights", %{})
+      refute Home.wants?("what's the weather tomorrow", %{})
+      refute_received {:live_got, _}
     end
   end
 

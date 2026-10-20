@@ -110,8 +110,11 @@ defmodule App.HomeAssistant.LiveTest do
   setup do
     prev = Application.get_env(:app, :home_assistant)
     Application.delete_env(:app, :home_assistant_directory)
+    App.HomeAssistant.forget_phrases()
 
     on_exit(fn ->
+      App.HomeAssistant.forget_phrases()
+
       if prev,
         do: Application.put_env(:app, :home_assistant, prev),
         else: Application.delete_env(:app, :home_assistant)
@@ -155,6 +158,8 @@ defmodule App.HomeAssistant.LiveTest do
     dir = loaded_dir()
     assert Directory.get(dir, "light.gaming_room_lights")
     assert dir.exposure_known?
+    # the build published the names preselection matches on, so wants? never calls this process
+    assert "gaming" in App.HomeAssistant.phrases()
 
     # a state event flows into the directory
     assert_receive {:fake_ha, :in,

@@ -2,15 +2,27 @@ defmodule App.Toolkits.Home do
   @moduledoc "The house (Home Assistant) as a toolkit: home_control, home_status, play_music."
   @behaviour App.Toolkits.Toolkit
 
-  alias App.HomeAssistant.Directory
+  alias App.HomeAssistant
+  alias App.HomeAssistant.Phrases
 
+  # The house's own names come from `App.HomeAssistant.phrases/0` (published once per directory
+  # build); this is the vocabulary that needs no house. Over-opening is the bias: a false
+  # positive costs a few declarations for one turn, a miss costs a model round.
   @generic ~w(light lights lamp lamps switch plug outlet fan fans thermostat heat heater ac aircon
               blinds shades curtains fireplace music song songs playlist album speaker speakers
-              volume tv television scene nightlight dim brighter darker garage lock unlock alarm) ++
-             ["turn on", "turn off", "switch on", "switch off", "air conditioning"]
-  # trailing device words dropped from an entry name to get its "core" ("Dining table lights")
-  @tails ~w(light lights lamp lamps switch plug power)
-  @min_len 4
+              volume tv television scene nightlight dim brighter darker garage lock unlock alarm
+              play pause resume skip louder quieter mute unmute) ++
+             [
+               "turn on",
+               "turn off",
+               "switch on",
+               "switch off",
+               "air conditioning",
+               "turn it up",
+               "turn it down",
+               "turn up",
+               "turn down"
+             ]
 
   @impl true
   def id, do: "home"
@@ -42,54 +54,9 @@ defmodule App.Toolkits.Home do
   end
 
   @impl true
+  # No call to the live client and no copy of the house: the names are a :persistent_term read.
   def wants?(text, _ctx) do
-    padded = " " <> normalize(text) <> " "
-    Enum.any?(phrases(), &String.contains?(padded, " " <> &1 <> " "))
-  end
-
-  defp phrases do
-    @generic ++ directory_phrases()
-  end
-
-  defp directory_phrases do
-    case App.HomeAssistant.directory() do
-      {:ok, %Directory{} = dir} ->
-        names =
-          Directory.entries(dir)
-          |> Enum.flat_map(fn e -> [core(e.name) | Enum.map(e.aliases || [], &normalize/1)] end)
-
-        areas = Enum.map(Enum.map(dir.areas, &area_name/1), &normalize/1)
-
-        (names ++ areas)
-        |> Enum.filter(&(String.length(&1) >= @min_len and &1 not in @generic))
-        |> Enum.uniq()
-
-      _ ->
-        []
-    end
-  end
-
-  defp area_name(%{"name" => n}), do: n
-  defp area_name(%{name: n}), do: n
-  defp area_name(n) when is_binary(n), do: n
-  defp area_name(_), do: ""
-
-  defp core(nil), do: ""
-
-  defp core(name) do
-    name |> normalize() |> String.split(" ", trim: true) |> strip_tails() |> Enum.join(" ")
-  end
-
-  defp strip_tails(words) do
-    case Enum.reverse(words) do
-      [last | rest] when last in @tails and rest != [] -> strip_tails(Enum.reverse(rest))
-      _ -> words
-    end
-  end
-
-  defp normalize(nil), do: ""
-
-  defp normalize(text) do
-    text |> String.downcase() |> String.replace(~r/[^\p{L}\p{N}]+/u, " ") |> String.trim()
+    padded = " " <> Phrases.normalize(text) <> " "
+    Enum.any?(@generic ++ HomeAssistant.phrases(), &String.contains?(padded, " " <> &1 <> " "))
   end
 end

@@ -26,6 +26,10 @@ defmodule App.HomeAssistant.Live do
   fragments wait in the websocket's `fragment`, partial TCP reads in its `buffer`) and only
   ever emits the whole `{:text, json}` — `get_states` (~1 MB) arrives as one message here.
 
+  Each directory build (a new `loaded_at`, never a state event) recomputes the house's names and
+  publishes them (`App.HomeAssistant.publish_phrases/1`, written only when they changed), so
+  preselecting a turn reads them without a call to this process.
+
   Never logs the token or the auth message; `format_status/1` redacts it from crash reports.
   Started only when HA is configured and `:start_home_assistant_live` (default true; false in
   test) — see `App.Application`.
@@ -34,7 +38,7 @@ defmodule App.HomeAssistant.Live do
   use GenServer
   require Logger
 
-  alias App.HomeAssistant.Socket
+  alias App.HomeAssistant.{Directory, Phrases, Socket}
 
   @backstop_ms :timer.minutes(10)
   @heartbeat_ms 30_000
@@ -77,7 +81,9 @@ defmodule App.HomeAssistant.Live do
           connecting: nil,
           retry: nil,
           attempt: 0,
-          last_in: nil
+          last_in: nil,
+          # the `loaded_at` of the build whose phrases were last published
+          phrases_at: nil
         }
 
         {:ok, state, {:continue, :connect}}
@@ -296,12 +302,24 @@ defmodule App.HomeAssistant.Live do
   defp inbound(msg, s) do
     case safe_handle(s.socket, msg) do
       {:ok, {socket, out}} ->
-        s = %{s | socket: socket}
+        s = publish_phrases(%{s | socket: socket})
         s = if socket.phase == :ready, do: %{s | attempt: 0}, else: s
         send_messages(s, out)
 
       {:error, module} ->
         {:down, s, {:crashed, module}}
+    end
+  end
+
+  # Names change only with a build (a new `loaded_at`); a state event leaves them alone.
+  defp publish_phrases(s) do
+    case Socket.directory(s.socket) do
+      %Directory{loaded_at: at} = dir when at != s.phrases_at ->
+        App.HomeAssistant.publish_phrases(Phrases.from_directory(dir))
+        %{s | phrases_at: at}
+
+      _ ->
+        s
     end
   end
 
