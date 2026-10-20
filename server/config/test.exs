@@ -31,6 +31,9 @@ config :app, start_memory_embedder: false
 config :app, start_source_ingester: false
 config :app, start_speaker_verifier: false
 
+# The home tools' silent no-op watch (a fire-and-forget poll after on/off) is off in tests.
+config :app, home_assistant_watch_ms: 0
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

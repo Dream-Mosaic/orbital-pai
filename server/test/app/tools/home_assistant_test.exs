@@ -1,11 +1,17 @@
 defmodule App.Tools.HomeAssistantTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  alias App.HomeAssistant.Actions
+  alias App.HomeAssistant.Directory
+  alias App.Test.HomeFixture
   alias App.Tools.HomeAssistant, as: Tool
 
-  # async: false — mutates global app env (:home_assistant + req opts).
+  # async: false — mutates global app env (:home_assistant, req opts, the directory seam).
 
   @ctx %{session_id: "test", config: App.Config.default()}
+  @unreachable "couldn't reach the home hub (the house connection isn't up yet)"
 
   setup do
     Application.put_env(:app, :home_assistant, %{
@@ -14,446 +20,452 @@ defmodule App.Tools.HomeAssistantTest do
     })
 
     Application.put_env(:app, :home_assistant_req_opts, plug: {Req.Test, HaToolStub})
+    Application.put_env(:app, :home_assistant_directory, HomeFixture.directory())
 
     on_exit(fn ->
       Application.delete_env(:app, :home_assistant)
       Application.delete_env(:app, :home_assistant_req_opts)
+      Application.delete_env(:app, :home_assistant_directory)
     end)
 
+    stub(200)
     :ok
   end
 
-  # GET /api/states → entities; POST /api/template → the areas JSON string (text body).
-  defp stub_states_and_areas(entities, areas_json) do
+  # Every request HA receives is recorded to the test process as {:ha, method, path, json_body}.
+  defp stub(status) do
+    test = self()
+
     Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} -> Req.Test.json(conn, entities)
-        {"POST", "/api/template"} -> Plug.Conn.send_resp(conn, 200, areas_json)
-      end
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+      send(
+        test,
+        {:ha, conn.method, conn.request_path, if(raw == "", do: nil, else: Jason.decode!(raw))}
+      )
+
+      conn |> Plug.Conn.put_status(status) |> Req.Test.json([])
     end)
   end
 
-  # ---- home_index ----
-
-  test "declarations include home_index (no required args)" do
-    idx = Enum.find(Tool.declarations(), &(&1.name == "home_index"))
-    assert idx
-    assert idx.parameters.required == []
-  end
-
-  test "home_index returns area + domain counts, total, and no_area" do
-    entities = [
-      %{
-        "entity_id" => "light.kitchen",
-        "state" => "on",
-        "attributes" => %{"friendly_name" => "Kitchen Light"}
-      },
-      %{
-        "entity_id" => "switch.kfan",
-        "state" => "off",
-        "attributes" => %{"friendly_name" => "Kitchen Fan"}
-      },
-      %{
-        "entity_id" => "climate.hall",
-        "state" => "heat",
-        "attributes" => %{"friendly_name" => "Hall"}
-      },
-      %{"entity_id" => "sun.sun", "state" => "above_horizon", "attributes" => %{}}
-    ]
-
-    stub_states_and_areas(entities, ~s([["light.kitchen","Kitchen"],["switch.kfan","Kitchen"]]))
-
-    assert {:ok, idx} = Tool.execute("home_index", %{}, @ctx)
-    assert idx.total == 3
-    assert idx.no_area == 1
-    assert %{name: "Kitchen", count: 2} in idx.areas
-    assert %{name: "light", count: 1} in idx.domains
-  end
-
-  test "home_index degrades to empty areas when the template call fails (no area requested)" do
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} ->
-          Req.Test.json(conn, [%{"entity_id" => "light.a", "state" => "on", "attributes" => %{}}])
-
-        {"POST", "/api/template"} ->
-          Plug.Conn.send_resp(conn, 500, "boom")
-      end
-    end)
-
-    assert {:ok, %{areas: [], no_area: 1, total: 1}} = Tool.execute("home_index", %{}, @ctx)
-  end
-
-  test "home_index flattens an unreachable hub to an error note" do
-    Req.Test.stub(HaToolStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
-    assert {:ok, %{error: err}} = Tool.execute("home_index", %{}, @ctx)
-    assert err =~ "home hub"
-  end
-
-  test "home_index caches ~60s and has a bridge" do
-    assert Tool.cache_ttl("home_index") == 60_000
-    assert Tool.bridge("home_index") != []
-  end
-
-  # ---- home_find ----
-
-  @find_home [
-    %{
-      "entity_id" => "light.kitchen_main",
-      "state" => "on",
-      "attributes" => %{"friendly_name" => "Kitchen Main Light", "brightness" => 255}
-    },
-    %{
-      "entity_id" => "light.kitchen_under",
-      "state" => "off",
-      "attributes" => %{"friendly_name" => "Under Cabinet Light"}
-    },
-    %{
-      "entity_id" => "climate.living",
-      "state" => "heat_cool",
-      "attributes" => %{
-        "friendly_name" => "Living Room Thermostat",
-        "target_temp_high" => 74,
-        "target_temp_low" => 70,
-        "current_temperature" => 72
-      }
-    },
-    %{
-      "entity_id" => "cover.garage_door",
-      "state" => "closed",
-      "attributes" => %{"friendly_name" => "Garage Door", "device_class" => "garage"}
-    },
-    %{"entity_id" => "sun.sun", "state" => "above_horizon", "attributes" => %{}}
-  ]
-
-  @find_areas ~s([["light.kitchen_main","Kitchen"],["light.kitchen_under","Kitchen"],["climate.living","Living Room"],["cover.garage_door","Garage"]])
-
-  test "declarations include home_find (all optional args)" do
-    f = Enum.find(Tool.declarations(), &(&1.name == "home_find"))
-    assert f
-    assert f.parameters.required == []
-
-    for k <- [:name, :area, :domain, :state] do
-      assert Map.has_key?(f.parameters.properties, k), "home_find should accept #{k}"
+  # Drain the recorded requests: [{method, path, body}], oldest first.
+  defp requests do
+    receive do
+      {:ha, method, path, body} -> [{method, path, body} | requests()]
+    after
+      0 -> []
     end
   end
 
-  test "home_find (≤20) returns rank-ordered lean rows with area enrichment" do
-    stub_states_and_areas(@find_home, @find_areas)
+  defp posts, do: for({"POST", path, body} <- requests(), do: {path, body})
 
-    assert {:ok, %{entities: rows, count: 2}} =
-             Tool.execute("home_find", %{"area" => "Kitchen", "domain" => "light"}, @ctx)
+  defp control(targets, action, extra \\ %{}) do
+    Tool.execute(
+      "home_control",
+      Map.merge(%{"targets" => targets, "action" => action}, extra),
+      @ctx
+    )
+  end
 
-    assert Enum.sort(Enum.map(rows, & &1.entity_id)) == [
-             "light.kitchen_main",
-             "light.kitchen_under"
+  defp put_directory(fun), do: Application.put_env(:app, :home_assistant_directory, fun)
+
+  defp decl(name), do: Enum.find(Tool.declarations(), &(&1.name == name))
+
+  # ---- declarations / registry ----
+
+  test "the declarations are exactly home_control, home_status and play_music" do
+    assert Enum.map(Tool.declarations(), & &1.name) == [
+             "home_control",
+             "home_status",
+             "play_music"
            ]
-
-    assert Enum.all?(rows, &(&1.area == "Kitchen"))
   end
 
-  test "a single match carries the extended attribute set (M5)" do
-    stub_states_and_areas(@find_home, @find_areas)
+  test "home_control takes the user's words as targets and an action from the closed vocabulary" do
+    d = decl("home_control")
+    assert d.parameters.required == ["targets", "action"]
+    assert d.parameters.properties.targets.type == "array"
+    assert d.parameters.properties.targets.items == %{type: "string"}
+    assert d.parameters.properties.action.enum == Actions.actions()
+    assert d.parameters.properties.value.type == "number"
 
-    assert {:ok, %{entities: [row], count: 1}} =
-             Tool.execute("home_find", %{"name" => "living room thermostat"}, @ctx)
-
-    assert row.entity_id == "climate.living"
-    assert row.target_temp_high == 74 and row.target_temp_low == 70
-    assert row.current_temperature == 72
+    for k <- [:color, :effect], do: assert(d.parameters.properties[k].type == "string")
   end
 
-  test "C1: area given but the rooms template failed → error, ZERO rows (never the unfiltered set)" do
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} -> Req.Test.json(conn, @find_home)
-        {"POST", "/api/template"} -> Plug.Conn.send_resp(conn, 500, "boom")
-      end
-    end)
-
-    assert {:ok, result} = Tool.execute("home_find", %{"area" => "Kitchen"}, @ctx)
-    assert Map.has_key?(result, :error)
-    refute Map.has_key?(result, :entities)
+  test "home_status: targets and state are both optional" do
+    d = decl("home_status")
+    assert d.parameters.required == []
+    assert d.parameters.properties.targets.type == "array"
+    assert d.parameters.properties.state.type == "string"
   end
 
-  test "empty result returns close_matches + an ask-the-user note (C3)" do
-    stub_states_and_areas(@find_home, @find_areas)
-
-    assert {:ok, %{entities: [], close_matches: close, note: note}} =
-             Tool.execute("home_find", %{"name" => "kitchen lamp"}, @ctx)
-
-    assert is_list(close) and close != []
-    assert note =~ "ASK"
+  test "home_status is a read; home_control and play_music are writes" do
+    assert App.Tools.read_only?("home_status")
+    refute App.Tools.read_only?("home_control")
+    refute App.Tools.read_only?("play_music")
   end
 
-  test "over cap WITH a name → top 20 by rank + a narrow note" do
-    many =
-      for i <- 1..30 do
-        %{
-          "entity_id" => "light.l#{i}",
-          "state" => "on",
-          "attributes" => %{"friendly_name" => "Ceiling Light #{i}"}
-        }
-      end
+  test "bridges, and no tool cache (the directory is live)" do
+    assert Tool.bridge("home_control") == ["On it.", "Sure — one sec.", "Doing that now."]
+    assert Tool.bridge("home_status") == ["Checking the house.", "One sec — looking."]
+    assert Tool.bridge("play_music") != []
 
-    stub_states_and_areas(many, ~s([]))
-
-    assert {:ok, %{entities: rows, count: 30, note: note}} =
-             Tool.execute("home_find", %{"name" => "light"}, @ctx)
-
-    assert length(rows) == 20
-    assert note =~ "closest"
+    Code.ensure_loaded!(Tool)
+    refute function_exported?(Tool, :cache_ttl, 1)
+    refute function_exported?(Tool, :cache_key, 2)
+    refute function_exported?(Tool, :cache_invalidates, 1)
   end
 
-  test "over cap with NO name → area×count breakdown, NOT rows" do
-    many =
-      for i <- 1..30 do
-        %{
-          "entity_id" => "light.l#{i}",
-          "state" => "on",
-          "attributes" => %{"friendly_name" => "Light #{i}"}
-        }
-      end
+  # ---- home_control: one call ----
 
-    pairs =
-      for i <- 1..30, do: ["light.l#{i}", if(rem(i, 2) == 0, do: "Kitchen", else: "Bedroom")]
+  test "\"gaming lights\" on → exactly one turn_on for the group" do
+    assert {:ok, r} = control(["gaming lights"], "on")
 
-    stub_states_and_areas(many, Jason.encode!(pairs))
+    assert [{"/api/services/light/turn_on", %{"entity_id" => ["light.gaming_room_lights"]}}] =
+             posts()
 
-    assert {:ok, result} = Tool.execute("home_find", %{"domain" => "light"}, @ctx)
-    assert result.count == 30
-    assert result.by_area["Kitchen"] == 15
-    assert result.by_area["Bedroom"] == 15
-    assert result.note =~ "too many"
-    refute Map.has_key?(result, :entities)
+    assert [%{name: "Gaming lights", entity_id: "light.gaming_room_lights", set: "on"}] = r.done
+    refute Map.has_key?(r, :note)
   end
 
-  test "home_find caches ~10s keyed on the normalized arg set" do
-    assert Tool.cache_ttl("home_find") == 10_000
+  test "set_color blue → rgb_color [0, 0, 255], and the result says what was set" do
+    assert {:ok, r} = control(["gaming lights"], "set_color", %{"color" => "blue"})
 
-    assert Tool.cache_key("home_find", %{"name" => " Kitchen "}) ==
-             Tool.cache_key("home_find", %{"name" => "kitchen"})
+    assert [
+             {"/api/services/light/turn_on",
+              %{"entity_id" => ["light.gaming_room_lights"], "rgb_color" => [0, 0, 255]}}
+           ] = posts()
+
+    assert [%{set: %{rgb_color: [0, 0, 255]}}] = r.done
   end
 
-  # ---- home_control (v1.1: single-entity state/1 + reports `set:`) ----
+  test "two targets in different domains → one call per domain" do
+    assert {:ok, r} = control(["gaming lights", "the fireplace"], "off")
 
-  # GET /api/states/<id> → the entity (404 if absent); POST service → notify the test pid.
-  defp stub_entity_and_service(entities) do
-    parent = self()
-    by_id = Map.new(entities, &{&1["entity_id"], &1})
+    assert posts() |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
+             ["/api/services/light/turn_off", "/api/services/switch/turn_off"]
 
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states/" <> id} ->
-          case Map.get(by_id, id) do
-            nil -> Plug.Conn.send_resp(conn, 404, "not found")
-            e -> Req.Test.json(conn, e)
-          end
-
-        {"POST", "/api/services/" <> _ = path} ->
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(parent, {:service_called, path, Jason.decode!(body)})
-          Req.Test.json(conn, [])
-      end
-    end)
+    assert r.done |> Enum.map(& &1.entity_id) |> Enum.sort() ==
+             ["light.gaming_room_lights", "switch.fireplace_switch"]
   end
 
-  @control_home [
-    %{
-      "entity_id" => "light.kitchen",
-      "state" => "on",
-      "attributes" => %{"friendly_name" => "Kitchen Light"}
-    },
-    %{
-      "entity_id" => "lock.front_door",
-      "state" => "locked",
-      "attributes" => %{"friendly_name" => "Front Door"}
-    },
-    %{
-      "entity_id" => "cover.garage_door",
-      "state" => "closed",
-      "attributes" => %{"friendly_name" => "Garage Door", "device_class" => "garage"}
-    },
-    %{
-      "entity_id" => "cover.blinds",
-      "state" => "open",
-      "attributes" => %{"friendly_name" => "Living Room Blinds"}
-    },
-    %{
-      "entity_id" => "climate.living",
-      "state" => "heat_cool",
-      "attributes" => %{
-        "friendly_name" => "Living Room Thermostat",
-        "target_temp_high" => 74,
-        "target_temp_low" => 70
-      }
-    },
-    %{
-      "entity_id" => "fan.bedroom",
-      "state" => "off",
-      "attributes" => %{"friendly_name" => "Bedroom Fan"}
-    }
-  ]
+  test "the same kind of action on several targets shares ONE call" do
+    assert {:ok, r} = control(["gaming lights", "hall nightlight"], "on")
 
-  test "declarations: home_control requires entity_id + action and lists the new actions" do
-    hc = Enum.find(Tool.declarations(), &(&1.name == "home_control"))
-    assert Enum.sort(hc.parameters.required) == ["action", "entity_id"]
-    assert "set_position" in hc.parameters.properties.action.enum
-    assert "set_speed" in hc.parameters.properties.action.enum
+    assert [{"/api/services/light/turn_on", %{"entity_id" => ids}}] = posts()
+    assert Enum.sort(ids) == ["light.gaming_room_lights", "light.hall_nightlight"]
+    assert length(r.done) == 2
   end
 
-  test "control uses state/1 (single GET) and reports what it set" do
-    stub_entity_and_service(@control_home)
+  test "\"night lights\" off → input_boolean.turn_off" do
+    assert {:ok, %{done: [_]}} = control(["night lights"], "off")
 
-    assert {:ok, %{done: "off", entity: "Kitchen Light", entity_id: "light.kitchen", set: %{}}} =
-             Tool.execute(
+    assert [
+             {"/api/services/input_boolean/turn_off",
+              %{"entity_id" => ["input_boolean.night_lights"]}}
+           ] =
+             posts()
+  end
+
+  test "an exact entity_id in state `unknown` is NOT offline: the call goes out" do
+    assert {:ok, %{done: [_]}} = control(["switch.govee_music_sync_box_power_switch"], "on")
+
+    assert [
+             {"/api/services/switch/turn_on",
+              %{"entity_id" => ["switch.govee_music_sync_box_power_switch"]}}
+           ] = posts()
+  end
+
+  test "dispatched through the registry (its own task), the calls still go out" do
+    ctx = %{session_id: "test", config: %App.Config{tools: [Tool]}}
+
+    assert {:ok, %{done: [_, _]}} =
+             App.Tools.execute(
                "home_control",
-               %{"entity_id" => "light.kitchen", "action" => "off"},
+               %{"targets" => ["gaming lights", "fireplace"], "action" => "on"},
+               ctx
+             )
+
+    assert length(posts()) == 2
+  end
+
+  test "a bare `target` string is accepted" do
+    assert {:ok, %{done: [%{entity_id: "switch.fireplace_switch"}]}} =
+             Tool.execute("home_control", %{"target" => "fireplace", "action" => "on"}, @ctx)
+
+    assert [{"/api/services/switch/turn_on", _}] = posts()
+  end
+
+  test "a number sent as a string still sets the value" do
+    assert {:ok, _} = control(["gaming lights"], "set_brightness", %{"value" => "50"})
+
+    assert [{"/api/services/light/turn_on", %{"brightness_pct" => 50}}] = posts()
+  end
+
+  # ---- home_control: honest outcomes ----
+
+  test "an offline (unavailable) target is never called and is named as offline" do
+    assert {:ok, r} = control(["pantry light"], "on")
+    assert posts() == []
+    assert r.offline == ["Pantry Lighy"]
+    refute Map.has_key?(r, :done)
+    assert r.note =~ "offline"
+  end
+
+  test "with several targets the reachable ones act and the offline ones are named" do
+    assert {:ok, r} = control(["pantry light", "fireplace"], "on")
+
+    assert [{"/api/services/switch/turn_on", %{"entity_id" => ["switch.fireplace_switch"]}}] =
+             posts()
+
+    assert [%{entity_id: "switch.fireplace_switch"}] = r.done
+    assert r.offline == ["Pantry Lighy"]
+  end
+
+  test "a room fans out to LIGHTS only — never the homelab outlets" do
+    assert {:ok, r} = control(["basement"], "off")
+    calls = posts()
+
+    assert calls != []
+    assert Enum.all?(calls, fn {path, _} -> path == "/api/services/light/turn_off" end)
+    ids = Enum.flat_map(calls, fn {_, body} -> body["entity_id"] end)
+    refute Enum.any?(ids, &String.starts_with?(&1, "switch."))
+    assert length(r.done) == 7
+    # the 3D printer's chamber light is the Basement's one offline light
+    assert r.offline == ["X1C_00M00A321800152 Chamber light"]
+    assert r.note =~ "only ever switch lights"
+    assert r.note =~ "offline"
+  end
+
+  test "the whole house: one call for every reachable light, the offline ones named" do
+    assert {:ok, r} = control(["all the lights"], "off")
+
+    assert [{"/api/services/light/turn_off", %{"entity_id" => ids}}] = posts()
+    assert "light.gaming_room_lights" in ids
+    refute "light.pantry_lighy" in ids
+    assert "Pantry Lighy" in r.offline
+  end
+
+  test "a lock is view-only: no call, view_only says so" do
+    assert {:ok, r} = control(["the front door lock"], "toggle")
+    assert posts() == []
+    assert r.view_only == ["U-Bolt Pro Z-Wave Smart Lock"]
+    refute Map.has_key?(r, :done)
+  end
+
+  test "a name that matches nothing → not_found, no call" do
+    assert {:ok, r} = control(["zorblax"], "on")
+    assert posts() == []
+    assert [%{target: "zorblax", close: []}] = r.not_found
+  end
+
+  test "an unsure match → ask with candidates, no call" do
+    assert {:ok, r} = control(["the bedroom thermostat"], "set_temperature", %{"value" => 68})
+    assert posts() == []
+
+    assert [%{target: "the bedroom thermostat", candidates: [c | _]}] = r.ask
+
+    assert %{name: "Living Room Thermostat", entity_id: "climate.living_room_thermostat"} = c
+    assert c.state == "heat_cool"
+
+    assert r.note ==
+             "Ask which one — name the top two or three, then call again with the exact entity_id."
+  end
+
+  test "a bare \"the lights\" → which_room, no call" do
+    assert {:ok, r} = control(["the lights"], "off")
+    assert posts() == []
+    assert "Basement" in r.which_room
+  end
+
+  test "an action the device can't do → cant with a plain-English why" do
+    on_line = fn dir ->
+      raw = Directory.state(dir, "light.pantry_lighy")
+      Directory.put_state(dir, "light.pantry_lighy", %{raw | "state" => "off"})
+    end
+
+    put_directory(on_line.(HomeFixture.directory()))
+
+    assert {:ok, r} = control(["pantry light"], "set_color", %{"color" => "blue"})
+    assert posts() == []
+    assert [%{name: "Pantry Lighy", why: why}] = r.cant
+    assert why =~ "only does brightness"
+
+    assert {:ok, r} = control(["fireplace"], "set_brightness", %{"value" => 40})
+    assert [%{name: "Fireplace Switch", why: why}] = r.cant
+    assert why =~ "switch"
+
+    assert {:ok, r} = control(["gaming lights"], "set_color", %{"color" => "blurple"})
+    assert [%{why: why}] = r.cant
+    assert why =~ "blurple"
+
+    assert {:ok, r} = control(["gaming lights"], "set_brightness")
+    assert [%{why: why}] = r.cant
+    assert why =~ "needs"
+    assert posts() == []
+  end
+
+  test "a failed service call → cant (the home hub had trouble), never a crash" do
+    stub(500)
+
+    assert {:ok, r} = control(["fireplace"], "on")
+    assert r.cant == [%{name: "Fireplace Switch", why: "the home hub had trouble"}]
+    refute Map.has_key?(r, :done)
+  end
+
+  test "missing targets or an unknown action → a guidance note, no call" do
+    assert {:ok, %{note: note}} = Tool.execute("home_control", %{"action" => "on"}, @ctx)
+    assert note =~ "targets"
+
+    assert {:ok, %{note: note}} = control(["fireplace"], "explode")
+    assert note =~ "explode"
+
+    assert {:ok, %{note: _}} = Tool.execute("home_control", %{"targets" => ["fireplace"]}, @ctx)
+
+    assert {:ok, %{note: _}} =
+             Tool.execute("home_control", %{"targets" => [42], "action" => "on"}, @ctx)
+
+    assert posts() == []
+  end
+
+  # ---- the directory isn't there ----
+
+  test "directory not loaded → every tool says it can't reach the hub, no HTTP call" do
+    put_directory(fn -> {:error, :not_loaded} end)
+
+    for {name, args} <- [
+          {"home_control", %{"targets" => ["fireplace"], "action" => "on"}},
+          {"home_status", %{"targets" => ["fireplace"]}},
+          {"home_status", %{}},
+          {"play_music", %{"query" => "jazz", "player" => "kitchen"}}
+        ] do
+      assert Tool.execute(name, args, @ctx) == {:ok, %{error: @unreachable}}, name
+    end
+
+    assert requests() == []
+  end
+
+  test "an unconfigured hub says so" do
+    put_directory(fn -> {:error, :not_configured} end)
+
+    assert {:ok, %{error: "the home hub isn't configured on this server"}} =
+             control(["fireplace"], "on")
+  end
+
+  # ---- home_status ----
+
+  test "home_status reads from the directory: a row per device, no HTTP" do
+    assert {:ok, %{devices: [row]} = r} =
+             Tool.execute("home_status", %{"targets" => ["fireplace"]}, @ctx)
+
+    assert %{entity_id: "switch.fireplace_switch", name: "Fireplace Switch", state: "off"} = row
+    assert row.area == "Living Room"
+    refute Map.has_key?(row, :offline)
+    refute Map.has_key?(r, :as_of)
+    assert requests() == []
+  end
+
+  test "home_status flags an offline device" do
+    assert {:ok, %{devices: [row]}} =
+             Tool.execute("home_status", %{"targets" => ["pantry light"]}, @ctx)
+
+    assert %{entity_id: "light.pantry_lighy", state: "unavailable", offline: true} = row
+  end
+
+  test "home_status filters by state" do
+    assert {:ok, %{devices: rows}} =
+             Tool.execute(
+               "home_status",
+               %{"targets" => ["all the lights"], "state" => "on"},
                @ctx
              )
 
-    assert_received {:service_called, "/api/services/light/turn_off",
-                     %{"entity_id" => "light.kitchen"}}
+    assert rows != []
+    assert Enum.all?(rows, &(&1.state == "on"))
+    assert "light.gaming_room_lights" in Enum.map(rows, & &1.entity_id)
+
+    assert {:ok, %{devices: [], note: note}} =
+             Tool.execute("home_status", %{"targets" => ["fireplace"], "state" => "on"}, @ctx)
+
+    assert note =~ "on"
   end
 
-  test "heat_cool thermostat: sets the band and reports it (C2)" do
-    stub_entity_and_service(@control_home)
-
-    assert {:ok, %{done: "set_temperature", set: %{target_temp_low: 70, target_temp_high: 74}}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "climate.living", "action" => "set_temperature", "value" => 72},
-               @ctx
-             )
-
-    assert_received {:service_called, "/api/services/climate/set_temperature", body}
-
-    assert body == %{
-             "entity_id" => "climate.living",
-             "target_temp_low" => 70,
-             "target_temp_high" => 74
-           }
+  test "home_status with no targets → the overview: rooms, what's on, what's open" do
+    assert {:ok, r} = Tool.execute("home_status", %{}, @ctx)
+    assert "Basement" in r.rooms
+    assert "Gaming lights" in r.on
+    # a group that's on stands for its bulbs
+    refute "Gaming room light 1" in r.on
+    assert is_list(r.open)
+    assert length(r.on) <= 25
+    refute Map.has_key?(r, :as_of)
   end
 
-  test "cover set_position + fan set_speed reach the new services and report `set:`" do
-    stub_entity_and_service(@control_home)
+  test "home_status says the state is last-known when the house connection is down" do
+    put_directory(Directory.set_connected(HomeFixture.directory(), false))
 
-    assert {:ok, %{done: "set_position", set: %{position: 60}}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "cover.blinds", "action" => "set_position", "value" => 60},
-               @ctx
-             )
+    assert {:ok, %{as_of: as_of}} = Tool.execute("home_status", %{}, @ctx)
+    assert as_of =~ "ago — the house connection is down"
 
-    assert_received {:service_called, "/api/services/cover/set_cover_position",
-                     %{"entity_id" => "cover.blinds", "position" => 60}}
-
-    assert {:ok, %{done: "set_speed", set: %{percentage: 30}}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "fan.bedroom", "action" => "set_speed", "value" => 30},
-               @ctx
-             )
-
-    assert_received {:service_called, "/api/services/fan/set_percentage",
-                     %{"entity_id" => "fan.bedroom", "percentage" => 30}}
+    assert {:ok, %{devices: [_], as_of: _}} =
+             Tool.execute("home_status", %{"targets" => ["fireplace"]}, @ctx)
   end
 
-  test "SAFETY: lock + garage cover blocked (benign note, NO service call); plain blinds still work" do
-    stub_entity_and_service(@control_home)
-
-    assert {:ok, %{note: n1}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "lock.front_door", "action" => "on"},
-               @ctx
-             )
-
-    assert n1 =~ "view-only"
-
-    assert {:ok, %{note: n2}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "cover.garage_door", "action" => "on"},
-               @ctx
-             )
-
-    assert n2 =~ "view-only"
-    refute_received {:service_called, _, _}
-
-    assert {:ok, %{done: "on"}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "cover.blinds", "action" => "on"},
-               @ctx
-             )
-
-    assert_received {:service_called, "/api/services/cover/open_cover",
-                     %{"entity_id" => "cover.blinds"}}
+  test "home_status passes ask / not_found through like home_control" do
+    assert {:ok, r} = Tool.execute("home_status", %{"targets" => ["zorblax"]}, @ctx)
+    assert [%{target: "zorblax"}] = r.not_found
   end
 
-  test "unknown entity_id (404) → a no-device note, no service call" do
-    stub_entity_and_service(@control_home)
+  # ---- logging (spec §2.7) ----
 
-    assert {:ok, %{note: note}} =
-             Tool.execute("home_control", %{"entity_id" => "light.ghost", "action" => "on"}, @ctx)
+  test "one resolve line per target and one control line per call" do
+    prev = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: prev) end)
 
-    assert note =~ "no device"
-    refute_received {:service_called, _, _}
+    log = capture_log(fn -> control(["gaming lights", "pantry light"], "on") end)
+
+    assert log =~ ~s([home] resolve "gaming lights" → light.gaming_room_lights)
+    assert log =~ ~s([home] resolve "pantry light" → light.pantry_lighy)
+    assert log =~ "offline"
+    assert log =~ ~r/\[home\] control light\.gaming_room_lights light\.turn_on %\{\} ok in \d+ms/
   end
 
-  test "unknown action + missing value → guidance notes" do
-    stub_entity_and_service(@control_home)
+  # ---- the silent no-op watch (spec §2.6) ----
 
-    assert {:ok, %{note: unknown}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "light.kitchen", "action" => "defenestrate"},
-               @ctx
-             )
+  test "a device that never reports the new state is logged, without touching the answer" do
+    Application.put_env(:app, :home_assistant_watch_ms, 40)
+    on_exit(fn -> Application.put_env(:app, :home_assistant_watch_ms, 0) end)
 
-    assert unknown =~ "actions:"
+    log =
+      capture_log(fn ->
+        # the fixture's fireplace stays "off" no matter what we ask
+        assert {:ok, %{done: [_]}} = control(["fireplace"], "on")
+        Process.sleep(250)
+      end)
 
-    assert {:ok, %{note: needs}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "climate.living", "action" => "set_temperature"},
-               @ctx
-             )
-
-    assert needs =~ "value"
-    refute_received {:service_called, _, _}
+    assert log =~ ~s([home] switch.fireplace_switch did not report "on" within 40ms)
   end
 
-  test "malformed args are nil-safe (no crash, a guidance note)" do
-    assert {:ok, %{note: _}} = Tool.execute("home_control", %{}, @ctx)
-    assert {:ok, %{note: _}} = Tool.execute("home_control", %{"action" => "on"}, @ctx)
+  test "watch/3 returns quietly once the directory shows the state" do
+    on = fn dir ->
+      raw = Directory.state(dir, "switch.fireplace_switch")
+      Directory.put_state(dir, "switch.fireplace_switch", %{raw | "state" => "on"})
+    end
+
+    put_directory(on.(HomeFixture.directory()))
+    assert Tool.watch(["switch.fireplace_switch"], "on", 40) == :ok
+
+    log =
+      capture_log(fn ->
+        assert {:missed, ["switch.fireplace_switch"]} =
+                 Tool.watch(["switch.fireplace_switch"], "off", 40)
+      end)
+
+    assert log =~ ~s([home] switch.fireplace_switch did not report "off" within 40ms)
   end
 
-  test "a failed service call flattens to an error note" do
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states/light.kitchen"} -> Req.Test.json(conn, hd(@control_home))
-        {"POST", _} -> Plug.Conn.send_resp(conn, 500, "boom")
-      end
-    end)
-
-    assert {:ok, %{error: _}} =
-             Tool.execute(
-               "home_control",
-               %{"entity_id" => "light.kitchen", "action" => "on"},
-               @ctx
-             )
-  end
-
-  test "home_control invalidates both read caches; no ttl; has a bridge" do
-    assert Enum.sort(Tool.cache_invalidates("home_control")) == ["home_find", "home_index"]
-    assert Tool.cache_invalidates("home_find") == []
-    assert Tool.cache_ttl("home_control") == nil
-    assert Tool.bridge("home_control") != []
-  end
-
-  # ---- play_music (v1.2) ----
+  # ---- play_music (players come from the directory) ----
 
   @ma_players [
     %{
@@ -474,25 +486,11 @@ defmodule App.Tools.HomeAssistantTest do
     }
   ]
 
-  defp stub_states_and_service(entities) do
-    parent = self()
-
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} ->
-          Req.Test.json(conn, entities)
-
-        {"POST", "/api/services/music_assistant/play_media"} ->
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(parent, {:play_media_called, Jason.decode!(body)})
-          Req.Test.json(conn, [])
-      end
-    end)
-  end
+  defp with_states(states),
+    do: put_directory(Directory.build(%{states: states}, ~U[2026-10-19 20:00:00Z]))
 
   test "declarations include play_music (query required; player/media_type/enqueue optional)" do
-    pm = Enum.find(Tool.declarations(), &(&1.name == "play_music"))
-    assert pm
+    pm = decl("play_music")
     assert pm.parameters.required == ["query"]
 
     for k <- [:query, :player, :media_type, :enqueue] do
@@ -503,8 +501,18 @@ defmodule App.Tools.HomeAssistantTest do
     assert "replace" in pm.parameters.properties.enqueue.enum
   end
 
-  test "play_music posts entity_id + media_id + media_type + enqueue to music_assistant/play_media" do
-    stub_states_and_service(@ma_players)
+  test "play_music on the household fixture finds the kitchen's Music Assistant player" do
+    assert {:ok, %{playing: "jazz", player: "Sonos (kitchen)"}} =
+             Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
+
+    assert [
+             {"/api/services/music_assistant/play_media",
+              %{"entity_id" => "media_player.sonos_kitchen", "media_id" => "jazz"}}
+           ] = posts()
+  end
+
+  test "play_music posts entity_id + media_id + media_type + enqueue" do
+    with_states(@ma_players)
 
     assert {:ok, %{playing: "The Beatles", player: "Sonos Kitchen", enqueue: "replace"}} =
              Tool.execute(
@@ -513,17 +521,19 @@ defmodule App.Tools.HomeAssistantTest do
                @ctx
              )
 
-    assert_received {:play_media_called,
-                     %{
-                       "entity_id" => "media_player.sonos_kitchen",
-                       "media_id" => "The Beatles",
-                       "media_type" => "artist",
-                       "enqueue" => "replace"
-                     }}
+    assert [
+             {"/api/services/music_assistant/play_media",
+              %{
+                "entity_id" => "media_player.sonos_kitchen",
+                "media_id" => "The Beatles",
+                "media_type" => "artist",
+                "enqueue" => "replace"
+              }}
+           ] = posts()
   end
 
   test "media_type omitted from the request body when not given; enqueue passed through" do
-    stub_states_and_service(@ma_players)
+    with_states(@ma_players)
 
     assert {:ok, %{enqueue: "add"}} =
              Tool.execute(
@@ -532,105 +542,73 @@ defmodule App.Tools.HomeAssistantTest do
                @ctx
              )
 
-    assert_received {:play_media_called, body}
+    assert [{_, body}] = posts()
     refute Map.has_key?(body, "media_type")
     assert body["enqueue"] == "add"
   end
 
   test "no player name + a single MA player → plays there without asking" do
-    stub_states_and_service([hd(@ma_players)])
+    with_states([hd(@ma_players)])
 
     assert {:ok, %{player: "Sonos Kitchen"}} =
              Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
 
-    assert_received {:play_media_called, %{"entity_id" => "media_player.sonos_kitchen"}}
+    assert [{_, %{"entity_id" => "media_player.sonos_kitchen"}}] = posts()
   end
 
   test "no player name + multiple MA players → asks which room, no service call" do
-    stub_states_and_service(@ma_players)
+    with_states(@ma_players)
 
     assert {:ok, %{note: note}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
     assert note =~ "which room"
-    refute_received {:play_media_called, _}
+    assert posts() == []
   end
 
   test "player name with no match → a note listing the real players, no service call" do
-    stub_states_and_service(@ma_players)
+    with_states(@ma_players)
 
     assert {:ok, %{note: note}} =
-             Tool.execute(
-               "play_music",
-               %{"query" => "jazz", "player" => "garage"},
-               @ctx
-             )
+             Tool.execute("play_music", %{"query" => "jazz", "player" => "garage"}, @ctx)
 
     assert note =~ "garage"
     assert note =~ "Sonos Kitchen"
-    refute_received {:play_media_called, _}
+    assert posts() == []
   end
 
-  test "no MA players configured → a graceful note, no service call" do
-    # a states list with zero active_queue entities (only the native, non-MA Sonos entity)
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} ->
-          Req.Test.json(conn, [
-            %{
-              "entity_id" => "media_player.office",
-              "state" => "idle",
-              "attributes" => %{"friendly_name" => "Office"}
-            }
-          ])
-
-        {"POST", "/api/services/music_assistant/play_media"} ->
-          flunk("should never call play_media with no MA players")
-      end
-    end)
+  test "no MA players → a graceful note, no service call" do
+    with_states([List.last(@ma_players)])
 
     assert {:ok, %{note: note}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
     assert note =~ "music players"
+    assert posts() == []
+  end
+
+  test "an offline player is never called" do
+    [kitchen | _] = @ma_players
+    with_states([%{kitchen | "state" => "unavailable"}])
+
+    assert {:ok, %{offline: ["Sonos Kitchen"]}} =
+             Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
+
+    assert posts() == []
   end
 
   test "a play_media failure flattens to an error note" do
-    Req.Test.stub(HaToolStub, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/states"} ->
-          Req.Test.json(conn, @ma_players)
-
-        {"POST", "/api/services/music_assistant/play_media"} ->
-          Plug.Conn.send_resp(conn, 500, "boom")
-      end
-    end)
+    with_states(@ma_players)
+    stub(500)
 
     assert {:ok, %{error: err}} =
-             Tool.execute(
-               "play_music",
-               %{"query" => "jazz", "player" => "kitchen"},
-               @ctx
-             )
+             Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
 
     assert err =~ "music service"
   end
 
-  test "an unreachable hub flattens to an error note (no states fetched)" do
-    Req.Test.stub(HaToolStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
-    assert {:ok, %{error: err}} = Tool.execute("play_music", %{"query" => "jazz"}, @ctx)
-    assert err =~ "home hub"
-  end
-
   test "malformed args (no query) → a guidance note, no HTTP call" do
-    Req.Test.stub(HaToolStub, fn _conn -> flunk("play_music must not call HA with no query") end)
-
     assert {:ok, %{note: note}} = Tool.execute("play_music", %{}, @ctx)
     assert note =~ "query"
 
     assert {:ok, %{note: _}} = Tool.execute("play_music", %{"query" => ""}, @ctx)
     assert {:ok, %{note: _}} = Tool.execute("play_music", %{"query" => 42}, @ctx)
-  end
-
-  test "play_music has a bridge and no cache" do
-    assert Tool.bridge("play_music") != []
-    assert Tool.cache_ttl("play_music") == nil
-    assert Tool.cache_invalidates("play_music") == []
+    assert requests() == []
   end
 end
