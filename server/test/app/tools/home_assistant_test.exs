@@ -290,6 +290,76 @@ defmodule App.Tools.HomeAssistantTest do
     refute Map.has_key?(r, :done)
   end
 
+  test "\"unlock the front door\" is view-only: no call" do
+    assert {:ok, r} = control(["unlock the front door"], "toggle")
+    assert posts() == []
+    assert r.view_only == ["U-Bolt Pro Z-Wave Smart Lock"]
+    assert r.note =~ "view-only"
+    refute Map.has_key?(r, :done)
+  end
+
+  # ---- home_control: media actions land on media players only ----
+
+  defp playing(ids, state \\ "playing") do
+    dir =
+      Enum.reduce(ids, HomeFixture.directory(), fn id, d ->
+        Directory.put_state(d, id, %{Directory.state(d, id) | "state" => state})
+      end)
+
+    put_directory(dir)
+  end
+
+  for target <- ["kitchen speaker", "kitchen", "the kitchen speaker"] do
+    @target target
+    test "pause #{inspect(target)} → one media_pause on the kitchen's player, no lights" do
+      assert {:ok, r} = control([@target], "pause")
+
+      assert [
+               {"/api/services/media_player/media_pause",
+                %{"entity_id" => ["media_player.sonos_kitchen"]}}
+             ] = posts()
+
+      assert [%{entity_id: "media_player.sonos_kitchen", set: "pause"}] = r.done
+      refute Map.has_key?(r, :cant)
+    end
+  end
+
+  test "pause \"the music\" with one player playing → that player, lights untouched" do
+    playing(["media_player.sonos_kitchen"])
+    assert {:ok, r} = control(["the music"], "pause")
+
+    assert [
+             {"/api/services/media_player/media_pause",
+              %{"entity_id" => ["media_player.sonos_kitchen"]}}
+           ] = posts()
+
+    assert [%{name: "Sonos (kitchen)"}] = r.done
+  end
+
+  test "pause \"the music\" with nothing playing → no call, and no music-sync lights offered" do
+    assert {:ok, r} = control(["the music"], "pause")
+    assert posts() == []
+    refute Map.has_key?(r, :ask)
+    assert [%{target: "the music"}] = r.not_found
+  end
+
+  test "volume on a room sets its speaker's volume, never its lights" do
+    assert {:ok, _r} = control(["the basement"], "volume_set", %{"value" => 30})
+
+    assert [
+             {"/api/services/media_player/volume_set",
+              %{"entity_id" => ["media_player.sonos_basement"], "volume_level" => 0.3}}
+           ] = posts()
+  end
+
+  test "a media action on a named light is an honest can't, not \"nothing goes by that name\"" do
+    assert {:ok, r} = control(["the gaming lights"], "pause")
+    assert posts() == []
+    assert [%{name: "Gaming lights", why: why}] = r.cant
+    assert why =~ "light"
+    refute Map.has_key?(r, :not_found)
+  end
+
   test "a name that matches nothing → not_found, no call" do
     assert {:ok, r} = control(["zorblax"], "on")
     assert posts() == []
@@ -455,6 +525,19 @@ defmodule App.Tools.HomeAssistantTest do
     assert note =~ "on"
   end
 
+  test "home_status's state filter ignores case and spaces (\"On\" is \"on\")" do
+    assert {:ok, %{devices: rows} = r} =
+             Tool.execute(
+               "home_status",
+               %{"targets" => ["all the lights"], "state" => " On "},
+               @ctx
+             )
+
+    assert rows != []
+    assert Enum.all?(rows, &(&1.state == "on"))
+    refute Map.has_key?(r, :note)
+  end
+
   test "home_status with no targets → the overview: rooms, what's on, what's open" do
     assert {:ok, r} = Tool.execute("home_status", %{}, @ctx)
     assert "Basement" in r.rooms
@@ -462,8 +545,14 @@ defmodule App.Tools.HomeAssistantTest do
     # a group that's on stands for its bulbs
     refute "Gaming room light 1" in r.on
     assert is_list(r.open)
+    assert r.playing == []
     assert length(r.on) <= 25
     refute Map.has_key?(r, :as_of)
+  end
+
+  test "the overview names what's playing" do
+    playing(["media_player.sonos_kitchen"])
+    assert {:ok, %{playing: ["Sonos (kitchen)"]}} = Tool.execute("home_status", %{}, @ctx)
   end
 
   test "home_status says the state is last-known when the house connection is down" do

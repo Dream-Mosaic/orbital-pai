@@ -11,18 +11,28 @@ defmodule App.HomeAssistant.Resolve do
   ## The order of questions
 
     1. An exact `entity_id` (Henry picking from a candidate list) passes straight through.
-    2. House words ("all the lights", "everything") fan out. A bare "the lights" asks which room.
-    3. `:control` only: a type word naming a sensitive domain (lock, alarm, garage door) gets the
-       view-only answer, whatever else the phrase says. That path can only refuse, so it's loose.
+    2. House words ("all the lights", "everything", "the whole house") fan out. A bare "the
+       lights" asks which room.
+    3. `:control` only: a type word naming a sensitive domain (lock, unlock, alarm, garage door)
+       gets the view-only answer, whatever else the phrase says. That path can only refuse, so
+       it's loose.
     4. Names: act on a clear winner.
     5. Rooms: a phrase that is a room's name fans out to its lights (`:control`), or to everything
        in it (`:status`).
-    6. Type words ("the thermostat"): the one entity of that type, if there is exactly one and no
-       other word in the phrase fails to match it.
+    6. Type words ("the thermostat", "the kitchen speaker"): the one entity of that type that
+       every other word of the phrase matches (by name or room).
     7. Otherwise nothing acts. The candidates come back for Henry to ask about.
 
   `:control` only ever considers controllable entities, plus sensitive ones so it can refuse them.
   Sensors are never control targets. `:status` considers everything in view.
+
+  `:media` is `:control` for a media action (play, pause, next, volume_set): it never fans out
+  (a room's lights can't pause) and looks among media players only — names, then the speaker /
+  TV type words, then "the music" / "it" = the one player playing (or, with none playing, the
+  one paused), then the one Music Assistant player whose name or room has every word ("the
+  kitchen" → "Sonos (kitchen)", the players `play_music` uses). A clearly named non-player
+  passes through so the tool can say it can't do that, rather than claim nothing goes by that
+  name.
 
   ## Scoring
 
@@ -39,6 +49,7 @@ defmodule App.HomeAssistant.Resolve do
 
   alias App.HomeAssistant.Directory
   alias App.HomeAssistant.Directory.Entry
+  alias App.HomeAssistant.Media
 
   @threshold 0.85
   @gap 0.1
@@ -56,16 +67,21 @@ defmodule App.HomeAssistant.Resolve do
   @light_nouns ~w(light lamp)
   # Words that don't change which room is meant ("all the lights in the kitchen").
   @room_filler ~w(all every in)
-  # "all the lights in the house" is "all the lights".
-  @house_filler ~w(in house home whole entire)
-  # Sharing only these with a name doesn't make it a "did you mean".
-  @generic ~w(light lamp switch plug power)
+  # "all the lights in the house" is "all the lights"; "the whole house" alone is the house.
+  @house_filler ~w(in at house home whole entire)
+  @house_nouns ~w(house home)
+  # Sharing only these with a name doesn't make it a "did you mean" ("the dining room" is not
+  # the Living Room Thermostat).
+  @generic ~w(light lamp switch plug power room)
+  # "the music", "this song", "it": whatever is playing (`:media`). Matched before plurals fold.
+  @music_words ~w(music song songs track tracks tune it this that)
 
   # {words, kind}. The first hit wins, so the sensitive kinds come first (a phrase that names one
   # must refuse) and longer phrases before their tails.
   @types [
     {~w(door lock), :lock},
     {~w(deadbolt), :lock},
+    {~w(unlock), :lock},
     {~w(lock), :lock},
     {~w(alarm), :alarm},
     {~w(garage door), :garage},
@@ -74,7 +90,10 @@ defmodule App.HomeAssistant.Resolve do
     {~w(blind), :blinds},
     {~w(shade), :blinds},
     {~w(curtain), :blinds},
-    {~w(fan), :fan}
+    {~w(fan), :fan},
+    {~w(speaker), :speaker},
+    {~w(tv), :tv},
+    {~w(television), :tv}
   ]
   # Bare "garage" is a room too, so it's the door only as the last word ("open the garage") and
   # only when no light noun is about ("garage lights", "lights in the garage" are the room).
@@ -82,7 +101,7 @@ defmodule App.HomeAssistant.Resolve do
   @sensitive_kinds [:lock, :alarm, :garage]
   @kind_domains %{lock: "lock", alarm: "alarm_control_panel", climate: "climate", fan: "fan"}
 
-  @type how :: :entity_id | :name | :alias | :room | :house | :type
+  @type how :: :entity_id | :name | :alias | :room | :house | :type | :player | :playing
   @type result ::
           {:ok, [Entry.t()], how}
           | {:ambiguous, [Entry.t()]}
@@ -92,27 +111,34 @@ defmodule App.HomeAssistant.Resolve do
 
   @doc """
   Resolve one target phrase. `{:ambiguous, es}` carries at most 5 candidates and `{:none, es}`
-  at most 3 close matches, best first. `{:sensitive, es}` (`:control` only) means view-only.
+  at most 3 close matches, best first. `{:sensitive, es}` (`:control`, `:media`) means view-only.
   """
-  @spec resolve(Directory.t(), String.t(), :control | :status) :: result()
+  @spec resolve(Directory.t(), String.t(), :control | :status | :media) :: result()
   def resolve(%Directory{} = dir, phrase, mode)
-      when is_binary(phrase) and mode in [:control, :status] do
+      when is_binary(phrase) and mode in [:control, :status, :media] do
     id = String.trim(phrase)
 
     if Regex.match?(~r/^[a-z_]+\.[a-z0-9_]+$/, id),
       do: by_entity_id(dir, id, mode),
-      else: by_words(dir, %{tokens: tokens(phrase), plural: plural_words(phrase)}, mode)
+      else:
+        by_words(
+          dir,
+          %{tokens: tokens(phrase), plural: plural_words(phrase), words: words(phrase)},
+          mode
+        )
   end
 
   defp by_entity_id(dir, id, mode) do
     case Directory.get(dir, id) do
       nil -> {:none, []}
-      %Entry{class: :sensitive_read_only} = e when mode == :control -> {:sensitive, [e]}
+      %Entry{class: :sensitive_read_only} = e when mode != :status -> {:sensitive, [e]}
       e -> {:ok, [e], :entity_id}
     end
   end
 
   defp by_words(_dir, %{tokens: []}, _mode), do: {:none, []}
+
+  defp by_words(dir, q, :media), do: sensitive(dir, q) || media(dir, q)
 
   defp by_words(dir, q, mode) do
     house(dir, q, mode) || which_room(dir, q) || (mode == :control && sensitive(dir, q)) ||
@@ -137,11 +163,17 @@ defmodule App.HomeAssistant.Resolve do
 
   defp house(dir, q, mode) do
     case Enum.reject(q.tokens, &(&1 in @house_filler)) do
-      ["everything"] when mode == :status -> {:ok, fan_out(Directory.entries(dir)), :house}
-      t when t in [~w(everything), ~w(all light), ~w(every light)] -> {:ok, lights(dir), :house}
+      # Nothing but house words ("the whole house", "at home"), with a house noun among them.
+      [] -> if Enum.any?(q.tokens, &(&1 in @house_nouns)), do: whole_house(dir, mode)
+      ["everything"] -> whole_house(dir, mode)
+      t when t in [~w(all light), ~w(every light)] -> {:ok, lights(dir), :house}
       _ -> nil
     end
   end
+
+  # Lights only for control (the same rule as rooms); everything in view for status.
+  defp whole_house(dir, :status), do: {:ok, fan_out(Directory.entries(dir)), :house}
+  defp whole_house(dir, _control), do: {:ok, lights(dir), :house}
 
   # Henry doesn't know which room the speaker is in, so a bare "the lights" doesn't fan out.
   # Read before any fan-out: groups have no area, so dropping their members would lose rooms.
@@ -195,7 +227,8 @@ defmodule App.HomeAssistant.Resolve do
   end
 
   # Exactly one entity of the type, and (in :control) every other word matches its name or room.
-  # "the bedroom thermostat" doesn't act on the living room's: Henry confirms instead.
+  # "the bedroom thermostat" doesn't act on the living room's: Henry confirms instead. With
+  # several of the type, the one that every other word matches acts ("the kitchen speaker").
   defp typed(dir, pool, q, mode) do
     with {kind, rest} <- type_word(q.tokens),
          [_ | _] = es <- Enum.filter(pool, &kind?(dir, &1, kind)) do
@@ -206,7 +239,10 @@ defmodule App.HomeAssistant.Resolve do
             else: {:ambiguous, [e]}
 
         several ->
-          {:ambiguous, Enum.take(several, 5)}
+          case Enum.filter(several, &(unmatched_words(&1, rest) == [])) do
+            [e] -> ok(%{entry: e, how: :type}, mode)
+            _ -> {:ambiguous, Enum.take(several, 5)}
+          end
       end
     else
       _ -> nil
@@ -235,7 +271,12 @@ defmodule App.HomeAssistant.Resolve do
 
   defp kind?(dir, e, :garage), do: e.domain == "cover" and device_class(dir, e) == "garage"
   defp kind?(dir, e, :blinds), do: e.domain == "cover" and device_class(dir, e) != "garage"
+  defp kind?(dir, e, :tv), do: e.domain == "media_player" and tv?(dir, e)
+  defp kind?(dir, e, :speaker), do: e.domain == "media_player" and not tv?(dir, e)
   defp kind?(_dir, e, kind), do: e.domain == Map.fetch!(@kind_domains, kind)
+
+  defp tv?(dir, e),
+    do: device_class(dir, e) == "tv" or Enum.any?(tokens(e.name), &(&1 in ~w(tv television)))
 
   defp device_class(dir, e),
     do: get_in(Directory.state(dir, e.entity_id), ["attributes", "device_class"])
@@ -244,6 +285,60 @@ defmodule App.HomeAssistant.Resolve do
     known = Enum.flat_map([e.name, e.area || "" | e.aliases], &tokens/1)
     elem(score(rest, known), 1)
   end
+
+  # -- media (play, pause, next, volume_set) --
+
+  defp media(dir, q) do
+    pool = Enum.filter(pool(dir, :control), &(&1.domain == "media_player"))
+    ranked = rank(dir, pool, q, nil)
+
+    named(ranked, q, nil, :control) || typed(dir, pool, q, :control) || playing(dir, q) ||
+      player(dir, pool, q) || not_a_player(dir, q) || leftovers(ranked, q)
+  end
+
+  # Among the Music Assistant players (the ones `play_music` plays on), the ONE whose name, room
+  # or aliases account for every word: "the kitchen" → "Sonos (kitchen)". Whole words, not
+  # substrings ("it" is inside "kitchen"), and several is a question, never a guess.
+  defp player(dir, pool, q) do
+    ma = dir |> Directory.raw_states() |> Media.ma_players() |> MapSet.new(& &1.entity_id)
+
+    case Enum.filter(
+           pool,
+           &(MapSet.member?(ma, &1.entity_id) and
+               unmatched_words(&1, q.tokens) == [])
+         ) do
+      [e] -> {:ok, [e], :player}
+      _ -> nil
+    end
+  end
+
+  # "the music" / "this song" / "it": the one player that's playing; with none playing, the one
+  # that's paused ("resume the music").
+  defp playing(dir, q) do
+    if Enum.all?(q.words, &(&1 in @music_words)) do
+      players = for e <- pool(dir, :control), e.domain == "media_player", do: e
+
+      Enum.find_value(["playing", "paused"], fn state ->
+        case Enum.filter(players, &(state_of(dir, &1) == state)) do
+          [e] -> {:ok, [e], :playing}
+          _ -> nil
+        end
+      end)
+    end
+  end
+
+  # A clear winner that isn't a player (a named light, the thermostat) goes through, so the tool
+  # answers "can't pause a light" instead of "nothing goes by that name". Never a room's or the
+  # house's fan-out.
+  defp not_a_player(dir, q) do
+    case by_name_or_place(dir, q, :control) do
+      {:ok, [_], how} = one when how in [:name, :alias, :type] -> one
+      {:sensitive, _} = refused -> refused
+      _ -> nil
+    end
+  end
+
+  defp state_of(dir, e), do: get_in(Directory.state(dir, e.entity_id) || %{}, ["state"])
 
   # -- names --
 

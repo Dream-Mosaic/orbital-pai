@@ -44,6 +44,7 @@ defmodule App.HomeAssistant.ResolveTest do
         {"the thermostat", :control, {:ids, ["climate.living_room_thermostat"]}},
         {"the bedroom thermostat", :control, {:ambiguous, ["climate.living_room_thermostat"]}},
         {"the front door lock", :control, :sensitive_some},
+        {"unlock the front door", :control, :sensitive_some},
         {"the garage door", :control, :sensitive_some},
         {"the alarm", :control, :sensitive},
         {"the garage door", :status, :one},
@@ -51,7 +52,33 @@ defmodule App.HomeAssistant.ResolveTest do
         {"Arbol MaXtreme", :control, {:ids, ["media_player.arbol_maxtreme_2"]}},
         {"light.hall_nightlight", :control, {:one, :entity_id}},
         {"light.not_a_thing", :control, :none},
-        {"zorblax", :control, :none}
+        {"zorblax", :control, :none},
+        # A room with no lights of its own is a "did you mean" on its own words, never on "room".
+        {"the dining room", :control, {:close_without, "climate.living_room_thermostat"}},
+        # A phrase of nothing but house words is the house: lights only for control.
+        {"the whole house", :control, :house_lights},
+        {"house", :control, :house_lights},
+        {"all the lights at home", :control, :house_lights},
+        {"everything at home", :control, :house_lights},
+        {"the house", :status, :house_everything},
+        # Speaker / TV type words: one entity of the type covering every other word acts.
+        {"kitchen speaker", :control, {:ids, ["media_player.sonos_kitchen"]}},
+        {"the basement speaker", :control, {:ids, ["media_player.sonos_basement"]}},
+        {"the tv", :status, {:ids, ["media_player.vizio_tv_3965_television"]}},
+        {"the speakers", :control, :ambiguous},
+        # Media actions (:media) land on media players only — a room never fans out to lights.
+        {"kitchen speaker", :media, {:ids, ["media_player.sonos_kitchen"]}},
+        {"kitchen", :media, {:ids, ["media_player.sonos_kitchen"]}},
+        {"the basement", :media, {:ids, ["media_player.sonos_basement"]}},
+        {"sonos", :media, :ambiguous_media},
+        # Nothing playing in the snapshot: "the music" is no one, and never the music-sync lights.
+        {"the music", :media, :none},
+        # Whole words, never substrings: "it" is inside "kitchen" but names nothing.
+        {"it", :media, :none},
+        # A clearly named non-player passes through, so the tool can say it can't do that.
+        {"the gaming lights", :media, {:ids, ["light.gaming_room_lights"]}},
+        {"unlock the front door", :media, :sensitive_some},
+        {"media_player.sonos_kitchen", :media, {:one, :entity_id}}
       ] do
     @phrase phrase
     @mode mode
@@ -70,6 +97,39 @@ defmodule App.HomeAssistant.ResolveTest do
 
     assert {:ok, es, :alias} = Resolve.resolve(dir, "snack closet light", :control)
     assert ids(es) == ["light.pantry_lighy"]
+  end
+
+  describe "\"the music\" (:media)" do
+    defp with_states(dir, states) do
+      Enum.reduce(states, dir, fn {id, state}, d ->
+        Directory.put_state(d, id, %{Directory.state(d, id) | "state" => state})
+      end)
+    end
+
+    test "acts on the one player that's playing", %{dir: dir} do
+      dir = with_states(dir, [{"media_player.sonos_kitchen", "playing"}])
+
+      for phrase <- ["the music", "music", "this song", "it"] do
+        assert {:ok, [e], :playing} = Resolve.resolve(dir, phrase, :media)
+        assert e.entity_id == "media_player.sonos_kitchen"
+      end
+    end
+
+    test "two playing is a question, not a guess", %{dir: dir} do
+      dir =
+        with_states(dir, [
+          {"media_player.sonos_kitchen", "playing"},
+          {"media_player.sonos_basement", "playing"}
+        ])
+
+      refute match?({:ok, _, _}, Resolve.resolve(dir, "the music", :media))
+    end
+
+    test "nothing playing: the one that's paused (\"resume the music\")", %{dir: dir} do
+      dir = with_states(dir, [{"media_player.sonos_basement", "paused"}])
+      assert {:ok, [e], :playing} = Resolve.resolve(dir, "the music", :media)
+      assert e.entity_id == "media_player.sonos_basement"
+    end
   end
 
   describe "normalizing and near-misses" do
@@ -118,6 +178,23 @@ defmodule App.HomeAssistant.ResolveTest do
     assert "light.hall_nightlight" in ids(es)
     # A member of an included group is dropped: the group already covers it.
     refute "light.gaming_room_light_1" in ids(es)
+  end
+
+  defp check(result, :house_everything) do
+    assert {:ok, es, :house} = result
+    assert "light.gaming_room_lights" in ids(es)
+    assert "switch.fireplace_switch" in ids(es)
+  end
+
+  defp check(result, {:close_without, id}) do
+    assert {:none, close} = result
+    assert close != []
+    refute id in ids(close)
+  end
+
+  defp check(result, :ambiguous_media) do
+    assert {:ambiguous, [_, _ | _] = es} = result
+    assert Enum.all?(es, &(&1.domain == "media_player"))
   end
 
   defp check(result, {:which_room, rooms}), do: assert({:which_room, ^rooms} = result)

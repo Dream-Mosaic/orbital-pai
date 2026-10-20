@@ -7,14 +7,16 @@ defmodule App.Tools.HomeAssistant do
       exact entity_ids → `Resolve` → `Actions.plan` → ONE `call_service` per distinct
       `{domain, service, data}`. The common command is one tool call, not find-then-act.
     * `home_status` — reads state from the directory through the same resolver; no HTTP at all.
-      With no targets it gives a short overview (rooms, what's on, what's open).
+      With no targets it gives a short overview (rooms, what's on, what's open, what's playing).
     * `play_music` — Music Assistant, players read from the directory.
 
   Safety is STRUCTURAL: locks, alarm panels and garage-class covers have no action→service
   mapping anywhere (`App.HomeAssistant.Entities`), and the resolver refuses them in `:control`,
   so a control call on one comes back `view_only` — it can never act. Rooms and the whole house
-  fan out to LIGHTS ONLY (the Basement holds the homelab outlets). Instance-wide (one house, both
-  users; nothing user-scoped).
+  fan out to LIGHTS ONLY (the Basement holds the homelab outlets). A media action (play, pause,
+  next, volume_set) resolves among media players only (`Resolve`'s `:media`): "pause the
+  kitchen" is the kitchen's speaker, never its lights. Instance-wide (one house, both users;
+  nothing user-scoped).
 
   Outcomes are honest and first-class: an `unavailable` target is never called and comes back
   `offline` (`unknown` is NOT offline — write-only Govee toggles sit there); an unsure name
@@ -55,6 +57,7 @@ defmodule App.Tools.HomeAssistant do
   @call_timeout_ms 7_000
   @watch_poll_ms 500
   @watched_domains ~w(light switch input_boolean fan)
+  @media_actions ~w(play pause next volume_set)
   @overview_on ~w(light switch fan input_boolean)
   @color_modes ~w(hs xy rgb rgbw rgbww)
 
@@ -133,7 +136,7 @@ defmodule App.Tools.HomeAssistant do
             "the thermostat at?\", \"is the garage open?\". targets = the user's own words " <>
             "(devices, groups, rooms, \"all the lights\") or exact entity_ids; state keeps only " <>
             "devices in that state (\"what lights are on?\" = targets [\"all the lights\"], " <>
-            "state \"on\"). No targets: a short overview — rooms, what's on, what's open.",
+            "state \"on\"). No targets: a short overview — rooms, what's on, open and playing.",
         parameters: %{
           type: "object",
           properties: %{
@@ -225,8 +228,11 @@ defmodule App.Tools.HomeAssistant do
 
   def execute("home_status", args, _ctx) do
     with_directory(fn dir ->
+      # HA's states are lowercase; "On" from the model must not read as "none of those are On".
+      state = args |> Map.get("state") |> str() |> then(&(&1 && String.downcase(&1)))
+
       result =
-        case {targets(args), str(Map.get(args, "state"))} do
+        case {targets(args), state} do
           {[], nil} -> overview(dir)
           # A state with no targets reads across the whole house.
           {[], state} -> status(dir, ["everything"], state)
@@ -273,7 +279,8 @@ defmodule App.Tools.HomeAssistant do
   # -- home_control --
 
   defp control(dir, targets, action, params) do
-    resolved = Enum.map(targets, &{&1, resolve(dir, &1, :control)})
+    mode = if action in @media_actions, do: :media, else: :control
+    resolved = Enum.map(targets, &{&1, resolve(dir, &1, mode)})
     {acts, outcomes} = resolved |> Enum.flat_map(&outcomes(dir, &1)) |> split_acts()
 
     {offline, live} = acts |> Enum.uniq_by(& &1.entity_id) |> Enum.split_with(&offline?(dir, &1))
@@ -538,7 +545,8 @@ defmodule App.Tools.HomeAssistant do
     %{
       rooms: Enum.take(dir.areas, @cap),
       on: names_in(dir, entries, @overview_on, "on"),
-      open: names_in(dir, entries, ["cover"], "open")
+      open: names_in(dir, entries, ["cover"], "open"),
+      playing: names_in(dir, entries, ["media_player"], "playing")
     }
   end
 
