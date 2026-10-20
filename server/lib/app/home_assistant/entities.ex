@@ -14,7 +14,7 @@ defmodule App.HomeAssistant.Entities do
       no code path to a service call). Don't add one.
   """
 
-  @controllable ~w(light switch scene script media_player climate cover fan)
+  @controllable ~w(light switch scene script media_player climate cover fan input_boolean)
   @sensitive ~w(lock alarm_control_panel)
   @read_only ~w(sensor binary_sensor)
 

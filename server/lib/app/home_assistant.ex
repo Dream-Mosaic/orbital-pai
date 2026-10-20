@@ -108,6 +108,37 @@ defmodule App.HomeAssistant do
     end
   end
 
+  @doc """
+  The house directory (`App.HomeAssistant.Directory`), the read seam for the resolver and tools.
+  App env `:home_assistant_directory` (a `%Directory{}` or a 0-arity fun returning the tuple)
+  wins — the test seam. Otherwise: unconfigured → `:not_configured`; the live client
+  (`App.HomeAssistant.Live`) if running; else `:not_loaded`.
+  """
+  def directory do
+    case Application.get_env(:app, :home_assistant_directory) do
+      %App.HomeAssistant.Directory{} = dir -> {:ok, dir}
+      fun when is_function(fun, 0) -> fun.()
+      _ -> live_directory()
+    end
+  end
+
+  defp live_directory do
+    cond do
+      not configured?() ->
+        {:error, :not_configured}
+
+      Process.whereis(App.HomeAssistant.Live) ->
+        try do
+          GenServer.call(App.HomeAssistant.Live, :directory, 2_000)
+        catch
+          :exit, _ -> {:error, :not_loaded}
+        end
+
+      true ->
+        {:error, :not_loaded}
+    end
+  end
+
   defp config do
     case Application.get_env(:app, :home_assistant) do
       %{url: url, token: token} = cfg
