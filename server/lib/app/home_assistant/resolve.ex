@@ -76,8 +76,8 @@ defmodule App.HomeAssistant.Resolve do
     {~w(curtain), :blinds},
     {~w(fan), :fan}
   ]
-  # Bare "garage" is a room too ("garage lights"), so it's the door only as the last word
-  # ("open the garage").
+  # Bare "garage" is a room too, so it's the door only as the last word ("open the garage") and
+  # only when no light noun is about ("garage lights", "lights in the garage" are the room).
   @last_only [~w(garage)]
   @sensitive_kinds [:lock, :alarm, :garage]
   @kind_domains %{lock: "lock", alarm: "alarm_control_panel", climate: "climate", fan: "fan"}
@@ -144,8 +144,11 @@ defmodule App.HomeAssistant.Resolve do
   end
 
   # Henry doesn't know which room the speaker is in, so a bare "the lights" doesn't fan out.
+  # Read before any fan-out: groups have no area, so dropping their members would lose rooms.
   defp which_room(dir, %{tokens: [noun]}) when noun in @light_nouns do
-    rooms = dir |> lights() |> Enum.map(& &1.area) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    rooms =
+      for %Entry{domain: "light", area: a} <- Directory.entries(dir), a != nil, uniq: true, do: a
+
     {:which_room, Enum.sort(rooms)}
   end
 
@@ -199,7 +202,7 @@ defmodule App.HomeAssistant.Resolve do
       case Enum.sort_by(es, &{length(unmatched_words(&1, rest)), &1.name}) do
         [e] ->
           if mode == :status or unmatched_words(e, rest) == [],
-            do: {:ok, [e], :type},
+            do: ok(%{entry: e, how: :type}, mode),
             else: {:ambiguous, [e]}
 
         several ->
@@ -219,7 +222,9 @@ defmodule App.HomeAssistant.Resolve do
   # `toks` with one run of `words` cut out, or nil when it isn't there.
   defp without(toks, words) when words in @last_only do
     n = length(words)
-    if Enum.take(toks, -n) == words, do: Enum.drop(toks, -n)
+
+    if Enum.take(toks, -n) == words and not Enum.any?(toks, &(&1 in @light_nouns)),
+      do: Enum.drop(toks, -n)
   end
 
   defp without(toks, words) do
@@ -254,7 +259,7 @@ defmodule App.HomeAssistant.Resolve do
   defp best(dir, e, q, borrow?) do
     scored =
       for {how, text, toks, weight} <- forms(dir, e, q, borrow?), toks != [] do
-        {s, unmatched} = score(q.tokens, toks)
+        {s, unmatched} = score_name(q.tokens, toks)
         bonus = if q.plural != [] and e.group? and unmatched == [], do: @group_bonus, else: 0.0
         %{entry: e, how: how, text: text, score: s * weight + bonus, unmatched: unmatched}
       end
@@ -277,6 +282,17 @@ defmodule App.HomeAssistant.Resolve do
       if q.plural != [] and e.group?, do: [{:name, e.name, shared_tokens(dir, e), 1.0}], else: []
 
     Enum.reject(own ++ borrowed ++ shared, &is_nil/1)
+  end
+
+  # Room filler counts when the name has it ("all" in "All Kitchen Lights") and is never held
+  # against a name that doesn't ("all the lights in the kitchen").
+  defp score_name(query, toks) do
+    {s, left} = score(query, toks)
+
+    case Enum.filter(left, &(&1 in @room_filler)) do
+      [] -> {s, left}
+      unused -> score(query -- unused, toks)
+    end
   end
 
   defp stripped(name) do
@@ -317,10 +333,13 @@ defmodule App.HomeAssistant.Resolve do
 
   defp named([], _q, _room, _mode), do: nil
 
+  # :control acts on a name only when it accounts for every word of the phrase: "guest bedroom
+  # closet light" scores "Bedroom closet light" 0.875 but isn't it, so Henry asks instead.
   defp named(ranked, q, room, mode) do
     case winner(ranked) do
       nil -> nil
       {:ambiguous, _} = asked -> asked
+      %{unmatched: [_ | _]} when mode == :control -> nil
       c -> if room_beats?(c, q, room), do: nil, else: ok(c, mode)
     end
   end

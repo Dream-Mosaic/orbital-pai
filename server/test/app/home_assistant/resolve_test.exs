@@ -30,7 +30,16 @@ defmodule App.HomeAssistant.ResolveTest do
         {"dining room lights", :control, {:ids, ["light.dining_table_lights"]}},
         {"all the lights", :control, :house_lights},
         {"everything", :control, :house_lights},
-        {"the lights", :control, {:which_room, "Basement"}},
+        {"the lights", :control,
+         {:which_room, ["Basement", "Game Room", "Garage", "Kitchen", "Living Room"]}},
+        # "garage" next to a light noun is the room, not the door.
+        {"lights in the garage", :control, {:ids, ["light.driveway_lights"]}},
+        {"the garage", :control, :sensitive},
+        {"all the lights in the kitchen", :control, {:ids, ["light.all_kitchen_lights"]}},
+        # A word the name doesn't account for means Henry asks, never acts on a near-miss.
+        {"guest bedroom closet light", :control, :ambiguous},
+        {"upstairs living room thermostat", :control, :not_ok},
+        {"garage homelab music lights", :control, :not_ok},
         {"office lights", :control, :not_ok},
         {"the thermostat", :control, {:ids, ["climate.living_room_thermostat"]}},
         {"the bedroom thermostat", :control, {:ambiguous, ["climate.living_room_thermostat"]}},
@@ -111,10 +120,8 @@ defmodule App.HomeAssistant.ResolveTest do
     refute "light.gaming_room_light_1" in ids(es)
   end
 
-  defp check(result, {:which_room, room}) do
-    assert {:which_room, rooms} = result
-    assert room in rooms
-  end
+  defp check(result, {:which_room, rooms}), do: assert({:which_room, ^rooms} = result)
+  defp check(result, :ambiguous), do: assert({:ambiguous, [_ | _]} = result)
 
   defp check(result, :not_ok), do: refute(match?({:ok, _, _}, result))
 
