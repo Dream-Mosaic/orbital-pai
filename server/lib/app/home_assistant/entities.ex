@@ -60,6 +60,14 @@ defmodule App.HomeAssistant.Entities do
 
   defp map_action("light", "set_brightness", _, _e), do: {:error, :needs_value}
 
+  # Relative brightness: HA adds `brightness_step_pct` to the current level. nil → 20.
+  defp map_action("light", "brighten", v, _e), do: {:ok, {"light", "turn_on", step(v)}}
+  defp map_action("light", "dim", v, _e), do: {:ok, {"light", "turn_on", step(v, -1)}}
+
+  defp map_action("input_boolean", "on", _, _e), do: {:ok, {"input_boolean", "turn_on", %{}}}
+  defp map_action("input_boolean", "off", _, _e), do: {:ok, {"input_boolean", "turn_off", %{}}}
+  defp map_action("input_boolean", "toggle", _, _e), do: {:ok, {"input_boolean", "toggle", %{}}}
+
   defp map_action("switch", "on", _, _e), do: {:ok, {"switch", "turn_on", %{}}}
   defp map_action("switch", "off", _, _e), do: {:ok, {"switch", "turn_off", %{}}}
   defp map_action("switch", "toggle", _, _e), do: {:ok, {"switch", "toggle", %{}}}
@@ -93,6 +101,9 @@ defmodule App.HomeAssistant.Entities do
 
   defp map_action("cover", "on", _, _e), do: {:ok, {"cover", "open_cover", %{}}}
   defp map_action("cover", "off", _, _e), do: {:ok, {"cover", "close_cover", %{}}}
+  # Garage covers never get here: classify/1 makes them :sensitive_read_only first.
+  defp map_action("cover", "open", _, _e), do: {:ok, {"cover", "open_cover", %{}}}
+  defp map_action("cover", "close", _, _e), do: {:ok, {"cover", "close_cover", %{}}}
   defp map_action("cover", "toggle", _, _e), do: {:ok, {"cover", "toggle", %{}}}
 
   defp map_action("cover", "set_position", v, _e) when is_number(v),
@@ -430,6 +441,10 @@ defmodule App.HomeAssistant.Entities do
   end
 
   defp normalize_number(n), do: n
+
+  defp step(v, sign \\ 1)
+  defp step(v, sign) when is_number(v), do: %{brightness_step_pct: sign * round(clamp(v, 1, 100))}
+  defp step(_, sign), do: %{brightness_step_pct: sign * 20}
 
   defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
 
