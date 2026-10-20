@@ -568,14 +568,14 @@ defmodule App.Adapters.TextModel.GeminiTest do
   end
 
   test "a routine with an extra dependent lookup still finishes with tools (routine hop refund)" do
-    # run → index+calendar → find → act → answer: one hop past the plain cap, absorbed by the
-    # refund the first run_routine earns.
+    # run → status+calendar → status → act → answer: one hop past the plain cap, absorbed by
+    # the refund the first run_routine earns.
     parent = self()
 
     Process.put(:script, [
       [call("run_routine")],
-      [call("home_index"), call("get_calendar_events")],
-      [call("home_find")],
+      [call("home_status"), call("get_calendar_events")],
+      [call("home_status")],
       [call("home_control")],
       []
     ])
@@ -614,14 +614,14 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert_received {:gemini_done}
   end
 
-  test "a find-then-act routine fits the tool-hop cap (run → find → act → answer)" do
-    # Routines' hop budget: run_routine spends a hop before any step runs, and Home Assistant
-    # is find-then-act, so lights + thermostat + calendar is three tool rounds.
+  test "a look-then-act routine fits the tool-hop cap (run → look → act → answer)" do
+    # Routines' hop budget: run_routine spends a hop before any step runs, and a step may read
+    # state before acting, so lights + thermostat + calendar is three tool rounds.
     parent = self()
 
     Process.put(:script, [
       [call("run_routine")],
-      [call("home_find"), call("home_find"), call("get_calendar_events")],
+      [call("home_status"), call("home_status"), call("get_calendar_events")],
       [call("home_control"), call("home_control")],
       []
     ])
@@ -723,18 +723,19 @@ defmodule App.Adapters.TextModel.GeminiToolkitsTest do
 
   # A round runner that plays `script` (one call list per tools-on round; [] once it runs out).
   # The script's tail may be a 0-arity fun instead — then every later round calls it, forever.
-  # It reports every round's tools? flag and cfg.tools, and bails after 12 rounds so a broken
-  # hop rule fails the counts instead of hanging the suite.
+  # It reports every round's tools? flag, cfg.tools and contents, and bails after 12 rounds so a
+  # broken hop rule fails the counts instead of hanging the suite.
   defp scripted(script) do
     parent = self()
     Process.put(:script, script)
     Process.put(:rounds, 0)
 
-    fn _contents, _system, cfg, _thinking, _target, tools? ->
+    fn contents, _system, cfg, _thinking, _target, tools? ->
       n = Process.get(:rounds) + 1
       Process.put(:rounds, n)
       send(parent, {:round, tools?})
       send(parent, {:cfg_tools, n, cfg.tools})
+      send(parent, {:contents, n, contents})
 
       case {tools?, Process.get(:script)} do
         {false, _} ->
@@ -846,6 +847,64 @@ defmodule App.Adapters.TextModel.GeminiToolkitsTest do
     refute App.Tools.HomeAssistant in round1
     assert_received {:cfg_tools, 2, round2}
     assert App.Tools.HomeAssistant in round2
+  end
+
+  # The function responses the round-`n` request carries (the last user turn of its contents).
+  defp responses_in(n) do
+    assert_received {:contents, ^n, contents}
+    %{role: "user", parts: parts} = List.last(contents)
+    Map.new(parts, fn %{functionResponse: %{name: name, response: r}} -> {name, r} end)
+  end
+
+  test "a kit a routine opens gets its guidance in that run_routine's response", %{cfg: cfg} do
+    cfg = %{cfg | tools: [FakeRoutine, App.Tools.UseToolkit]}
+    run(cfg, scripted([[call("run_routine")]]))
+
+    assert %{"run_routine" => resp} = responses_in(2)
+    assert resp.toolkit =~ "Toolkit open: home"
+    assert resp.toolkit =~ Home.guidance()
+    assert resp.result.steps == "turn off the gaming lights"
+  end
+
+  test "a routine whose kit was already open gets no guidance again", %{cfg: cfg} do
+    cfg = App.Toolkits.open(%{cfg | tools: [FakeRoutine, App.Tools.UseToolkit]}, [Home])
+    run(cfg, scripted([[call("run_routine")]]))
+
+    assert %{"run_routine" => resp} = responses_in(2)
+    refute Map.has_key?(resp, :toolkit)
+  end
+
+  test "use_toolkit + a real call in one round spends the hop, and the kit is still open next",
+       %{cfg: cfg} do
+    run(cfg, scripted([[use_home(), call("home_status")] | fn -> [call("home_status")] end]))
+
+    assert_received {:cfg_tools, 1, round1}
+    refute App.Tools.HomeAssistant in round1
+    assert_received {:cfg_tools, 2, round2}
+    assert App.Tools.HomeAssistant in round2
+
+    # the mixed round + 2 more counted rounds + the capped ask, then tools-off
+    for _ <- 1..4, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
+  end
+
+  test "use_toolkit + run_routine in one round: the routine refund still applies, the kit opens",
+       %{cfg: cfg} do
+    cfg = %{cfg | tools: [FakeRoutine, App.Tools.UseToolkit]}
+
+    run(
+      cfg,
+      scripted([[use_home(), call("run_routine")] | fn -> [call("home_status")] end])
+    )
+
+    assert_received {:cfg_tools, 2, round2}
+    assert App.Tools.HomeAssistant in round2
+
+    # the mixed round refunds itself + 2: 5 more counted rounds + the capped ask, then tools-off
+    for _ <- 1..7, do: assert_received({:round, true})
+    assert_received {:round, false}
+    refute_received {:round, _}
   end
 
   test "opening logs once per kit, tagged with how it opened", %{cfg: cfg} do

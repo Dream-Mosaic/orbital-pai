@@ -14,9 +14,9 @@ defmodule App.Adapters.TextModel.Gemini do
   # Safety valve: stop looping after this many tool round-trips in one turn.
   @max_tool_hops 3
   # A routine ("good night") spends a whole hop on run_routine before any step runs, and its
-  # steps are often find-then-act (Home Assistant). The FIRST run_routine of a turn gives back
-  # its hop plus this many, so a realistic routine has slack instead of landing exactly on the
-  # cap. Once per turn, so a model re-calling run_routine can't loop on the refund.
+  # steps may read state before acting. The FIRST run_routine of a turn gives back its hop plus
+  # this many, so a realistic routine has slack instead of landing exactly on the cap. Once per
+  # turn, so a model re-calling run_routine can't loop on the refund.
   @routine_bonus_hops 2
   # Tool calls that are loop plumbing, not work: no live UI chip (and they declare no bridge).
   @plumbing ["use_toolkit"]
@@ -171,6 +171,12 @@ defmodule App.Adapters.TextModel.Gemini do
               %{error: "timeout"}
           end)
 
+        # Kits this round opens (use_toolkit, or a routine's steps), judged against the PRE-round
+        # config. A kit a routine opened has its guidance put in that run_routine's response
+        # (use_toolkit's own response already carries it) — never in the system instruction.
+        openings = round_openings(cfg, calls, responses)
+        responses = with_routine_guidance(calls, responses, openings)
+
         contents =
           contents ++
             [%{role: "model", parts: model_call_parts(calls)}] ++
@@ -182,9 +188,9 @@ defmodule App.Adapters.TextModel.Gemini do
             do: {hops, tool_ctx},
             else: spend_hop(calls, hops, tool_ctx)
 
-        # Kits this round opened (use_toolkit, or a routine's steps) are open from the next round
-        # on — their declarations in the request, and in tool_ctx so use_toolkit sees them open.
-        cfg = open_kits(cfg, round_openings(cfg, calls, responses))
+        # The kits are open from the next round on — their declarations in the request, and in
+        # tool_ctx so use_toolkit sees them open.
+        cfg = open_kits(cfg, openings)
         tool_ctx = %{tool_ctx | config: cfg}
 
         run_rounds(contents, system, cfg, thinking, tool_ctx, target, next_hops, round_fun)
@@ -216,6 +222,21 @@ defmodule App.Adapters.TextModel.Gemini do
     |> Enum.uniq_by(&elem(&1, 0))
     |> Enum.reject(fn {kit, _how} -> App.Toolkits.open?(cfg, kit.id()) end)
   end
+
+  # The first run_routine response with steps carries the guidance of the kits the round's
+  # routine steps opened: without it the brain has the kit's declarations but not how to use them.
+  defp with_routine_guidance(calls, responses, openings) do
+    with [_ | _] = kits <- for({kit, :routine} <- openings, do: kit),
+         i when is_integer(i) <- Enum.find_index(Enum.zip(calls, responses), &routine_steps?/1) do
+      note = kits |> App.Toolkits.guidance_note() |> String.trim()
+      List.update_at(responses, i, &Map.put(&1, :toolkit, note))
+    else
+      _ -> responses
+    end
+  end
+
+  defp routine_steps?({%{name: "run_routine"}, %{result: %{steps: steps}}}), do: is_binary(steps)
+  defp routine_steps?(_call_and_response), do: false
 
   # A round of nothing but use_toolkit calls, each naming a kit that isn't open yet, spends no
   # hop: it's plumbing, and there are only so many kits. Re-opening an open kit (or naming an
