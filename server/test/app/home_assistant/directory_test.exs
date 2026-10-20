@@ -23,6 +23,12 @@ defmodule App.HomeAssistant.DirectoryTest do
     assert e.class == :controllable
   end
 
+  test "a scene with a list entity_id attribute is not a group", %{dir: dir} do
+    e = Directory.get(dir, "scene.nigh_lights")
+    assert e.group? == false
+    assert e.members == []
+  end
+
   test "registry area and name", %{dir: dir} do
     e = Directory.get(dir, "switch.fireplace_switch")
     assert e.area == "Living Room"

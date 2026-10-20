@@ -138,7 +138,11 @@ defmodule App.HomeAssistant.Directory do
   defp entry(id, state, reg, devices, areas) do
     attrs = state["attributes"] || %{}
     device = Map.get(devices, reg["device_id"])
-    members = if is_list(attrs["entity_id"]), do: attrs["entity_id"], else: []
+    # Only light groups: scenes and other domains also carry a list `entity_id` attribute.
+    members =
+      if Entities.domain(state) == "light" and is_list(attrs["entity_id"]),
+        do: attrs["entity_id"],
+        else: []
 
     %Entry{
       entity_id: id,
