@@ -8,21 +8,28 @@ defmodule App.HomeAssistant.Socket do
   ## The conversation
 
     * `auth_required` → `%{type: "auth", access_token: token}`; `auth_invalid` → `:auth_failed`.
-    * `auth_ok` → the five loads (area / device / entity registries, the Assist exposure list,
-      `get_states`) and `subscribe_events` for `state_changed` plus the three
-      `*_registry_updated` events, each with a fresh, increasing id.
+    * `auth_ok` → `subscribe_events` for `state_changed`, the three `*_registry_updated`
+      events and `homeassistant_started` FIRST, then the five loads (area / device / entity
+      registries, the Assist exposure list, `get_states`), each with a fresh, increasing id.
+      Subscribing before the snapshot means no change can fall between the two.
     * When all five loads have answered, `Directory.build/2`. A refused exposure list builds
-      with `exposed: nil` (everything non-hidden counts as exposed), warned once.
-    * `state_changed` → `Directory.put_state/3`. One that lands while the first load is still in
-      flight patches the pending states, so nothing between the snapshot and the build is lost.
-    * A `*_registry_updated` event (or the backstop `refresh/1`) re-requests the registries and
-      exposure and rebuilds over the current raw states. Only one reload is ever in flight: an
-      update arriving mid-reload marks it dirty and ONE follow-up goes out when it lands, so a
-      burst of registry events (an integration reloading) costs at most two round trips.
+      with `exposed: nil` (everything non-hidden counts as exposed), warned once. A refused
+      registry list builds from an empty one on the first load (there's nothing to keep).
+    * `state_changed` → `Directory.put_state/3`. One that lands while the load is still in
+      flight also patches the pending states, so nothing between the snapshot and the build is
+      lost.
+    * A `*_registry_updated` or `homeassistant_started` event (or the backstop `refresh/1`)
+      re-requests the registries and exposure and rebuilds over the current raw states —
+      after an HA restart, that is what brings entities whose first state arrived as an event
+      into view. Only one reload is ever in flight: an update arriving mid-reload marks it
+      dirty and ONE follow-up goes out when it lands, so a burst of registry events (an
+      integration reloading) costs at most two round trips. A reload whose registry list is
+      refused keeps the current directory rather than rebuild over an empty registry.
     * Unknown ids and message types are ignored.
 
-  `disconnected/1` keeps the last directory (marked disconnected) across a reconnect; the next
-  `auth_ok`'s full load brings it back to connected. The token is kept out of `inspect/1`.
+  `disconnected/2` keeps the last directory (marked disconnected, with the drop time) across a
+  reconnect; the next `auth_ok`'s full load brings it back to connected. The token is kept out
+  of `inspect/1`.
   """
 
   require Logger
@@ -40,9 +47,13 @@ defmodule App.HomeAssistant.Socket do
   }
   @full_load [:areas, :devices, :entities, :exposed, :states]
   @registry_load [:areas, :devices, :entities, :exposed]
-  @subscriptions ~w(state_changed area_registry_updated device_registry_updated
-                    entity_registry_updated)
-  @registry_events ~w(area_registry_updated device_registry_updated entity_registry_updated)
+  @registries [:areas, :devices, :entities]
+  # `homeassistant_started`: after an HA restart the socket is back before the integrations,
+  # so the snapshot is partial and entities that only arrive later as state events have no
+  # entry (entries are made in build). The rebuild it triggers brings them into view.
+  @reload_events ~w(area_registry_updated device_registry_updated entity_registry_updated
+                    homeassistant_started)
+  @subscriptions ["state_changed" | @reload_events]
 
   @backoff_s [1, 2, 5, 15, 30, 60]
   @auth_failed_retry_s 600
@@ -79,9 +90,11 @@ defmodule App.HomeAssistant.Socket do
   def handle(%__MODULE__{} = t, %{"type" => "auth_ok"} = msg, now) do
     Logger.info("[home] socket connected (HA #{msg["ha_version"]})")
     t = %{t | phase: :loading, ha_version: msg["ha_version"]}
-    {t, loads} = request(t, :full, now)
+    # Subscribe BEFORE the get_states snapshot, so no change falls between the two (an event
+    # that lands while the load is in flight patches the pending states — see put_state/3).
     {t, subs} = subscribe(t)
-    {t, loads ++ subs}
+    {t, loads} = request(t, :full, now)
+    {t, subs ++ loads}
   end
 
   def handle(%__MODULE__{} = t, %{"type" => "auth_invalid"}, _now) do
@@ -138,12 +151,12 @@ defmodule App.HomeAssistant.Socket do
   def ping(%__MODULE__{} = t), do: {t, []}
 
   @doc """
-  The connection dropped: keep the last directory (marked disconnected), forget everything
-  owed by the old connection, and restart the ids for the next one. A refused token stays
-  `:auth_failed` so the retry waits.
+  The connection dropped: keep the last directory (marked disconnected, stamped with `now` the
+  first time — `Directory.set_connected/3`), forget everything owed by the old connection, and
+  restart the ids for the next one. A refused token stays `:auth_failed` so the retry waits.
   """
-  @spec disconnected(t()) :: t()
-  def disconnected(%__MODULE__{} = t) do
+  @spec disconnected(t(), DateTime.t()) :: t()
+  def disconnected(%__MODULE__{} = t, now \\ DateTime.utc_now()) do
     %{
       t
       | phase: if(t.phase == :auth_failed, do: :auth_failed, else: :connecting),
@@ -152,7 +165,7 @@ defmodule App.HomeAssistant.Socket do
         subscriptions: MapSet.new(),
         load: nil,
         reload_again?: false,
-        directory: t.directory && Directory.set_connected(t.directory, false)
+        directory: t.directory && Directory.set_connected(t.directory, false, now)
     }
   end
 
@@ -238,13 +251,33 @@ defmodule App.HomeAssistant.Socket do
   defp payload(t, _registry, %{"success" => true, "result" => list}) when is_list(list),
     do: {t, list}
 
+  # Marked, not emptied: a reload must not rebuild over an empty registry (that drops aliases
+  # and areas and lifts the hidden/category filters). finish/2 decides.
   defp payload(t, key, msg) do
     Logger.warning("[home] #{@commands[key]} refused: #{error_code(msg)}")
-    {t, []}
+    {t, :refused}
+  end
+
+  # A refused registry list with a directory already in hand (a reload, or a reconnect's full
+  # load) keeps that directory's entries; a full load still brings fresh states and the
+  # connection back.
+  defp finish(%__MODULE__{load: %{kind: kind, got: got}, directory: %Directory{} = dir} = t, now)
+       when :refused in [got.areas, got.devices, got.entities] do
+    Logger.warning("[home] registry reload refused — keeping the current directory")
+
+    dir =
+      if kind == :full,
+        do: dir |> Directory.put_states(Map.values(got.states)) |> Directory.set_connected(true),
+        else: dir
+
+    after_load(%{t | directory: dir, load: nil, phase: :ready}, now)
   end
 
   defp finish(%__MODULE__{load: %{kind: kind, got: got, started: started}} = t, now) do
     states = if kind == :full, do: Map.values(got.states), else: raw_states(t)
+    # The first load has nothing to keep, so it builds from an empty registry instead.
+    got =
+      Map.new(got, fn {k, v} -> {k, if(k in @registries and v == :refused, do: [], else: v)} end)
 
     dir =
       Directory.build(
@@ -266,8 +299,10 @@ defmodule App.HomeAssistant.Socket do
       do: Logger.info("[home] directory loaded: " <> summary),
       else: Logger.debug("[home] directory refreshed: " <> summary)
 
-    t = %{t | directory: dir, load: nil, phase: :ready}
+    after_load(%{t | directory: dir, load: nil, phase: :ready}, now)
+  end
 
+  defp after_load(t, now) do
     if t.reload_again?,
       do: request(%{t | reload_again?: false}, :registries, now),
       else: {t, []}
@@ -285,7 +320,7 @@ defmodule App.HomeAssistant.Socket do
     end
   end
 
-  defp event(t, type, _data, now) when type in @registry_events, do: reload(t, now)
+  defp event(t, type, _data, now) when type in @reload_events, do: reload(t, now)
   defp event(t, _type, _data, _now), do: {t, []}
 
   defp put_state(t, id, new) do

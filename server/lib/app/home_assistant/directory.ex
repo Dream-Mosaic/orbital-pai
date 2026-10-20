@@ -45,6 +45,8 @@ defmodule App.HomeAssistant.Directory do
             areas: [],
             loaded_at: nil,
             connected?: true,
+            # when the house connection dropped (nil while connected): states are last-known as of then
+            disconnected_at: nil,
             exposure_known?: true
 
   @type t :: %__MODULE__{}
@@ -105,9 +107,39 @@ defmodule App.HomeAssistant.Directory do
   def put_state(%__MODULE__{} = dir, entity_id, raw) when is_map(raw),
     do: %{dir | states: Map.put(dir.states, entity_id, raw)}
 
-  @spec set_connected(t(), boolean()) :: t()
-  def set_connected(%__MODULE__{} = dir, connected?) when is_boolean(connected?),
-    do: %{dir | connected?: connected?}
+  @doc "Replace every raw state at once (a fresh snapshot); the entries are left as they are."
+  @spec put_states(t(), [map()]) :: t()
+  def put_states(%__MODULE__{} = dir, raw) when is_list(raw),
+    do: %{dir | states: Map.new(raw, &{&1["entity_id"], &1})}
+
+  @doc """
+  Mark the house connection up or down. Going down stamps `disconnected_at` (`at`, default
+  now) — only the FIRST time, since state events stopped at the first drop and repeated failed
+  reconnects don't make the states any newer. Coming back up clears it.
+  """
+  @spec set_connected(t(), boolean(), DateTime.t() | nil) :: t()
+  def set_connected(dir, connected?, at \\ nil)
+
+  def set_connected(%__MODULE__{} = dir, true, _at),
+    do: %{dir | connected?: true, disconnected_at: nil}
+
+  def set_connected(
+        %__MODULE__{connected?: false, disconnected_at: %DateTime{}} = dir,
+        false,
+        _at
+      ),
+      do: dir
+
+  def set_connected(%__MODULE__{} = dir, false, at),
+    do: %{dir | connected?: false, disconnected_at: at || DateTime.utc_now()}
+
+  @doc """
+  What the states are current as of: the drop time while disconnected (state events kept them
+  live until then), else `loaded_at`.
+  """
+  @spec as_of(t()) :: DateTime.t() | nil
+  def as_of(%__MODULE__{disconnected_at: %DateTime{} = at}), do: at
+  def as_of(%__MODULE__{loaded_at: at}), do: at
 
   # -- the in-view rule (spec §2.2) --
 

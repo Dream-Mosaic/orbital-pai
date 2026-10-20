@@ -16,7 +16,11 @@ defmodule App.HomeAssistant.Live do
       be connected forever).
 
   The TCP/TLS connect + upgrade request run in a task and the conn is handed back, so a slow
-  or black-holed host never blocks a `:directory` read behind it.
+  or black-holed host never blocks a `:directory` read behind it. The task connects in
+  **passive** mode and this process switches the conn to active only once it holds it: in
+  active mode, anything HA sent before the handoff (the 101, `auth_required`) would be
+  delivered to the task, forwarded here AHEAD of the task's reply, and dropped as a stray —
+  and with `active: :once` the socket would then go quiet until the heartbeat gave up.
 
   Fragmentation: `Mint.WebSocket.decode/2` reassembles fragmented messages itself (partial
   fragments wait in the websocket's `fragment`, partial TCP reads in its `buffer`) and only
@@ -51,7 +55,9 @@ defmodule App.HomeAssistant.Live do
           backstop: Keyword.get(opts, :backstop_ms, @backstop_ms),
           heartbeat: Keyword.get(opts, :heartbeat_ms, @heartbeat_ms),
           ping_after: Keyword.get(opts, :ping_after_ms, @ping_after_ms),
-          stale_after: Keyword.get(opts, :stale_after_ms, @stale_after_ms)
+          stale_after: Keyword.get(opts, :stale_after_ms, @stale_after_ms),
+          # test seam: hold the socket in the connect task this long before handing it over
+          handoff_delay: Keyword.get(opts, :handoff_delay_ms, 0)
         }
 
         Process.send_after(self(), :backstop, timing.backstop)
@@ -98,14 +104,21 @@ defmodule App.HomeAssistant.Live do
   @impl true
   def handle_info(:connect, s), do: {:noreply, connect(%{s | retry: nil})}
 
-  # The connect task's answer: the conn (now owned by this process) or why it failed.
+  # The connect task's answer: the (passive) conn, now owned by this process, or why it failed.
+  # Only now does the socket start delivering, so nothing that arrived earlier is lost.
   def handle_info({ref, result}, %{connecting: ref} = s) do
     Process.demonitor(ref, [:flush])
     s = %{s | connecting: nil}
 
     case result do
-      {:ok, conn, req_ref} -> {:noreply, %{s | conn: conn, ref: req_ref, last_in: now_ms()}}
-      {:error, reason} -> {:noreply, down(s, reason)}
+      {:ok, conn, req_ref} ->
+        case Mint.HTTP.set_mode(conn, :active) do
+          {:ok, conn} -> {:noreply, %{s | conn: conn, ref: req_ref, last_in: now_ms()}}
+          {:error, reason} -> {:noreply, down(%{s | conn: conn}, reason)}
+        end
+
+      {:error, reason} ->
+        {:noreply, down(s, reason)}
     end
   end
 
@@ -161,18 +174,24 @@ defmodule App.HomeAssistant.Live do
 
   defp connect(%{connecting: nil, conn: nil} = s) do
     target = s.target
+    delay = s.timing.handoff_delay
     owner = self()
-    %{s | connecting: Task.async(fn -> open(target, owner) end).ref}
+    %{s | connecting: Task.async(fn -> open(target, owner, delay) end).ref}
   end
 
   defp connect(s), do: s
 
-  # Runs in the task. Mint moves any already-arrived socket messages to the new owner.
-  defp open(%{http: http, ws: ws, host: host, port: port, path: path}, owner) do
-    opts = [protocols: [:http1], transport_opts: [timeout: @connect_timeout_ms]]
+  # Runs in the task. Passive: the socket delivers nothing until the owner activates it.
+  defp open(%{http: http, ws: ws, host: host, port: port, path: path}, owner, delay) do
+    opts = [
+      protocols: [:http1],
+      mode: :passive,
+      transport_opts: [timeout: @connect_timeout_ms]
+    ]
 
     with {:ok, conn} <- Mint.HTTP.connect(http, host, port, opts),
          {:ok, conn, ref} <- upgrade(ws, conn, path),
+         :ok <- if(delay > 0, do: Process.sleep(delay), else: :ok),
          {:ok, conn} <- Mint.HTTP.controlling_process(conn, owner) do
       {:ok, conn, ref}
     end
@@ -344,7 +363,7 @@ defmodule App.HomeAssistant.Live do
 
     %{
       s
-      | socket: Socket.disconnected(s.socket),
+      | socket: Socket.disconnected(s.socket, DateTime.utc_now()),
         conn: nil,
         websocket: nil,
         ref: nil,

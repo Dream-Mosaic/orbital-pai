@@ -556,8 +556,8 @@ defmodule App.Tools.HomeAssistant do
 
   defp put_as_of(result, %Directory{connected?: true}), do: result
 
-  defp put_as_of(result, %Directory{loaded_at: at}),
-    do: Map.put(result, :as_of, "#{ago(at)} — the house connection is down")
+  defp put_as_of(result, %Directory{} = dir),
+    do: Map.put(result, :as_of, "#{ago(Directory.as_of(dir))} — the house connection is down")
 
   defp ago(%DateTime{} = at) do
     case max(DateTime.diff(DateTime.utc_now(), at, :minute), 0) do

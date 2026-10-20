@@ -96,7 +96,28 @@ defmodule App.HomeAssistant.DirectoryTest do
 
   test "set_connected", %{dir: dir} do
     assert dir.connected?
+    assert dir.disconnected_at == nil
     refute Directory.set_connected(dir, false).connected?
+  end
+
+  test "going disconnected stamps the drop time once; reconnecting clears it", %{dir: dir} do
+    dropped = ~U[2026-10-19 20:30:00Z]
+    down = Directory.set_connected(dir, false, dropped)
+    assert down.disconnected_at == dropped
+
+    # still down: the states are as of the FIRST drop
+    assert Directory.set_connected(down, false, ~U[2026-10-19 20:45:00Z]).disconnected_at ==
+             dropped
+
+    up = Directory.set_connected(down, true)
+    assert up.connected?
+    assert up.disconnected_at == nil
+  end
+
+  test "the staleness anchor is the drop time when there is one, else loaded_at", %{dir: dir} do
+    assert Directory.as_of(dir) == dir.loaded_at
+    dropped = ~U[2026-10-19 20:30:00Z]
+    assert Directory.as_of(Directory.set_connected(dir, false, dropped)) == dropped
   end
 
   describe "App.HomeAssistant.directory/0" do

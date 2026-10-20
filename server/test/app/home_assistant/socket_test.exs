@@ -95,7 +95,7 @@ defmodule App.HomeAssistant.SocketTest do
     assert s.phase == :authenticating
   end
 
-  test "auth_ok requests the five loads and the four subscriptions with increasing ids" do
+  test "auth_ok subscribes first, then requests the five loads, with increasing ids" do
     {s, out} = authed()
     assert s.phase == :loading
     assert s.ha_version == "2026.8.0"
@@ -105,15 +105,19 @@ defmodule App.HomeAssistant.SocketTest do
     assert ids == Enum.uniq(ids)
     assert Enum.all?(ids, &(is_integer(&1) and &1 > 0))
 
-    types = Enum.map(out, & &1.type)
-    # the brief's order: three registries, exposure, states, then the subscriptions
-    assert Enum.take(types, 5) == @load_types
+    # the loads keep their order (registries, exposure, states)
+    assert for(%{type: t} <- out, t in @load_types, do: t) == @load_types
 
     subs = for %{type: "subscribe_events", event_type: et} <- out, do: et
 
     assert Enum.sort(subs) ==
              Enum.sort(~w(state_changed area_registry_updated device_registry_updated
-                       entity_registry_updated))
+                       entity_registry_updated homeassistant_started))
+
+    # every subscription is registered before the states snapshot is taken, so no change can
+    # fall between the snapshot and the subscription
+    states_id = Enum.find_value(out, &(&1.type == "get_states" && &1.id))
+    assert Enum.all?(for(%{type: "subscribe_events", id: id} <- out, do: id), &(&1 < states_id))
   end
 
   test "the token never shows up in inspect output" do
@@ -344,6 +348,113 @@ defmodule App.HomeAssistant.SocketTest do
     assert Enum.map(follow_up, & &1.type) |> Enum.sort() == Enum.sort(@registry_types)
   end
 
+  test "homeassistant_started rebuilds, so entities that only arrived as state events come into view" do
+    # HA restarting: the socket is back before the integrations are, so the snapshot is partial
+    partial = %{
+      HomeFixture.payloads()
+      | states:
+          Enum.reject(
+            HomeFixture.payloads().states,
+            &(&1["entity_id"] == "switch.fireplace_switch")
+          )
+    }
+
+    {s, out} = authed()
+    s = answer(s, out, partial)
+    refute Directory.get(Socket.directory(s), "switch.fireplace_switch")
+
+    # the integration comes up: its state arrives as an event, but the entry is only made in build
+    sid = sub_id(out, "state_changed")
+
+    {s, []} =
+      Socket.handle(
+        s,
+        state_changed(
+          sid,
+          "switch.fireplace_switch",
+          raw("switch.fireplace_switch", "on", %{"friendly_name" => "Fireplace Switch"})
+        ),
+        @later
+      )
+
+    refute Directory.get(Socket.directory(s), "switch.fireplace_switch")
+
+    hid = sub_id(out, "homeassistant_started")
+    {s, reload} = Socket.handle(s, event(hid, "homeassistant_started", %{}), @later)
+    assert Enum.map(reload, & &1.type) |> Enum.sort() == Enum.sort(@registry_types)
+
+    s = answer(s, reload, HomeFixture.payloads())
+    dir = Socket.directory(s)
+    assert Directory.get(dir, "switch.fireplace_switch").name == "Fireplace Switch"
+    assert Directory.state(dir, "switch.fireplace_switch")["state"] == "on"
+  end
+
+  test "a refused registry list during a reload keeps the current directory" do
+    {s, out} = loaded()
+    before = Socket.directory(s)
+    rid = sub_id(out, "entity_registry_updated")
+    {s, reload} = Socket.handle(s, event(rid, "entity_registry_updated", %{}), @later)
+
+    log =
+      capture_log(fn ->
+        s =
+          answer(s, reload, HomeFixture.with_alias("light.pantry_lighy", "pantry"),
+            fail: ["config/entity_registry/list"]
+          )
+
+        send(self(), {:s, s})
+      end)
+
+    assert_received {:s, s}
+    assert log =~ "[home] registry reload refused — keeping the current directory"
+    assert Socket.directory(s) == before
+    assert s.phase == :ready
+    assert s.load == nil
+    # a hidden (but exposed) switch stays out of view — an empty registry would let it in
+    refute Directory.get(Socket.directory(s), "switch.driveway_lights")
+
+    # and the next reload goes through normally
+    {s, again} = Socket.refresh(s)
+    s = answer(s, again, HomeFixture.with_alias("light.pantry_lighy", "pantry"))
+    assert "pantry" in Directory.get(Socket.directory(s), "light.pantry_lighy").aliases
+  end
+
+  @tag capture_log: true
+  test "a refused registry list on a reconnect keeps the entries but takes the fresh states" do
+    {s, _} = loaded()
+    before = Socket.directory(s)
+    s = Socket.disconnected(s, @now)
+    {s, _} = Socket.handle(s, %{"type" => "auth_required"}, @now)
+    {s, out} = Socket.handle(s, %{"type" => "auth_ok", "ha_version" => "2026.8.0"}, @now)
+
+    fresh = %{
+      HomeFixture.payloads()
+      | states:
+          Enum.map(HomeFixture.payloads().states, fn
+            %{"entity_id" => "switch.fireplace_switch"} = st -> %{st | "state" => "on"}
+            st -> st
+          end)
+    }
+
+    s = answer(s, out, fresh, fail: ["config/entity_registry/list"])
+    dir = Socket.directory(s)
+    assert dir.entries == before.entries
+    refute Directory.get(dir, "switch.driveway_lights")
+    assert Directory.state(dir, "switch.fireplace_switch")["state"] == "on"
+    assert dir.connected?
+    assert dir.disconnected_at == nil
+    assert s.phase == :ready
+  end
+
+  @tag capture_log: true
+  test "a refused registry list on the first load still builds (from an empty registry)" do
+    {s, out} = authed()
+    s = answer(s, out, HomeFixture.payloads(), fail: ["config/area_registry/list"])
+    dir = Socket.directory(s)
+    assert dir.areas == []
+    assert Directory.get(dir, "switch.fireplace_switch")
+  end
+
   test "refresh re-requests the registries plus exposure, and does nothing before the first load" do
     {s, _} = authed()
     assert {_, []} = Socket.refresh(s)
@@ -398,11 +509,17 @@ defmodule App.HomeAssistant.SocketTest do
 
   test "disconnected keeps the directory, marks it disconnected and restarts the ids" do
     {s, _} = loaded()
-    s = Socket.disconnected(s)
+    dropped = ~U[2026-10-19 20:30:00Z]
+    s = Socket.disconnected(s, dropped)
     assert s.phase == :connecting
     dir = Socket.directory(s)
     refute dir.connected?
+    assert dir.disconnected_at == dropped
     assert Directory.get(dir, "light.gaming_room_lights")
+
+    # failed reconnects don't move the drop time: the states are as of the FIRST drop
+    s = Socket.disconnected(s, ~U[2026-10-19 20:45:00Z])
+    assert Socket.directory(s).disconnected_at == dropped
 
     # a fresh connection: ids start over, and the reload brings connected? back
     {s, _} = Socket.handle(s, %{"type" => "auth_required"}, @now)
@@ -411,6 +528,7 @@ defmodule App.HomeAssistant.SocketTest do
     refute Socket.directory(s).connected?
     s = answer(s, out, HomeFixture.payloads())
     assert Socket.directory(s).connected?
+    assert Socket.directory(s).disconnected_at == nil
   end
 
   test "retry delays back off 1, 2, 5, 15, 30, 60 s and cap; a refused token waits 10 min" do

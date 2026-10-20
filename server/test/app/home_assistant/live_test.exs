@@ -202,6 +202,7 @@ defmodule App.HomeAssistant.LiveTest do
     assert log =~ ~r/\[home\] socket down: closed by Home Assistant \(1000\); retry in 1s/
     {:ok, stale} = App.HomeAssistant.directory()
     assert Directory.state(stale, "switch.fireplace_switch")["state"] == "on"
+    assert %DateTime{} = stale.disconnected_at
 
     # ...and it reconnects and reloads by itself
     assert_receive {:fake_ha, :connected, ha2}, 4_000
@@ -227,7 +228,9 @@ defmodule App.HomeAssistant.LiveTest do
     assert log =~ ~r/\[home\] socket down: .*; retry in 600s/
     refute log =~ "sekrit-wrong-token"
     assert {:error, :not_loaded} = App.HomeAssistant.directory()
-    refute :sys.get_status(Live) |> inspect() =~ "sekrit-wrong-token"
+    # the raw term, not inspect/1 (the struct's derived Inspect already hides it there)
+    assert :binary.match(:erlang.term_to_binary(:sys.get_status(Live)), "sekrit-wrong-token") ==
+             :nomatch
   end
 
   test "a host that refuses the connection backs off and never blocks a read" do
@@ -276,24 +279,13 @@ defmodule App.HomeAssistant.LiveTest do
     {:ok, port} = :inet.port(listen)
     start_live("http://127.0.0.1:#{port}")
 
-    {:ok, sock} = :gen_tcp.accept(listen, 2_000)
-    request = recv_until(sock, "", "\r\n\r\n")
-    [_, key] = Regex.run(~r/sec-websocket-key: *(\S+)/i, request)
-    accept = :crypto.hash(:sha, key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11") |> Base.encode64()
-
-    :ok =
-      :gen_tcp.send(
-        sock,
-        "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n" <>
-          "sec-websocket-accept: #{accept}\r\n\r\n" <>
-          text_frame(%{type: "auth_required", ha_version: "2026.8.0"})
-      )
+    sock = raw_upgrade(listen)
 
     {ws, [auth]} = recv_msgs(sock, %Mint.WebSocket{}, 1)
     assert auth["type"] == "auth"
     :ok = :gen_tcp.send(sock, text_frame(%{type: "auth_ok", ha_version: "2026.8.0"}))
 
-    {_ws, cmds} = recv_msgs(sock, ws, 9)
+    {_ws, cmds} = recv_msgs(sock, ws, 10)
 
     for %{"id" => id, "type" => type} <- cmds do
       body = Jason.encode!(%{id: id, type: "result", success: true, result: raw_payload(type)})
@@ -312,6 +304,42 @@ defmodule App.HomeAssistant.LiveTest do
     assert Directory.get(loaded_dir(), "light.gaming_room_lights")
     :gen_tcp.close(sock)
     :gen_tcp.close(listen)
+  end
+
+  # The window between the connect task's handoff and Live learning the conn: the 101 and
+  # auth_required are guaranteed to arrive while the task still owns the socket (it sleeps
+  # before handing over). An active-mode socket would deliver them to the task, Mint would
+  # forward them to Live ahead of the task's reply, and Live would drop them as strays.
+  test "data that arrives before the conn is handed over is not lost" do
+    {:ok, listen} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listen)
+    start_live("http://127.0.0.1:#{port}", handoff_delay_ms: 300)
+
+    sock = raw_upgrade(listen)
+    {_ws, [auth]} = recv_msgs(sock, %Mint.WebSocket{}, 1)
+    assert auth["type"] == "auth"
+    :gen_tcp.close(sock)
+    :gen_tcp.close(listen)
+  end
+
+  # Accept one client, answer its upgrade with the 101 AND auth_required in a single write.
+  defp raw_upgrade(listen) do
+    {:ok, sock} = :gen_tcp.accept(listen, 2_000)
+    request = recv_until(sock, "", "\r\n\r\n")
+    [_, key] = Regex.run(~r/sec-websocket-key: *(\S+)/i, request)
+    accept = :crypto.hash(:sha, key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11") |> Base.encode64()
+
+    :ok =
+      :gen_tcp.send(
+        sock,
+        "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n" <>
+          "sec-websocket-accept: #{accept}\r\n\r\n" <>
+          text_frame(%{type: "auth_required", ha_version: "2026.8.0"})
+      )
+
+    sock
   end
 
   defp raw_payload("config/area_registry/list"), do: HomeFixture.payloads().areas

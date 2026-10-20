@@ -476,6 +476,17 @@ defmodule App.Tools.HomeAssistantTest do
              Tool.execute("home_status", %{"targets" => ["fireplace"]}, @ctx)
   end
 
+  test "as_of counts from when the connection dropped, not from the last full load" do
+    # loaded two hours ago (registry reloads/state events kept it current), dropped 3 min ago
+    loaded = DateTime.add(DateTime.utc_now(), -2, :hour)
+    dir = Directory.build(HomeFixture.payloads(), loaded)
+    dropped = DateTime.add(DateTime.utc_now(), -3 * 60 - 5, :second)
+    put_directory(Directory.set_connected(dir, false, dropped))
+
+    assert {:ok, %{as_of: as_of}} = Tool.execute("home_status", %{}, @ctx)
+    assert as_of == "3 minutes ago — the house connection is down"
+  end
+
   test "home_status passes ask / not_found through like home_control" do
     assert {:ok, r} = Tool.execute("home_status", %{"targets" => ["zorblax"]}, @ctx)
     assert [%{target: "zorblax"}] = r.not_found
