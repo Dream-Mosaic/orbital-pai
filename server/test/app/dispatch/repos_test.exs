@@ -53,4 +53,10 @@ defmodule App.Dispatch.ReposTest do
   test "empty phrase is none" do
     assert {:none, _} = Repos.resolve(repos(), "the app")
   end
+
+  test "typo boundary: distance 2 on a word under 8 letters is rejected" do
+    # "garten" is 1 away from "garden"; "gardenxx" is 2 away but "garden" is only 6 letters.
+    assert {:ok, %{name: "garden-planner"}} = Repos.resolve(repos(), "garten")
+    assert {:none, _} = Repos.resolve(repos(), "gartxn")
+  end
 end

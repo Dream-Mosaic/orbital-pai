@@ -119,6 +119,23 @@ defmodule App.Dispatch.ForgeTest do
     assert {:ok, %{run_id: 555, run_number: 12}} = Forge.dispatch("kalcode/x", 31, 9)
   end
 
+  test "dispatch with no run info or a junk body is a tagged error" do
+    for {resp, want} <- [{"", :no_run_info}, {"[]", :bad_body}] do
+      Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 200, resp) end)
+      assert {:error, ^want} = Forge.dispatch("kalcode/x", 1, 1)
+    end
+
+    Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 204, "") end)
+    assert {:error, :no_run_info} = Forge.dispatch("kalcode/x", 1, 1)
+  end
+
+  test "non-list bodies on list endpoints are :bad_body" do
+    Req.Test.stub(ForgeStub, fn conn -> Req.Test.json(conn, %{"message" => "hm"}) end)
+    assert {:error, :bad_body} = Forge.list_issues("kalcode/x")
+    assert {:error, :bad_body} = Forge.list_repos()
+    assert {:error, :bad_body} = Forge.open_prs("kalcode/x")
+  end
+
   test "run returns status and conclusion" do
     Req.Test.stub(ForgeStub, fn conn ->
       assert conn.request_path == "/api/v1/repos/kalcode/claude-dispatch/actions/runs/555"

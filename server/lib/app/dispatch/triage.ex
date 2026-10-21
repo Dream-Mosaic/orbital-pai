@@ -6,7 +6,6 @@ defmodule App.Dispatch.Triage do
   """
 
   @idea ~w(idea ideas question discussion wontfix)
-  @feature ~w(feature enhancement)
   @bug ~w(bug)
   @debt ~w(debt chore refactor)
   @rank %{bug: 0, debt: 1, feature: 2, design: 3}
@@ -32,9 +31,9 @@ defmodule App.Dispatch.Triage do
     cond do
       Enum.any?(labels, &(&1 in @bug)) -> {:candidate, :bug}
       Enum.any?(labels, &(&1 in @debt)) -> {:candidate, :debt}
-      Enum.any?(labels, &(&1 in @feature)) and ctx[:design_gated?] -> {:candidate, :design}
-      Enum.any?(labels, &(&1 in @feature)) -> {:candidate, :feature}
-      true -> {:skip, "no label"}
+      # Anything with a real body and no type label (or only area labels) is feature work.
+      ctx[:design_gated?] -> {:candidate, :design}
+      true -> {:candidate, :feature}
     end
   end
 

@@ -11,24 +11,32 @@ defmodule App.Dispatch.Forge do
   @default_dispatch_repo "kalcode/claude-dispatch"
 
   def list_repos do
-    with {:ok, body} <- get("/user/repos", limit: 50) do
-      {:ok,
-       for r <- body do
-         %{
-           name: r["name"],
-           full_name: r["full_name"],
-           default_branch: r["default_branch"],
-           open_issues: r["open_issues_count"]
-         }
-       end}
+    case get("/user/repos", limit: 50) do
+      {:ok, body} when is_list(body) ->
+        {:ok,
+         for r <- body, is_map(r) do
+           %{
+             name: r["name"],
+             full_name: r["full_name"],
+             default_branch: r["default_branch"],
+             open_issues: r["open_issues_count"]
+           }
+         end}
+
+      {:ok, _} ->
+        {:error, :bad_body}
+
+      err ->
+        err
     end
   end
 
   @doc "Open issues only (`type=issues` excludes pull requests)."
   def list_issues(full_name) do
-    with {:ok, body} <-
-           get("/repos/#{full_name}/issues", state: "open", type: "issues", limit: 50) do
-      {:ok, Enum.map(body, &normalize_issue/1)}
+    case get("/repos/#{full_name}/issues", state: "open", type: "issues", limit: 50) do
+      {:ok, body} when is_list(body) -> {:ok, for(i <- body, is_map(i), do: normalize_issue(i))}
+      {:ok, _} -> {:error, :bad_body}
+      err -> err
     end
   end
 
@@ -45,15 +53,18 @@ defmodule App.Dispatch.Forge do
 
   @doc "Bodies of the open PRs (to spot \"Closes #N\")."
   def open_prs(full_name) do
-    with {:ok, body} <- get("/repos/#{full_name}/pulls", state: "open", limit: 50) do
-      {:ok, Enum.map(body, &(&1["body"] || ""))}
+    case get("/repos/#{full_name}/pulls", state: "open", limit: 50) do
+      {:ok, body} when is_list(body) -> {:ok, for(pr <- body, is_map(pr), do: pr["body"] || "")}
+      {:ok, _} -> {:error, :bad_body}
+      err -> err
     end
   end
 
   def create_issue(full_name, title, body, labels) do
-    with {:ok, r} <-
-           post("/repos/#{full_name}/issues", %{title: title, body: body, labels: labels}) do
-      {:ok, %{number: r["number"], url: r["html_url"]}}
+    case post("/repos/#{full_name}/issues", %{title: title, body: body, labels: labels}) do
+      {:ok, %{"number" => n} = r} -> {:ok, %{number: n, url: r["html_url"]}}
+      {:ok, _} -> {:error, :bad_body}
+      err -> err
     end
   end
 
@@ -73,14 +84,20 @@ defmodule App.Dispatch.Forge do
                return_run_info: true
              }
            ) do
-      {:ok, %{run_id: r["id"], run_number: r["run_number"]}}
+      case r do
+        %{"id" => id} when not is_nil(id) -> {:ok, %{run_id: id, run_number: r["run_number"]}}
+        r when r in ["", nil] or r == %{} -> {:error, :no_run_info}
+        _ -> {:error, :bad_body}
+      end
     end
   end
 
   def run(run_id) do
     with {:ok, cfg} <- config(),
          {:ok, r} <- get("/repos/#{dispatch_repo(cfg)}/actions/runs/#{run_id}", []) do
-      {:ok, %{status: r["status"], conclusion: r["conclusion"]}}
+      if is_map(r),
+        do: {:ok, %{status: r["status"], conclusion: r["conclusion"]}},
+        else: {:error, :bad_body}
     end
   end
 

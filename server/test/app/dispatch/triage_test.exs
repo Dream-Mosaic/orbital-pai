@@ -27,14 +27,21 @@ defmodule App.Dispatch.TriageTest do
     assert Triage.classify(issue("personal-assistant", 23), gated) == {:candidate, :bug}
   end
 
-  test "empty body, open PR, active job, pull requests, unlabeled" do
+  test "empty body, open PR, active job, pull requests and pull requests" do
     base = %{number: 1, title: "t", labels: ["bug"], body: "x", pull_request: false}
     assert {:skip, "no description"} = Triage.classify(%{base | body: "  \n"}, @ctx)
     assert {:skip, "no description"} = Triage.classify(%{base | body: nil}, @ctx)
     assert {:skip, "PR already open"} = Triage.classify(base, %{@ctx | open_pr?: true})
     assert {:skip, "job already active"} = Triage.classify(base, %{@ctx | active_job?: true})
     assert {:skip, "is a pull request"} = Triage.classify(%{base | pull_request: true}, @ctx)
-    assert {:skip, "no label"} = Triage.classify(%{base | labels: ["native"]}, @ctx)
+  end
+
+  test "no type label: a real body makes it a feature (design when gated)" do
+    base = %{number: 1, title: "t", labels: [], body: "x", pull_request: false}
+    gated = %{@ctx | design_gated?: true}
+    assert Triage.classify(base, @ctx) == {:candidate, :feature}
+    assert Triage.classify(%{base | labels: ["native", "server"]}, @ctx) == {:candidate, :feature}
+    assert Triage.classify(%{base | labels: ["native"]}, gated) == {:candidate, :design}
   end
 
   test "order: bug, debt, feature, design; newest first" do
