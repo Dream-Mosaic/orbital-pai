@@ -433,8 +433,8 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   (and any later connector) should follow it; the home kit is the reference implementation.
 
 - **Claude dispatch is a contract, not a call.** Henry starts a job by dispatching the
-  `work-issue.yml` workflow on `kalcode/claude-dispatch` with inputs `repo`, `issue`, `job_id`
-  (`return_run_info`); the box reports back by POSTing a callback signed with HMAC over the RAW
+  `work-issue.yml` workflow on `kalcode/claude-dispatch` with `inputs` `repo`, `issue`, `job_id`
+  (plus a top-level `return_run_info: true` beside them); the box reports back by POSTing a callback signed with HMAC over the RAW
   request bytes (`DISPATCH_CALLBACK_SECRET`; verify before parsing, never re-encode the JSON).
   Callbacks are idempotent and end states are sticky: `Dispatch.set_status/3` and `claim_notice`
   are race-safe (a no-op once a real end state landed, one notification per job), so the
@@ -449,10 +449,13 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
   `kalcode/claude-dispatch` (workflow, runner, `CLAUDE_CODE_OAUTH_TOKEN` and `DISPATCH_FORGE_TOKEN`
   repo secrets). Server-side code here only dispatches and receives callbacks.
-- **The repos kit is per-user gated and preselected by name.** Only emails in
-  `CLAUDE_DISPATCH_USERS` see it at all; it is preselected when the turn names a known repo
-  (`Board.warm/0` loads the names 10 s after boot), minus a stop-list of common words that are
-  also repo names, so "the weather" doesn't open a kit that can start code jobs.
+- **The repos kit is registered for everyone; the per-user gate is inside the tools.**
+  `Repos.enabled?/1` is just `App.Config.forge?()` and `wants?/2` preselects with no user check.
+  Each dispatch tool calls `allowed?/1` (`claude_dispatch.ex`) against `CLAUDE_DISPATCH_USERS`
+  (unset = nobody); anyone else gets "that's not set up for you" with no forge call. Preselection
+  by repo name (`Board.warm/0` loads the names 10 s after boot) is filtered by Board's `@not_topic`
+  stop-list plus minimum word/phrase lengths (`@min_word` 6, `@min_phrase` 4), so common words that
+  are also repo names don't open the kit.
 
 ## Testing patterns
 
