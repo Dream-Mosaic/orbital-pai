@@ -125,6 +125,9 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `lib/app/home_assistant/{directory,resolve,actions,socket,live,phrases,media}.ex` (live WS
   directory, the words → entities resolver, REST writes, the socket, the supervised glue, the
   names preselection matches, Music Assistant players).
+- Claude dispatch (2026-10-21): `lib/app/dispatch*` (jobs, `Forge` API client, HMAC-signed callback
+  endpoint, `Notifier`, `Watchdog`, `Board`), `lib/app/toolkits/repos.ex` (the repos kit: board,
+  start_claude, claude_jobs, file_issue) and `lib/app/tools/claude_dispatch.ex`.
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
@@ -428,6 +431,28 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   honest outcomes as first-class results, safety as absent code paths, one greppable log line per
   decision, a fixture eval from a real snapshot, and degrade rather than die. The repos toolkit
   (and any later connector) should follow it; the home kit is the reference implementation.
+
+- **Claude dispatch is a contract, not a call.** Henry starts a job by dispatching the
+  `work-issue.yml` workflow on `kalcode/claude-dispatch` with inputs `repo`, `issue`, `job_id`
+  (`return_run_info`); the box reports back by POSTing a callback signed with HMAC over the RAW
+  request bytes (`DISPATCH_CALLBACK_SECRET`; verify before parsing, never re-encode the JSON).
+  Callbacks are idempotent and end states are sticky: `Dispatch.set_status/3` and `claim_notice`
+  are race-safe (a no-op once a real end state landed, one notification per job), so the
+  watchdog and a late callback can't double-notify or overwrite each other. An AMBIGUOUS dispatch
+  outcome (no run info, timeout) leaves the job `queued` rather than `failed` — the run may exist
+  and its callback must still be accepted. The watchdog never marks `lost` by age alone, because
+  the box runs ONE job at a time and the third queued issue legitimately waits hours: a run still
+  waiting/running is left alone; 404 = `lost` ("the run disappeared"); read errors only count after
+  24 h; a job with no `run_id` is `lost` after 6 h. `FORGE_URL` should be the LAN URL
+  `http://192.168.50.249:3000` (Coolify, CT 102) so API POSTs skip Cloudflare's browser check.
+  Token and secret come from env only (names in `server/.env.example`).
+- **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
+  `kalcode/claude-dispatch` (workflow, runner, `CLAUDE_CODE_OAUTH_TOKEN` and `DISPATCH_FORGE_TOKEN`
+  repo secrets). Server-side code here only dispatches and receives callbacks.
+- **The repos kit is per-user gated and preselected by name.** Only emails in
+  `CLAUDE_DISPATCH_USERS` see it at all; it is preselected when the turn names a known repo
+  (`Board.warm/0` loads the names 10 s after boot), minus a stop-list of common words that are
+  also repo names, so "the weather" doesn't open a kit that can start code jobs.
 
 ## Testing patterns
 

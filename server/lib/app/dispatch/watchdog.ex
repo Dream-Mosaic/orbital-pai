@@ -1,8 +1,8 @@
 defmodule App.Dispatch.Watchdog do
   @moduledoc """
   Catches dispatch jobs that never report back. Every 5 minutes, for each `queued`/`running`
-  job: if the forge says its run finished (status success/failure/cancelled/skipped, or `stopped` set) and the job is >= 10 min old and the run stopped >= 3 min ago (grace for an in-flight callback), the job ended without calling back (`failed`); if it
-  is older than 130 minutes, it is `lost`. Status changes go ONLY through `Dispatch.set_status/3`
+  job: if the forge says its run finished (status success/failure/cancelled/skipped, or `stopped` set) and the job is >= 10 min old and the run stopped >= 3 min ago (grace for an in-flight callback), the job ended without calling back (`failed`). A run still waiting/running is left alone
+  whatever its age (the box runs one job at a time, so queueing for hours is legitimate); a run the forge no longer knows (404) is `lost`; if every read errors for 24 h it is `lost`; a job with no `run_id` is `lost` after 6 h of silence. Status changes go ONLY through `Dispatch.set_status/3`
   (race-safe: a no-op if a real callback landed first), then the job is handed to the notifier,
   whose `notified_at` claim keeps a double path from notifying twice. `tick/1` takes an
   injectable `now` so tests drive it directly.
@@ -20,7 +20,8 @@ defmodule App.Dispatch.Watchdog do
   @interval_ms 5 * 60_000
   # The one-shot read of the repo names, a little after boot (never blocks it).
   @warm_after_ms 10_000
-  @max_age_ms 130 * 60_000
+  @no_run_ms 6 * 3_600_000
+  @blind_ms 24 * 3_600_000
   @min_age_ms 10 * 60_000
   @grace_ms 3 * 60_000
   @finished ~w(success failure cancelled skipped)
@@ -56,32 +57,40 @@ defmodule App.Dispatch.Watchdog do
   def handle_info(_, state), do: {:noreply, state}
 
   def tick(now \\ DateTime.utc_now()) do
-    old = MapSet.new(Dispatch.stale_jobs(now, @max_age_ms), & &1.id)
-
-    for job <- Dispatch.stale_jobs(now, @min_age_ms) do
-      cond do
-        silently_ended?(job, now) -> finish(job, "failed", @silent_reason)
-        MapSet.member?(old, job.id) -> finish(job, "lost", "no report within 130 minutes")
-        true -> :ok
-      end
-    end
-
+    for job <- Dispatch.stale_jobs(now, @min_age_ms), do: check(job, now)
     :ok
   end
 
-  # The run is over AND its callback had a fair chance to land (stopped >= 3 min ago, or unknown).
-  defp silently_ended?(%{run_id: id}, now) when is_integer(id) do
+  # Age alone never marks a job lost: the box runs ONE job at a time, so a legitimately queued
+  # run can wait hours in the forge's queue. The run's own state decides.
+  defp check(%{run_id: id} = job, now) when is_integer(id) do
     case Forge.run(id) do
       {:ok, %{status: status, stopped: stopped}} ->
-        finished?(status, stopped) and
-          (is_nil(stopped) or DateTime.diff(now, stopped, :millisecond) >= @grace_ms)
+        if finished?(status, stopped) and
+             (is_nil(stopped) or DateTime.diff(now, stopped, :millisecond) >= @grace_ms),
+           do: finish(job, "failed", @silent_reason)
+
+      {:error, :not_found} ->
+        finish(job, "lost", "the run disappeared")
 
       _ ->
-        false
+        if older_than?(job, now, @blind_ms),
+          do: finish(job, "lost", "couldn't check on the run")
     end
   end
 
-  defp silently_ended?(_, _), do: false
+  # No run info (accepted without it, or uncertain): only a long silence counts as lost.
+  defp check(job, now) do
+    if older_than?(job, now, @no_run_ms), do: finish(job, "lost", "never heard from the run")
+  end
+
+  defp older_than?(job, now, ms) do
+    DateTime.diff(now, DateTime.from_naive!(to_naive(job.inserted_at), "Etc/UTC"), :millisecond) >=
+      ms
+  end
+
+  defp to_naive(%DateTime{} = dt), do: DateTime.to_naive(dt)
+  defp to_naive(%NaiveDateTime{} = n), do: n
 
   defp finished?(status, stopped), do: status in @finished or not is_nil(stopped)
 

@@ -70,20 +70,42 @@ defmodule App.Dispatch.WatchdogTest do
     end
   end
 
-  test "a job over 130 minutes becomes lost and is notified", %{job: job} do
-    run_stub("running")
-    Watchdog.tick(later(131))
-    j = Dispatch.get_job(job.id)
-    assert j.status == "lost"
-    assert j.notified_at
-  end
-
-  test "a running job under 130 minutes is untouched", %{job: job} do
-    run_stub("running")
-    Watchdog.tick(later(129))
+  test "a 5-hour-old job whose run is still waiting is untouched", %{job: job} do
+    run_stub("waiting")
+    Watchdog.tick(later(300))
     j = Dispatch.get_job(job.id)
     assert j.status == "queued"
     assert j.notified_at == nil
+  end
+
+  test "a run the forge no longer knows is lost and notified", %{job: job} do
+    Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 404, "x") end)
+    Watchdog.tick(later(20))
+    j = Dispatch.get_job(job.id)
+    assert j.status == "lost"
+    assert j.reason == "the run disappeared"
+    assert j.notified_at
+  end
+
+  describe "without a run_id" do
+    setup do
+      {:ok, u} = Users.upsert_allowed("d@x.com")
+      {:ok, job} = Dispatch.create_job(u.id, "kalcode/x", 32)
+      run_stub("waiting")
+      %{bare: job}
+    end
+
+    test "7 hours of silence is lost", %{bare: job} do
+      Watchdog.tick(later(7 * 60))
+      j = Dispatch.get_job(job.id)
+      assert j.status == "lost"
+      assert j.reason == "never heard from the run"
+    end
+
+    test "2 hours is untouched", %{bare: job} do
+      Watchdog.tick(later(120))
+      assert Dispatch.get_job(job.id).status == "queued"
+    end
   end
 
   test "a job already at an end state is left alone", %{job: job} do
@@ -93,9 +115,13 @@ defmodule App.Dispatch.WatchdogTest do
     assert Dispatch.get_job(job.id).status == "pr"
   end
 
-  test "a forge error leaves the job to the age check", %{job: job} do
+  test "a forge error leaves the job alone until it is 24 hours old", %{job: job} do
     Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 500, "x") end)
-    Watchdog.tick(later(10))
+    Watchdog.tick(later(10 * 60))
     assert Dispatch.get_job(job.id).status == "queued"
+    Watchdog.tick(later(25 * 60))
+    j = Dispatch.get_job(job.id)
+    assert j.status == "lost"
+    assert j.reason == "couldn't check on the run"
   end
 end
