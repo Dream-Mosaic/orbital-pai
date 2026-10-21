@@ -31,6 +31,8 @@ config :app, start_memory_embedder: false
 config :app, start_source_ingester: false
 config :app, start_speaker_verifier: false
 config :app, start_home_assistant_live: false
+config :app, start_dispatch_notifier: false
+config :app, start_dispatch_watchdog: false
 
 # The home tools' silent no-op watch (a fire-and-forget poll after on/off) is off in tests.
 config :app, home_assistant_watch_ms: 0

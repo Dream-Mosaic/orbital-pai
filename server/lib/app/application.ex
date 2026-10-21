@@ -48,7 +48,11 @@ defmodule App.Application do
         memory_consolidator() ++
         memory_embedder() ++
         source_ingester() ++
-        pool_warmer() ++ speaker_verifier() ++ backup() ++ home_assistant_live()
+        pool_warmer() ++
+        speaker_verifier() ++
+        backup() ++
+        home_assistant_live() ++
+        dispatch_notifier() ++ dispatch_watchdog()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -130,6 +134,19 @@ defmodule App.Application do
          Application.get_env(:app, :start_home_assistant_live, true),
        do: [App.HomeAssistant.Live],
        else: []
+  end
+
+  # Claude dispatch: the end-of-job notifier and the silent-job watchdog (need the forge).
+  defp dispatch_notifier do
+    if App.Config.forge?() and Application.get_env(:app, :start_dispatch_notifier, true),
+      do: [App.Dispatch.Notifier],
+      else: []
+  end
+
+  defp dispatch_watchdog do
+    if App.Config.forge?() and Application.get_env(:app, :start_dispatch_watchdog, true),
+      do: [App.Dispatch.Watchdog],
+      else: []
   end
 
   # Tell Phoenix to update the endpoint configuration

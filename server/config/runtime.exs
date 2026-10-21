@@ -169,3 +169,16 @@ ha_token = System.get_env("HOME_ASSISTANT_TOKEN", "")
 if ha_url != "" and ha_token != "" and System.get_env("HOME_ASSISTANT") not in ~w(false 0) do
   config :app, :home_assistant, %{url: String.trim_trailing(ha_url, "/"), token: ha_token}
 end
+
+# ntfy phone push for Claude dispatch results (see App.Dispatch.Ntfy). URL + topic required;
+# the token is optional (only for protected topics).
+ntfy_url = System.get_env("NTFY_URL", "")
+ntfy_topic = System.get_env("NTFY_TOPIC", "")
+
+if ntfy_url != "" and ntfy_topic != "" do
+  config :app, :ntfy, %{
+    url: String.trim_trailing(ntfy_url, "/"),
+    topic: ntfy_topic,
+    token: System.get_env("NTFY_TOKEN")
+  }
+end
