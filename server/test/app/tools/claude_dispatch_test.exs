@@ -26,10 +26,17 @@ defmodule App.Tools.ClaudeDispatchTest do
     })
 
     Application.put_env(:app, :dispatch_req_opts, plug: {Req.Test, ForgeStub})
+    Application.put_env(:app, :dispatch_callback_secret, "s3cret")
     Board.forget()
 
     on_exit(fn ->
-      for k <- [:allowed_users, :claude_dispatch_users, :forge, :dispatch_req_opts],
+      for k <- [
+            :allowed_users,
+            :claude_dispatch_users,
+            :forge,
+            :dispatch_req_opts,
+            :dispatch_callback_secret
+          ],
           do: Application.delete_env(:app, k)
 
       Board.forget()
@@ -390,6 +397,36 @@ defmodule App.Tools.ClaudeDispatchTest do
 
       assert uid == d.id
       assert %{status: "queued", run_id: 515} = Dispatch.get_job(j15)
+    end
+
+    test "no callback secret: refused up front, no job and no forge call", %{david: d} do
+      forge()
+
+      for unset <- [nil, ""] do
+        if unset,
+          do: Application.put_env(:app, :dispatch_callback_secret, unset),
+          else: Application.delete_env(:app, :dispatch_callback_secret)
+
+        log =
+          capture_log(fn ->
+            assert {:ok,
+                    %{
+                      error:
+                        "Claude couldn't report back to me: the callback secret isn't set on " <>
+                          "this server"
+                    }} ==
+                     Tool.execute(
+                       "start_claude",
+                       %{"repo" => "chronicles", "issues" => [31]},
+                       ctx(d)
+                     )
+          end)
+
+        assert log =~ "[dispatch] start_claude refused: no callback secret"
+      end
+
+      assert forge_calls() == []
+      assert Dispatch.list_jobs(d.id) == []
     end
 
     test "an issue with an active job is refused, the rest start", %{david: d} do

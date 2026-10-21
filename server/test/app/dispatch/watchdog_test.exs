@@ -42,7 +42,7 @@ defmodule App.Dispatch.WatchdogTest do
       Watchdog.tick(now)
       j = Dispatch.get_job(job.id)
       assert j.status == "failed"
-      assert j.reason == "the job ended without reporting back"
+      assert j.reason == "the job ended without reporting back — check the issue for a PR"
       assert j.notified_at
     end
   end

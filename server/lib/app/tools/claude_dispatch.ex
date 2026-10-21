@@ -12,6 +12,8 @@ defmodule App.Tools.ClaudeDispatch do
 
   Two gates come before any forge call. The user's canonical email must be on
   `:claude_dispatch_users`, else "that's not set up for you". The forge must be configured.
+  `start_claude` also refuses up front, with no job and no forge call, while the callback
+  secret is unset: every callback would be refused, so a job could never report back.
 
   `start_claude` never leaves a job `queued` that wasn't dispatched. A failed notes comment or a
   definite dispatch rejection (4xx/5xx, or a transport error before the request went out) marks
@@ -33,6 +35,7 @@ defmodule App.Tools.ClaudeDispatch do
 
   @not_yours "that's not set up for you"
   @not_configured "the forge isn't configured on this server"
+  @no_secret "Claude couldn't report back to me: the callback secret isn't set on this server"
   @issue_cap 20
   @repo_cap 10
   @jobs_cap 10
@@ -177,8 +180,14 @@ defmodule App.Tools.ClaudeDispatch do
     # The budget runs from here: an uncached repo-list read comes out of it too.
     started_at = System.monotonic_time(:millisecond)
     {nums, bad} = issue_numbers(args["issues"])
+    callback_secret? = Dispatch.callback_secret?()
 
     case str(args["repo"]) do
+      # Without the secret every callback is refused: the job would run, and nobody would hear.
+      _ when not callback_secret? ->
+        Logger.warning("[dispatch] start_claude refused: no callback secret")
+        {:ok, %{error: @no_secret}}
+
       nil ->
         {:ok, %{note: "start_claude needs the repo"}}
 

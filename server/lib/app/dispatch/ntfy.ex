@@ -1,7 +1,9 @@
 defmodule App.Dispatch.Ntfy do
   @moduledoc """
   Phone push via ntfy: `POST {url}/{topic}` with the message as the body. Config:
-  `:app, :ntfy` -> `%{url:, topic:, token:}` (token optional, sent as a Bearer header). Req
+  `:app, :ntfy` -> `%{url:, topic:, token:}`, set in runtime.exs whenever NTFY_TOPIC is: the url
+  is NTFY_URL, defaulting to `https://ntfy.sh` when unset or empty, and the token (NTFY_TOKEN) is
+  optional, sent as a Bearer header. Req
   options are overridable via `:ntfy_req_opts` (test seam). One attempt, no retry: a missed push
   is not worth a retry loop, and the wall line is the backstop. Failures log the status or
   exception only, never the URL, topic or token.

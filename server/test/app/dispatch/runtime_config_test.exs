@@ -41,4 +41,27 @@ defmodule App.Dispatch.RuntimeConfigTest do
                app[:forge]
     end
   end
+
+  describe "ntfy" do
+    test "a topic alone is enough: the URL defaults to ntfy.sh" do
+      assert %{url: "https://ntfy.sh", topic: "henry", token: nil} =
+               runtime(%{"NTFY_TOPIC" => "henry"})[:ntfy]
+
+      assert %{url: "https://ntfy.sh"} =
+               runtime(%{"NTFY_TOPIC" => "henry", "NTFY_URL" => ""})[:ntfy]
+    end
+
+    test "an own server and token are used as given" do
+      assert %{url: "https://ntfy.home.test", topic: "henry", token: "tk"} =
+               runtime(%{
+                 "NTFY_TOPIC" => "henry",
+                 "NTFY_URL" => "https://ntfy.home.test/",
+                 "NTFY_TOKEN" => "tk"
+               })[:ntfy]
+    end
+
+    test "no topic, no ntfy" do
+      refute Keyword.has_key?(runtime(%{"NTFY_URL" => "https://ntfy.sh"}), :ntfy)
+    end
+  end
 end

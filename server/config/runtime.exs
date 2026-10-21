@@ -202,7 +202,8 @@ if forge_url != "" and forge_token != "" and System.get_env("CLAUDE_DISPATCH") n
   }
 end
 
-# The HMAC secret shared with the dispatch workflow; unset, every callback is refused (401).
+# The HMAC secret shared with the dispatch workflow. Unset, every callback is refused (401), so
+# start_claude refuses too (a job could never report back) and boot logs a warning.
 case System.get_env("DISPATCH_CALLBACK_SECRET", "") do
   "" -> :ok
   secret -> config :app, :dispatch_callback_secret, secret
@@ -218,15 +219,23 @@ if users = System.get_env("CLAUDE_DISPATCH_USERS") do
          |> Enum.reject(&(&1 == ""))
 end
 
-# ntfy phone push for Claude dispatch results (see App.Dispatch.Ntfy). URL + topic required;
-# the token is optional (only for protected topics).
-ntfy_url = System.get_env("NTFY_URL", "")
-ntfy_topic = System.get_env("NTFY_TOPIC", "")
+# ntfy phone push for Claude dispatch results (see App.Dispatch.Ntfy). NTFY_TOPIC turns it on;
+# NTFY_URL defaults to the public https://ntfy.sh when unset or empty; the token is optional
+# (only for protected topics).
+case System.get_env("NTFY_TOPIC", "") do
+  "" ->
+    :ok
 
-if ntfy_url != "" and ntfy_topic != "" do
-  config :app, :ntfy, %{
-    url: String.trim_trailing(ntfy_url, "/"),
-    topic: ntfy_topic,
-    token: System.get_env("NTFY_TOKEN")
-  }
+  ntfy_topic ->
+    ntfy_url =
+      case System.get_env("NTFY_URL", "") do
+        "" -> "https://ntfy.sh"
+        url -> url
+      end
+
+    config :app, :ntfy, %{
+      url: String.trim_trailing(ntfy_url, "/"),
+      topic: ntfy_topic,
+      token: System.get_env("NTFY_TOKEN")
+    }
 end

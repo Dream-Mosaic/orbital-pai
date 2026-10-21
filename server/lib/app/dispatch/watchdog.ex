@@ -25,7 +25,8 @@ defmodule App.Dispatch.Watchdog do
   @min_age_ms 10 * 60_000
   @grace_ms 3 * 60_000
   @finished ~w(success failure cancelled skipped)
-  @silent_reason "the job ended without reporting back"
+  # A lost callback or a mismatched secret looks exactly like this, and the PR may well exist.
+  @silent_reason "the job ended without reporting back — check the issue for a PR"
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 

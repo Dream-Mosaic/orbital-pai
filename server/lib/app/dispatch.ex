@@ -4,6 +4,7 @@ defmodule App.Dispatch do
   `"dispatch:<user_id>"` and the global `"dispatch"` topic (the notifier subscribes to the latter).
   """
   import Ecto.Query
+  require Logger
 
   alias App.Dispatch.{Forge, Job}
   alias App.Repo
@@ -13,6 +14,32 @@ defmodule App.Dispatch do
   @valid_statuses @callback_statuses ++ ["lost"]
 
   def callback_statuses, do: @callback_statuses
+
+  @doc "Is the callback HMAC secret set? Without it every callback is refused (401)."
+  def callback_secret? do
+    case Application.get_env(:app, :dispatch_callback_secret) do
+      s when is_binary(s) and s != "" -> true
+      _ -> false
+    end
+  end
+
+  @doc """
+  Called once at boot: a forge without the callback secret can start jobs that could never
+  report back, so say so (`start_claude` refuses in that state). Names the env var, never a
+  value.
+  """
+  def check_callback_secret do
+    if App.Config.forge?() and not callback_secret?() do
+      Logger.warning(
+        "[dispatch] DISPATCH_CALLBACK_SECRET is not set: start_claude will refuse, and every " <>
+          "callback would be refused (401)"
+      )
+
+      :warned
+    else
+      :ok
+    end
+  end
 
   @doc "End states are everything except queued and running."
   def end_state?(status), do: status not in @active

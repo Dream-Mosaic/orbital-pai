@@ -61,6 +61,34 @@ defmodule App.DispatchTest do
     assert j.run_url == url
   end
 
+  describe "check_callback_secret/0 (at boot)" do
+    import ExUnit.CaptureLog
+
+    setup do
+      Application.put_env(:app, :forge, %{url: "https://forge.test", token: "t"})
+
+      on_exit(fn ->
+        Application.delete_env(:app, :forge)
+        Application.delete_env(:app, :dispatch_callback_secret)
+      end)
+    end
+
+    test "warns once when the forge is configured without the secret" do
+      Application.delete_env(:app, :dispatch_callback_secret)
+      log = capture_log(fn -> assert :warned = Dispatch.check_callback_secret() end)
+      assert log =~ "[dispatch] DISPATCH_CALLBACK_SECRET is not set"
+    end
+
+    test "is quiet with the secret set, or with no forge" do
+      Application.put_env(:app, :dispatch_callback_secret, "s3cret")
+      assert capture_log(fn -> assert :ok = Dispatch.check_callback_secret() end) == ""
+
+      Application.delete_env(:app, :dispatch_callback_secret)
+      Application.delete_env(:app, :forge)
+      assert capture_log(fn -> assert :ok = Dispatch.check_callback_secret() end) == ""
+    end
+  end
+
   test "end_state?" do
     refute Dispatch.end_state?("queued")
     refute Dispatch.end_state?("running")

@@ -451,7 +451,9 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to `FORGE_URL`) is the base
   of every link a human opens (ntfy Click, issue/run links, `file_issue`'s url). A callback's own
   `run_url` is stored and preferred over one built from the run number.
-  Token and secret come from env only (names in `server/.env.example`).
+  Token and secret come from env only (names in `server/.env.example`). With the forge set but
+  no `DISPATCH_CALLBACK_SECRET`, boot logs a warning and `start_claude` refuses up front (no job,
+  no dispatch): every callback would be refused, so a job could never report back.
 - **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
   `kalcode/claude-dispatch` (workflow, runner, `CLAUDE_CODE_OAUTH_TOKEN` and `DISPATCH_FORGE_TOKEN`
   repo secrets). Server-side code here only dispatches and receives callbacks.

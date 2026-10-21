@@ -9,6 +9,7 @@ defmodule App.Application do
   @impl true
   def start(_type, _args) do
     Logger.info("Henry v#{App.version()} starting")
+    App.Dispatch.check_callback_secret()
 
     children = [
       AppWeb.Telemetry,
