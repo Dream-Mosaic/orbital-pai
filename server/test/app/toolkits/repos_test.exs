@@ -115,6 +115,30 @@ defmodule App.Toolkits.ReposTest do
       assert Toolkits.preselect(cfg, "Henry, can you set a timer", %{}, now) == []
     end
 
+    test "single repo words that are everyday or household words don't open it",
+         %{cfg: cfg, now: now} do
+      forge_repos()
+      assert {:ok, _} = Board.repos()
+
+      for text <- [
+            "add tomatoes to the garden",
+            "start my water tracker",
+            "what's the air quality",
+            "my personal calendar",
+            "set a timer for the website",
+            "play some music"
+          ] do
+        assert Toolkits.preselect(cfg, text, %{}, now) == [], text
+      end
+
+      # The full multi-word name still counts.
+      assert Toolkits.preselect(cfg, "what's open on the garden planner board", %{}, now) == [
+               Repos
+             ]
+
+      assert Toolkits.preselect(cfg, "how's the garden planner coming along", %{}, now) == [Repos]
+    end
+
     test "wants? makes no forge call" do
       forge_repos()
       assert {:ok, _} = Board.repos()
@@ -123,6 +147,33 @@ defmodule App.Toolkits.ReposTest do
       assert Repos.wants?("chronicles thirty one", %{})
       refute Repos.wants?("what's the weather", %{})
       refute_received {:forge, _}
+    end
+  end
+
+  describe "warming the names at startup" do
+    test "warm/0 reads the repo list and publishes the names" do
+      forge_repos()
+      assert :ok = Board.warm()
+      assert "chronicles" in Board.phrases()
+    end
+
+    test "warm/0 tolerates the forge being down" do
+      Req.Test.stub(ForgeStub, &Plug.Conn.send_resp(&1, 502, ""))
+      assert {:error, {:http, 502}} = Board.warm()
+      assert Board.phrases() == []
+    end
+
+    test "warm/0 does nothing when the forge isn't configured" do
+      Application.delete_env(:app, :forge)
+      assert {:error, :not_configured} = Board.warm()
+    end
+
+    test "the watchdog warms the names off its own process, once" do
+      forge_repos()
+      state = %{}
+      assert {:noreply, ^state} = App.Dispatch.Watchdog.handle_info(:warm, state)
+      App.DataCase.drain_conversation_tasks()
+      assert "chronicles" in Board.phrases()
     end
   end
 

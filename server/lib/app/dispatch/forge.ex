@@ -83,12 +83,20 @@ defmodule App.Dispatch.Forge do
     end)
   end
 
-  @doc "Bodies of the open PRs (to spot \"Closes #N\")."
+  @doc """
+  The open PRs as `[%{body, head}]`: the body to spot "Closes #N", the head branch to spot a
+  Claude branch (`claude/<n>-…`).
+  """
   def open_prs(full_name) do
     case get("/repos/#{full_name}/pulls", state: "open", limit: 50) do
-      {:ok, body} when is_list(body) -> {:ok, for(pr <- body, is_map(pr), do: pr["body"] || "")}
-      {:ok, _} -> {:error, :bad_body}
-      err -> err
+      {:ok, body} when is_list(body) ->
+        {:ok, for(pr <- body, is_map(pr), do: %{body: pr["body"] || "", head: head_ref(pr)})}
+
+      {:ok, _} ->
+        {:error, :bad_body}
+
+      err ->
+        err
     end
   end
 
@@ -154,6 +162,9 @@ defmodule App.Dispatch.Forge do
       comments: i["comments"]
     }
   end
+
+  defp head_ref(%{"head" => %{"ref" => ref}}) when is_binary(ref), do: ref
+  defp head_ref(_), do: nil
 
   defp dispatch_repo(cfg), do: cfg[:dispatch_repo] || @default_dispatch_repo
 

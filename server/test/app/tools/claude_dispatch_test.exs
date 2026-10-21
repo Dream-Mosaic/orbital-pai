@@ -187,11 +187,27 @@ defmodule App.Tools.ClaudeDispatchTest do
       forge()
       assert {:ok, %{repos: repos}} = Tool.execute("code_board", %{}, ctx(d))
 
+      # doughty-lab's cached count says 1, but its live list is empty: it's left out.
       assert [
                %{repo: "personal-assistant", open: 15, candidates: 12, has_context: true},
-               %{repo: "unwritten-chronicles", open: 23, candidates: 6, has_context: true},
-               %{repo: "doughty-lab", open: 0, candidates: 0, has_context: false}
+               %{repo: "unwritten-chronicles", open: 23, candidates: 6, has_context: true}
              ] = repos
+    end
+
+    test "no repo, and every live list empty: nothing open", %{david: d} do
+      forge(%{
+        {"GET", "/user/repos"} =>
+          &Req.Test.json(&1, [
+            %{
+              "name" => "doughty-lab",
+              "full_name" => "kalcode/doughty-lab",
+              "open_issues_count" => 1
+            }
+          ])
+      })
+
+      assert {:ok, %{repos: [], note: "nothing open on any repo"}} =
+               Tool.execute("code_board", %{}, ctx(d))
     end
 
     test "a repo: triaged issues, candidates first, capped at 20", %{david: d} do
@@ -264,6 +280,21 @@ defmodule App.Tools.ClaudeDispatchTest do
       assert by_num[15] == "candidate (bug)"
       assert [%{issue: 30, status: "queued", job_id: id}] = board.jobs
       assert id == job.id
+    end
+
+    test "an open PR on claude/<n>-… skips its issue, whatever its body says", %{david: d} do
+      forge(%{
+        {"GET", "/repos/kalcode/unwritten-chronicles/pulls"} =>
+          &Req.Test.json(&1, [
+            %{"body" => "Design doc. Refs #30", "head" => %{"ref" => "claude/30-dm-retcon"}},
+            %{"body" => "", "head" => %{"ref" => "claude/150-other"}}
+          ])
+      })
+
+      assert {:ok, board} = Tool.execute("code_board", %{"repo" => "chronicles"}, ctx(d))
+      by_num = Map.new(board.issues, &{&1.number, &1.verdict})
+      assert by_num[30] == "skip (PR already open)"
+      assert by_num[15] == "candidate (bug)"
     end
 
     test "an ambiguous repo name asks", %{david: d} do
@@ -419,6 +450,105 @@ defmodule App.Tools.ClaudeDispatchTest do
       assert Dispatch.active_job("kalcode/unwritten-chronicles", 31) == nil
     end
 
+    test "a failure answered within the budget is not announced a second time", %{david: d} do
+      forge(%{{"POST", @dispatch_path} => &Plug.Conn.send_resp(&1, 500, "")})
+
+      capture_log(fn ->
+        assert {:ok, %{failed: [%{issue: 31}]}} =
+                 Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
+      end)
+
+      assert [job] = Dispatch.list_jobs(d.id)
+      assert job.status == "failed"
+      assert job.notified_at
+      assert :already_notified = App.Dispatch.Notifier.notify(job)
+    end
+
+    test "a 2xx dispatch with no run info started: the job stays queued", %{david: d} do
+      forge(%{{"POST", @dispatch_path} => &Plug.Conn.send_resp(&1, 204, "")})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{started: [started], failed: [], uncertain: []}} =
+                   Tool.execute(
+                     "start_claude",
+                     %{"repo" => "chronicles", "issues" => [31]},
+                     ctx(d)
+                   )
+
+          assert %{issue: 31, job_id: id, note: "the forge didn't return a run id"} = started
+          assert %{status: "queued", run_id: nil, notified_at: nil} = Dispatch.get_job(id)
+        end)
+
+      assert log =~ "no run id returned"
+    end
+
+    test "a dispatch that timed out may have started: uncertain, the job stays queued",
+         %{david: d} do
+      forge(%{{"POST", @dispatch_path} => &Req.Test.transport_error(&1, :timeout)})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{started: [], failed: [], uncertain: [uncertain]}} =
+                   Tool.execute(
+                     "start_claude",
+                     %{"repo" => "chronicles", "issues" => [31]},
+                     ctx(d)
+                   )
+
+          assert %{issue: 31, job_id: id, why: "may have started — check claude_jobs"} = uncertain
+          assert %{status: "queued", notified_at: nil} = Dispatch.get_job(id)
+        end)
+
+      assert log =~ "[dispatch] uncertain kalcode/unwritten-chronicles #31"
+    end
+
+    test "a refused connection is a definite failure", %{david: d} do
+      forge(%{{"POST", @dispatch_path} => &Req.Test.transport_error(&1, :econnrefused)})
+
+      capture_log(fn ->
+        assert {:ok, %{failed: [%{issue: 31}], uncertain: []}} =
+                 Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
+      end)
+
+      assert [%{status: "failed"}] = Dispatch.list_jobs(d.id)
+    end
+
+    test "a job that can't be marked failed is retried once, then logged as left queued",
+         %{david: d} do
+      forge(%{
+        {"POST", @dispatch_path} => fn conn ->
+          # The row vanishes under the tool, so set_status can't land.
+          App.Repo.delete_all(App.Dispatch.Job)
+          Plug.Conn.send_resp(conn, 500, "")
+        end
+      })
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{failed: [%{issue: 31}]}} =
+                   Tool.execute(
+                     "start_claude",
+                     %{"repo" => "chronicles", "issues" => [31]},
+                     ctx(d)
+                   )
+        end)
+
+      assert log =~ ~r/\[dispatch\] job \d+ left queued/
+    end
+
+    test "a design-gated repo's started issues say so", %{david: d} do
+      forge()
+
+      assert {:ok, %{started: [%{issue: 23, design_gated: true}]}} =
+               Tool.execute("start_claude", %{"repo" => "Henry", "issues" => [23]}, ctx(d))
+
+      assert {:ok, %{started: [started]}} =
+               Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
+
+      refute Map.has_key?(started, :design_gated)
+    end
+
     test "notes are posted once on each issue, before the dispatch", %{david: d} do
       forge()
 
@@ -452,6 +582,46 @@ defmodule App.Tools.ClaudeDispatchTest do
 
       assert Enum.find_index(order, &(&1 =~ "31/comments")) <
                Enum.find_index(order, &(&1 == @dispatch_path))
+    end
+
+    test "past the budget the tool answers \"still starting\" and a failure is announced",
+         %{david: d} do
+      test = self()
+      Application.put_env(:app, :dispatch_start_budget_ms, 50)
+      Application.put_env(:app, :ntfy, %{url: "https://ntfy.test", topic: "henry", token: nil})
+      Application.put_env(:app, :ntfy_req_opts, plug: {Req.Test, NtfyStub})
+
+      on_exit(fn ->
+        for k <- [:dispatch_start_budget_ms, :ntfy, :ntfy_req_opts],
+            do: Application.delete_env(:app, k)
+      end)
+
+      Req.Test.stub(NtfyStub, fn conn ->
+        send(test, :ntfy)
+        Plug.Conn.send_resp(conn, 200, "{}")
+      end)
+
+      Phoenix.PubSub.subscribe(App.PubSub, "agenda:#{d.id}")
+
+      forge(%{
+        {"POST", @dispatch_path} => fn conn ->
+          Process.sleep(300)
+          Plug.Conn.send_resp(conn, 500, "")
+        end
+      })
+
+      capture_log(fn ->
+        assert {:ok, %{note: note}} =
+                 Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
+
+        assert note =~ "still starting"
+        App.DataCase.drain_conversation_tasks()
+      end)
+
+      assert [%{status: "failed", notified_at: at}] = Dispatch.list_jobs(d.id)
+      assert at
+      assert_received :ntfy
+      assert_received {:agenda_due, %{kind: :heads_up}}
     end
 
     test "no notes, no comment", %{david: d} do

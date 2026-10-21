@@ -69,14 +69,19 @@ defmodule App.Dispatch.ForgeTest do
     assert {:ok, false} = Forge.has_context?("kalcode/x", "main")
   end
 
-  test "open_prs returns bodies" do
+  test "open_prs returns each open PR's body and head branch" do
     Req.Test.stub(ForgeStub, fn conn ->
       assert conn.request_path == "/api/v1/repos/kalcode/x/pulls"
       assert URI.decode_query(conn.query_string)["state"] == "open"
-      Req.Test.json(conn, [%{"body" => "Closes #3"}, %{"body" => nil}])
+
+      Req.Test.json(conn, [
+        %{"body" => "Closes #3", "head" => %{"ref" => "claude/3-fix"}},
+        %{"body" => nil}
+      ])
     end)
 
-    assert {:ok, ["Closes #3", ""]} = Forge.open_prs("kalcode/x")
+    assert {:ok, [%{body: "Closes #3", head: "claude/3-fix"}, %{body: "", head: nil}]} =
+             Forge.open_prs("kalcode/x")
   end
 
   test "create_issue and comment POST the right bodies" do

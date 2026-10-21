@@ -6,6 +6,10 @@ defmodule App.Dispatch.Watchdog do
   (race-safe: a no-op if a real callback landed first), then the job is handed to the notifier,
   whose `notified_at` claim keeps a double path from notifying twice. `tick/1` takes an
   injectable `now` so tests drive it directly.
+
+  It also warms the repos toolkit's repo names once, 10 seconds after boot
+  (`App.Dispatch.Board.warm/0`, in a task), so a repo's name preselects the kit from the first
+  turn.
   """
   use GenServer
   require Logger
@@ -14,6 +18,8 @@ defmodule App.Dispatch.Watchdog do
   alias App.Dispatch.{Forge, Notifier}
 
   @interval_ms 5 * 60_000
+  # The one-shot read of the repo names, a little after boot (never blocks it).
+  @warm_after_ms 10_000
   @max_age_ms 130 * 60_000
   @min_age_ms 10 * 60_000
   @grace_ms 3 * 60_000
@@ -25,6 +31,7 @@ defmodule App.Dispatch.Watchdog do
   @impl true
   def init(_) do
     Process.send_after(self(), :tick, @interval_ms)
+    Process.send_after(self(), :warm, @warm_after_ms)
     {:ok, %{}}
   end
 
@@ -37,6 +44,12 @@ defmodule App.Dispatch.Watchdog do
     end
 
     Process.send_after(self(), :tick, @interval_ms)
+    {:noreply, state}
+  end
+
+  # Off this process: a slow or absent forge must not hold up the ticks.
+  def handle_info(:warm, state) do
+    Task.Supervisor.start_child(App.Conversations.TaskSup, &App.Dispatch.Board.warm/0)
     {:noreply, state}
   end
 

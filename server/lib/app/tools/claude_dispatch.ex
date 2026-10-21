@@ -13,9 +13,13 @@ defmodule App.Tools.ClaudeDispatch do
   Two gates come before any forge call. The user's canonical email must be on
   `:claude_dispatch_users`, else "that's not set up for you". The forge must be configured.
 
-  `start_claude` never leaves a job `queued` without a dispatch. A failed notes comment or
-  dispatch marks the job `failed` with the reason (`App.Dispatch.set_status/3`). The work runs
-  in its own task, so the registry's tool cap can't kill it halfway through a job.
+  `start_claude` never leaves a job `queued` that wasn't dispatched. A failed notes comment or a
+  definite dispatch rejection (4xx/5xx, or a transport error before the request went out) marks
+  the job `failed` with the reason (`App.Dispatch.set_status/3`, retried once). An ambiguous
+  dispatch leaves it `queued`, since a run may exist. A 2xx with no run id is reported as
+  started, with a note. A timeout after sending is reported under `uncertain`. The work runs in
+  its own task, so the registry's tool cap can't kill it halfway through a job. A failure the
+  answer reports is not announced again by the notifier, unless the answer came too late.
 
   Every failure flattens to `{:ok, %{error | note}}`. Log: one `[dispatch]` line per board
   read, start, refusal and failure. Reasons are status codes and atoms, never a token.
@@ -25,7 +29,7 @@ defmodule App.Tools.ClaudeDispatch do
   require Logger
 
   alias App.Dispatch
-  alias App.Dispatch.{Board, Forge, Repos}
+  alias App.Dispatch.{Board, Forge, Notifier, Repos}
 
   @not_yours "that's not set up for you"
   @not_configured "the forge isn't configured on this server"
@@ -34,8 +38,20 @@ defmodule App.Tools.ClaudeDispatch do
   @jobs_cap 10
   @start_cap 10
   # The detached start work gets this long before the tool answers "still starting". It stays
-  # inside start_claude's registry cap (timeout/1).
+  # inside start_claude's registry cap (timeout/1). `:dispatch_start_budget_ms` is the test seam.
   @start_budget_ms 18_000
+  # Transport errors that prove the dispatch request never reached the forge. Anything else
+  # after the request went out (a timeout, a dropped connection) may have started a run.
+  @pre_send [
+    :econnrefused,
+    :nxdomain,
+    :ehostunreach,
+    :enetunreach,
+    :pool_not_available,
+    :unprocessed
+  ]
+  @no_run_id "the forge didn't return a run id"
+  @may_have_started "may have started — check claude_jobs"
 
   @impl true
   def declarations do
@@ -158,6 +174,8 @@ defmodule App.Tools.ClaudeDispatch do
   end
 
   defp run("start_claude", args, ctx) do
+    # The budget runs from here: an uncached repo-list read comes out of it too.
+    started_at = System.monotonic_time(:millisecond)
     {nums, bad} = issue_numbers(args["issues"])
 
     case str(args["repo"]) do
@@ -168,7 +186,7 @@ defmodule App.Tools.ClaudeDispatch do
         {:ok, %{note: "start_claude needs the issue numbers"}}
 
       phrase ->
-        with_repo(phrase, ctx, &start(&1, nums, bad, str(args["notes"]), ctx))
+        with_repo(phrase, ctx, &start(&1, nums, bad, str(args["notes"]), ctx, started_at))
     end
   end
 
@@ -215,6 +233,8 @@ defmodule App.Tools.ClaudeDispatch do
             {{:ok, row}, _} -> row
             {{:exit, _}, r} -> %{repo: r.name, open: r.open_issues, error: "couldn't read it"}
           end)
+          # A cached count can be stale: a repo whose live list came back empty isn't shown.
+          |> Enum.reject(&(&1.open == 0 and not Map.has_key?(&1, :error)))
           |> Enum.sort_by(&{-Map.get(&1, :candidates, -1), -&1.open})
 
         Logger.info(
@@ -350,7 +370,13 @@ defmodule App.Tools.ClaudeDispatch do
 
   # -- start_claude --
 
-  defp start(repo, nums, bad, notes, ctx) do
+  # Outcomes, one per issue:
+  #   {:started, n, job, note | nil}   dispatched; note when the forge gave no run id
+  #   {:uncertain, n, job}             the dispatch may have started a run; the job stays queued
+  #   {:refused, n, why}               not started, nothing created
+  #   {:failed, n, why, announce}      not started; `announce` is the job id whose notice was
+  #                                    held back (the tool's answer says it instead), or nil
+  defp start(repo, nums, bad, notes, ctx, started_at) do
     {now, over} = Enum.split(nums, @start_cap)
     user = App.Users.get(ctx.user_id)
     note_body = notes && "From #{first_name(user)}, via #{assistant(ctx)}: #{notes}"
@@ -361,18 +387,16 @@ defmodule App.Tools.ClaudeDispatch do
 
     Enum.each(refused_up_front, fn {:refused, n, why} -> log_refused(repo, n, why) end)
 
-    # Its own task: the registry's cap kills the tool's process on a timeout, and that must
-    # never strand a created job before its dispatch (or a dispatched one before its run id).
-    task =
-      Task.Supervisor.async_nolink(App.Conversations.TaskSup, fn ->
-        Enum.map(now, &start_one(repo, &1, note_body, user.id))
-      end)
+    work = fn ->
+      outcomes = Enum.map(now, &start_one(repo, &1, note_body, user.id))
+      {outcomes, design_gated?(repo, outcomes)}
+    end
 
-    case Task.yield(task, @start_budget_ms) do
-      {:ok, outcomes} ->
-        {:ok, shape_start(repo, outcomes ++ refused_up_front)}
+    case run_detached(work, started_at) do
+      {:ok, {outcomes, gated?}} ->
+        {:ok, shape_start(repo, outcomes ++ refused_up_front, gated?)}
 
-      nil ->
+      :late ->
         Logger.warning("[dispatch] start #{repo.full_name} still running after the budget")
 
         {:ok,
@@ -382,11 +406,83 @@ defmodule App.Tools.ClaudeDispatch do
                "to see which started"
          }}
 
-      {:exit, _reason} ->
+      :crashed ->
         # Not the reason itself: an exit can carry a request, and a request carries the token.
         Logger.warning("[dispatch] start #{repo.full_name} crashed")
         {:ok, %{error: "starting Claude went wrong. Check claude_jobs to see what started"}}
     end
+  end
+
+  # Run the start work in its own task. The registry's cap kills the tool's process on a
+  # timeout, and that must never strand a created job before its dispatch.
+  #
+  # A failure the tool's answer reports has its notice held back (fail/3 claims `notified_at`),
+  # or the brain's answer and the wall would say it twice. If the answer misses the budget,
+  # nobody heard, so the task announces those failures itself. An atomic handshake decides,
+  # race-free, which side won: 0 pending, 1 delivered to the tool, 2 the tool gave up.
+  # Everything the answer needs is computed in the task, before the handshake, so nothing slow
+  # runs between the answer arriving and the tool returning.
+  defp run_detached(work, started_at) do
+    caller = self()
+    ref = make_ref()
+    gate = :atomics.new(1, [])
+
+    {:ok, pid} =
+      Task.Supervisor.start_child(App.Conversations.TaskSup, fn ->
+        {outcomes, _} = result = work.()
+
+        if :atomics.compare_exchange(gate, 1, 0, 1) == :ok do
+          send(caller, {ref, result})
+          # Backstop: a caller that died anyway (killed at the cap) never read it.
+          unless Process.alive?(caller), do: announce_late(outcomes)
+        else
+          announce_late(outcomes)
+        end
+      end)
+
+    mon = Process.monitor(pid)
+
+    result =
+      receive do
+        {^ref, outcomes} ->
+          {:ok, outcomes}
+
+        {:DOWN, ^mon, :process, _, reason} when reason != :normal ->
+          :crashed
+      after
+        max(budget() - (System.monotonic_time(:millisecond) - started_at), 0) ->
+          if :atomics.compare_exchange(gate, 1, 0, 2) == :ok do
+            :late
+          else
+            # Delivered just as the budget ran out: the message is already on its way.
+            receive do
+              {^ref, outcomes} -> {:ok, outcomes}
+            after
+              1_000 -> :late
+            end
+          end
+      end
+
+    Process.demonitor(mon, [:flush])
+    result
+  end
+
+  defp budget, do: Application.get_env(:app, :dispatch_start_budget_ms, @start_budget_ms)
+
+  defp announce_late(outcomes) do
+    for {:failed, _n, _why, id} <- outcomes, is_integer(id) do
+      Dispatch.release_notice(id)
+
+      case Dispatch.get_job(id) do
+        nil -> :ok
+        job -> Notifier.notify(job)
+      end
+    end
+  end
+
+  defp design_gated?(repo, outcomes) do
+    Enum.any?(outcomes, &match?({:started, _, _, _}, &1)) and
+      match?({:ok, %{design_gated: true}}, guarded(fn -> Board.context(repo) end))
   end
 
   defp start_one(repo, n, notes, user_id) do
@@ -400,14 +496,25 @@ defmodule App.Tools.ClaudeDispatch do
           launch(repo, n, job, notes)
         end
       rescue
-        # Before a job exists (launch/4 rescues its own steps), so nothing is left queued.
-        _ -> {:failed, n, "something went wrong starting it"}
+        # Before a job exists (launch/4 guards its own steps), so nothing is left queued.
+        _ -> {:failed, n, "something went wrong starting it", nil}
       end
 
     case outcome do
-      {:started, _, job} -> Logger.info("[dispatch] start #{full} ##{n}: job #{job.id}")
-      {:refused, _, why} -> log_refused(repo, n, why)
-      {:failed, _, why} -> Logger.warning("[dispatch] failed #{full} ##{n}: #{why}")
+      {:started, _, job, nil} ->
+        Logger.info("[dispatch] start #{full} ##{n}: job #{job.id}")
+
+      {:started, _, job, _note} ->
+        Logger.warning("[dispatch] start #{full} ##{n}: job #{job.id}, no run id returned")
+
+      {:uncertain, _, job} ->
+        Logger.warning("[dispatch] uncertain #{full} ##{n}: job #{job.id} may have started")
+
+      {:refused, _, why} ->
+        log_refused(repo, n, why)
+
+      {:failed, _, why, _} ->
+        Logger.warning("[dispatch] failed #{full} ##{n}: #{why}")
     end
 
     outcome
@@ -420,39 +527,57 @@ defmodule App.Tools.ClaudeDispatch do
   defp startable(_n, {:ok, %{state: "open"}}), do: :ok
   defp startable(n, {:ok, %{state: state}}), do: {:refused, n, "it's #{state}"}
   defp startable(n, {:error, :not_found}), do: {:refused, n, "no such issue"}
-  defp startable(n, {:error, reason}), do: {:failed, n, "couldn't read the issue: #{why(reason)}"}
+
+  defp startable(n, {:error, reason}),
+    do: {:failed, n, "couldn't read the issue: #{why(reason)}", nil}
 
   defp create(_n, {:ok, job}), do: {:ok, job}
   defp create(n, {:error, {:active, _}}), do: {:refused, n, "already running"}
-  defp create(n, {:error, _}), do: {:failed, n, "couldn't record the job"}
+  defp create(n, {:error, _}), do: {:failed, n, "couldn't record the job", nil}
 
+  # Only a definite "no" fails the job. A 2xx without a run id means the forge took it (the
+  # callbacks carry the job id, and the watchdog's lost rule bounds a silent one). A request
+  # that went out and got no answer may have started a run; failing it would make the end-state
+  # guard drop its real callbacks, and invite a second run.
   defp launch(repo, n, job, notes) do
     full = repo.full_name
 
-    result =
-      try do
-        with :ok <- post_notes(full, n, notes),
-             {:dispatch, {:ok, run}} <- {:dispatch, Forge.dispatch(full, n, job.id)} do
-          {:ok, run}
+    case guarded(fn -> post_notes(full, n, notes) end) do
+      :ok ->
+        case guarded(fn -> Forge.dispatch(full, n, job.id) end) do
+          {:ok, run} ->
+            mark_dispatched(job, run, full, n)
+            {:started, n, job, nil}
+
+          {:error, reason} ->
+            case dispatch_outcome(reason) do
+              :accepted -> {:started, n, job, @no_run_id}
+              :rejected -> fail(job, n, "the forge didn't start it: #{why(reason)}")
+              :uncertain -> {:uncertain, n, job}
+            end
+
+          :raised ->
+            {:uncertain, n, job}
         end
-      rescue
-        _ -> {:error, "something went wrong starting it"}
-      end
 
-    case result do
-      {:ok, run} ->
-        mark_dispatched(job, run, full, n)
-        {:started, n, job}
-
-      {:notes, {:error, reason}} ->
+      {:error, reason} ->
         fail(job, n, "couldn't post the notes on the issue: #{why(reason)}")
 
-      {:dispatch, {:error, reason}} ->
-        fail(job, n, "the forge didn't start it: #{why(reason)}")
-
-      {:error, why} ->
-        fail(job, n, why)
+      :raised ->
+        fail(job, n, "something went wrong posting the notes")
     end
+  end
+
+  defp dispatch_outcome(r) when r in [:no_run_info, :bad_body], do: :accepted
+  defp dispatch_outcome(r) when r in [:unauthorized, :not_found, :not_configured], do: :rejected
+  defp dispatch_outcome({:http, _}), do: :rejected
+  defp dispatch_outcome(%{reason: r}) when r in @pre_send, do: :rejected
+  defp dispatch_outcome(_), do: :uncertain
+
+  defp guarded(fun) do
+    fun.()
+  rescue
+    _ -> :raised
   end
 
   # The job IS dispatched either way: its callback moves it on, only the run id would be missing.
@@ -473,23 +598,50 @@ defmodule App.Tools.ClaudeDispatch do
   defp post_notes(full, n, body) do
     case Forge.comment(full, n, body) do
       {:ok, _} -> :ok
-      err -> {:notes, err}
+      err -> err
     end
   end
 
+  # Hold the notice back first (this answer reports the failure), then mark the job failed,
+  # retrying once. If it still can't be marked, the notice is released again, so the watchdog's
+  # eventual `lost` gets announced, and the stranded job is logged.
   defp fail(job, n, why) do
-    Dispatch.set_status(job, "failed", why)
-    {:failed, n, why}
+    held = guarded(fn -> Dispatch.claim_notice(job.id) end) == true
+
+    if mark_failed(job, why, 2) do
+      {:failed, n, why, if(held, do: job.id)}
+    else
+      if held, do: guarded(fn -> Dispatch.release_notice(job.id) end)
+      Logger.warning("[dispatch] job #{job.id} left queued: couldn't mark it failed")
+      {:failed, n, why, nil}
+    end
   end
 
-  defp shape_start(repo, outcomes) do
-    started = for {:started, n, job} <- outcomes, do: %{issue: n, job_id: job.id}
+  defp mark_failed(_job, _why, 0), do: false
+
+  defp mark_failed(job, why, tries) do
+    case guarded(fn -> Dispatch.set_status(job, "failed", why) end) do
+      {:ok, _, _} -> true
+      _ -> mark_failed(job, why, tries - 1)
+    end
+  end
+
+  defp shape_start(repo, outcomes, gated?) do
+    started =
+      for {:started, n, job, note} <- outcomes do
+        drop_nils(%{issue: n, job_id: job.id, note: note, design_gated: if(gated?, do: true)})
+      end
 
     result = %{
       repo: repo.name,
       started: started,
+      uncertain:
+        for(
+          {:uncertain, n, job} <- outcomes,
+          do: %{issue: n, job_id: job.id, why: @may_have_started}
+        ),
       refused: for({:refused, n, why} <- outcomes, do: %{issue: n, why: why}),
-      failed: for({:failed, n, why} <- outcomes, do: %{issue: n, why: why})
+      failed: for({:failed, n, why, _} <- outcomes, do: %{issue: n, why: why})
     }
 
     if length(started) > 1,
@@ -710,6 +862,7 @@ defmodule App.Tools.ClaudeDispatch do
   defp why(:no_run_info), do: "the forge didn't say which run started"
   defp why(:bad_body), do: "the forge sent an answer I couldn't read"
   defp why({:http, status}), do: "the forge answered HTTP #{status}"
+  defp why(%{reason: :timeout}), do: "the forge didn't answer in time"
   defp why(_), do: "couldn't reach the forge"
 
   defp put_more(map, n) when n > 0, do: Map.put(map, :more, n)

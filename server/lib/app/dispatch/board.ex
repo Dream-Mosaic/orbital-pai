@@ -30,15 +30,21 @@ defmodule App.Dispatch.Board do
   @phrases {__MODULE__, :phrases}
   @context_files ["CLAUDE.md", "AGENTS.md"]
   @design_gate ~r/hard gate|brainstorm/i
-  # Resolver aliases that are no use for spotting the topic. "You" and "Henry" turn up in
-  # nearly every turn, so they would open the kit every time.
-  @not_topic ~w(you yourself me myself henry)
-  # Single words of a repo name preselect only when they're this long. Shorter ones ("timer",
-  # "track", "more", "text") are everyday words. The full name always counts.
+  # Words that never preselect on their own, though a repo name or alias contains them:
+  # pronoun and wake-name aliases ("you" and "Henry" are in nearly every turn), everyday
+  # words, and Henry's own domains (the garden, lists, recipes, timers…), which have their
+  # own tools. A multi-word phrase containing one ("garden planner") still counts.
+  @not_topic ~w(you yourself me myself henry
+                garden tracker trackers quality personal assistant planner players website native
+                list lists recipe recipes timer timers reminder reminders weather music)
+  # Single words of a repo name preselect only when they're this long. Shorter ones ("track",
+  # "more", "text") are everyday words. The full name always counts.
   @min_word 6
   @min_phrase 4
   # Closing keywords in a PR body: "Closes #31", "fixes kalcode/x#31".
   @closes ~r/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+([\w.-]+\/[\w.-]+)?#(\d+)\b/i
+  # A Claude job's branch, claude/<n>-<slug>. A design-doc PR's body may only say "Refs #N".
+  @claude_branch ~r{\Aclaude/(\d+)(?:-|\z)}
 
   @doc "The forge's repos (`Forge.list_repos/0` maps), cached 10 minutes."
   @spec repos(map()) :: {:ok, [map()]} | {:error, term()}
@@ -53,6 +59,23 @@ defmodule App.Dispatch.Board do
           publish_phrases(phrases_for(repos, aliases))
           ok
         end
+    end
+  end
+
+  @doc """
+  Read the repo list once, so a repo's name preselects the kit from the first turn after boot
+  rather than after the first board read. Called off the watchdog's process shortly after
+  startup. A forge that's down or unconfigured is logged and left to the next tool call.
+  """
+  @spec warm() :: :ok | {:error, term()}
+  def warm do
+    case repos() do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} = err ->
+        Logger.info("[dispatch] repo names not warmed: #{inspect_reason(reason)}")
+        err
     end
   end
 
@@ -112,7 +135,7 @@ defmodule App.Dispatch.Board do
 
       jobs = Dispatch.active_jobs(full)
       active = MapSet.new(jobs, & &1.issue)
-      closed_by_pr = closing_refs(prs, full)
+      closed_by_pr = pr_issue_refs(prs, full)
 
       tri = %{
         design_gated?: (context && context.design_gated) || false,
@@ -145,16 +168,25 @@ defmodule App.Dispatch.Board do
   end
 
   @doc false
-  # Issue numbers an open PR closes, in this repo (a cross-repo "kalcode/other#3" doesn't count).
-  def closing_refs(bodies, full_name) do
+  # Issues an open PR already covers: the ones its body closes in this repo (a cross-repo
+  # "kalcode/other#3" doesn't count), and the one its claude/<n>- head branch was made for.
+  def pr_issue_refs(prs, full_name) do
     me = String.downcase(full_name)
 
-    for body <- bodies,
-        is_binary(body),
-        [_, repo, n] <- Regex.scan(@closes, body),
-        String.downcase(repo) in ["", me],
-        into: MapSet.new(),
-        do: String.to_integer(n)
+    closed =
+      for %{body: body} <- prs,
+          is_binary(body),
+          [_, repo, n] <- Regex.scan(@closes, body),
+          String.downcase(repo) in ["", me],
+          do: String.to_integer(n)
+
+    branches =
+      for %{head: head} <- prs,
+          is_binary(head),
+          [_, n] <- [Regex.run(@claude_branch, head)],
+          do: String.to_integer(n)
+
+    MapSet.new(closed ++ branches)
   end
 
   @doc """

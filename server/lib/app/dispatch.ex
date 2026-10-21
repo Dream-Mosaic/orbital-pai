@@ -60,6 +60,27 @@ defmodule App.Dispatch do
     |> broadcast()
   end
 
+  @doc """
+  Mark a job as already announced, so the notifier skips it. True only for the caller that
+  set it: a conditional `update_all`, so two claims can't both win.
+  """
+  def claim_notice(id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {n, _} =
+      Repo.update_all(from(j in Job, where: j.id == ^id and is_nil(j.notified_at)),
+        set: [notified_at: now]
+      )
+
+    n == 1
+  end
+
+  @doc "Undo `claim_notice/1`, so the notifier may announce the job after all."
+  def release_notice(id) do
+    Repo.update_all(from(j in Job, where: j.id == ^id), set: [notified_at: nil])
+    :ok
+  end
+
   def mark_dispatched(job, %{run_id: run_id, run_number: run_number}) do
     job
     |> Ecto.Changeset.change(run_id: run_id, run_number: run_number)

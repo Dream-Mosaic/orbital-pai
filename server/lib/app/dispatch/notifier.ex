@@ -10,14 +10,12 @@ defmodule App.Dispatch.Notifier do
   twice. An ntfy failure is logged and does not stop the wall line.
   """
   use GenServer
-  import Ecto.Query
   require Logger
 
   alias App.Agenda
   alias App.Agenda.Item
   alias App.Dispatch
   alias App.Dispatch.{Job, Ntfy}
-  alias App.Repo
 
   @titles %{
     "pr" => "PR ready",
@@ -56,20 +54,9 @@ defmodule App.Dispatch.Notifier do
   def notify(%Job{status: status} = job) do
     cond do
       not Dispatch.end_state?(status) -> :skipped
-      claim(job.id) != 1 -> :already_notified
+      not Dispatch.claim_notice(job.id) -> :already_notified
       true -> deliver(job)
     end
-  end
-
-  defp claim(id) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-    {n, _} =
-      Repo.update_all(from(j in Job, where: j.id == ^id and is_nil(j.notified_at)),
-        set: [notified_at: now]
-      )
-
-    n
   end
 
   defp deliver(job) do
