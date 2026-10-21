@@ -170,6 +170,45 @@ if ha_url != "" and ha_token != "" and System.get_env("HOME_ASSISTANT") not in ~
   config :app, :home_assistant, %{url: String.trim_trailing(ha_url, "/"), token: ha_token}
 end
 
+# Claude dispatch (spec 2026-10-21-claude-dispatch-design.md): Henry's own forge token reads the
+# boards, files issues and comments, and dispatches the work-issue workflow on DISPATCH_REPO.
+# FORGE_URL + FORGE_TOKEN must both be set, and CLAUDE_DISPATCH not "false"/"0" (the kill
+# switch), or `:forge` stays absent: the repos toolkit isn't registered and the notifier and
+# watchdog don't start. The callback secret and the user list are read either way, so a job
+# already running when the switch flips can still report back.
+forge_url = System.get_env("FORGE_URL", "")
+forge_token = System.get_env("FORGE_TOKEN", "")
+
+if forge_url != "" and forge_token != "" and System.get_env("CLAUDE_DISPATCH") not in ~w(false 0) do
+  dispatch_repo =
+    case System.get_env("DISPATCH_REPO", "") do
+      "" -> "kalcode/claude-dispatch"
+      repo -> repo
+    end
+
+  config :app, :forge, %{
+    url: String.trim_trailing(forge_url, "/"),
+    token: forge_token,
+    dispatch_repo: dispatch_repo
+  }
+end
+
+# The HMAC secret shared with the dispatch workflow; unset, every callback is refused (401).
+case System.get_env("DISPATCH_CALLBACK_SECRET", "") do
+  "" -> :ok
+  secret -> config :app, :dispatch_callback_secret, secret
+end
+
+# Who may dispatch Claude: canonical emails, comma-separated (David only). Unset = nobody.
+if users = System.get_env("CLAUDE_DISPATCH_USERS") do
+  config :app,
+         :claude_dispatch_users,
+         users
+         |> String.split(",")
+         |> Enum.map(&String.downcase(String.trim(&1)))
+         |> Enum.reject(&(&1 == ""))
+end
+
 # ntfy phone push for Claude dispatch results (see App.Dispatch.Ntfy). URL + topic required;
 # the token is optional (only for protected topics).
 ntfy_url = System.get_env("NTFY_URL", "")

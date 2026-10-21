@@ -40,6 +40,38 @@ defmodule App.Dispatch.Forge do
     end
   end
 
+  @doc "One issue, open or closed (a PR number comes back with `pull_request: true`)."
+  def issue(full_name, n) do
+    case get("/repos/#{full_name}/issues/#{n}", []) do
+      {:ok, %{"number" => _} = i} -> {:ok, Map.put(normalize_issue(i), :state, i["state"])}
+      {:ok, _} -> {:error, :bad_body}
+      err -> err
+    end
+  end
+
+  @doc "The repo's labels as `[%{id, name}]`, for turning names into the ids `create_issue/4` takes."
+  def labels(full_name) do
+    case get("/repos/#{full_name}/labels", limit: 50) do
+      {:ok, body} when is_list(body) ->
+        {:ok, for(l <- body, is_map(l), do: %{id: l["id"], name: l["name"]})}
+
+      {:ok, _} ->
+        {:error, :bad_body}
+
+      err ->
+        err
+    end
+  end
+
+  @doc "A file's raw text at `ref` (`{:error, :not_found}` when it isn't there)."
+  def file(full_name, path, ref) do
+    case request(:get, "/repos/#{full_name}/raw/#{path}", params: [ref: ref], decode_body: false) do
+      {:ok, text} when is_binary(text) -> {:ok, text}
+      {:ok, _} -> {:error, :bad_body}
+      err -> err
+    end
+  end
+
   @doc "Does the repo carry a CLAUDE.md or AGENTS.md on `branch`?"
   def has_context?(full_name, branch) do
     Enum.reduce_while(["CLAUDE.md", "AGENTS.md"], {:ok, false}, fn file, acc ->
@@ -101,9 +133,10 @@ defmodule App.Dispatch.Forge do
     end
   end
 
+  # A zero stamp (Go's 0001-01-01, or the Unix epoch) means the run hasn't stopped.
   defp parse_time(s) when is_binary(s) do
     case DateTime.from_iso8601(s) do
-      {:ok, dt, _} -> dt
+      {:ok, %DateTime{year: year} = dt, _} when year >= 2000 -> dt
       _ -> nil
     end
   end

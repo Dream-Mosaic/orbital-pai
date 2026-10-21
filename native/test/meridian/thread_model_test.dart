@@ -18,9 +18,13 @@ void main() {
     expect(toolLabel('set_timer'), 'setting a timer');
     expect(toolLabel('list_timers'), 'checking your timers');
     expect(toolLabel('cancel_timer'), 'stopping a timer');
+    expect(toolLabel('code_board'), 'checking the board');
+    expect(toolLabel('start_claude'), 'starting Claude');
+    expect(toolLabel('claude_jobs'), 'checking on Claude');
+    expect(toolLabel('file_issue'), 'filing an issue');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(47));
+    expect(kToolLabels, hasLength(51));
   });
 
   test('every registered server tool has a friendly label', () {
@@ -43,6 +47,7 @@ void main() {
       'delete_tracker',
       'save_routine', 'list_routines', 'delete_routine', 'run_routine',
       'save_recipe', 'get_recipe', 'list_recipes', 'edit_recipe', 'delete_recipe',
+      'code_board', 'start_claude', 'claude_jobs', 'file_issue',
     ];
     for (final name in registered) {
       expect(kToolLabels.containsKey(name), isTrue, reason: '$name has no label');

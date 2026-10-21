@@ -1,6 +1,8 @@
 defmodule App.Dispatch.ForgeTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias App.Dispatch.Forge
 
   @fixture "test/fixtures/dispatch/boards.json" |> File.read!() |> Jason.decode!()
@@ -153,6 +155,69 @@ defmodule App.Dispatch.ForgeTest do
     assert {:ok, %{status: "success", stopped: ~U[2026-10-21 12:00:00Z]}} = Forge.run(555)
   end
 
+  test "run treats a zero or epoch stopped stamp as not stopped" do
+    for stamp <- ["0001-01-01T00:00:00Z", "1970-01-01T00:00:00Z", "1999-12-31T23:59:59Z"] do
+      Req.Test.stub(ForgeStub, fn conn ->
+        Req.Test.json(conn, %{"status" => "running", "stopped" => stamp})
+      end)
+
+      assert {:ok, %{status: "running", stopped: nil}} = Forge.run(555), stamp
+    end
+  end
+
+  test "issue returns one issue with its state" do
+    Req.Test.stub(ForgeStub, fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == "/api/v1/repos/kalcode/x/issues/31"
+
+      Req.Test.json(conn, %{
+        "number" => 31,
+        "title" => "T",
+        "state" => "closed",
+        "labels" => [%{"name" => "bug"}],
+        "body" => "B",
+        "pull_request" => nil,
+        "html_url" => "https://forge.example.test/kalcode/x/issues/31"
+      })
+    end)
+
+    assert {:ok, %{number: 31, state: "closed", pull_request: false, labels: ["bug"]}} =
+             Forge.issue("kalcode/x", 31)
+
+    Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 404, "") end)
+    assert {:error, :not_found} = Forge.issue("kalcode/x", 999)
+  end
+
+  test "labels lists the repo's label ids and names" do
+    Req.Test.stub(ForgeStub, fn conn ->
+      assert conn.request_path == "/api/v1/repos/kalcode/x/labels"
+      Req.Test.json(conn, [%{"id" => 10, "name" => "bug"}, %{"id" => 11, "name" => "Feature"}])
+    end)
+
+    assert {:ok, [%{id: 10, name: "bug"}, %{id: 11, name: "Feature"}]} = Forge.labels("kalcode/x")
+
+    Req.Test.stub(ForgeStub, fn conn -> Req.Test.json(conn, %{"message" => "hm"}) end)
+    assert {:error, :bad_body} = Forge.labels("kalcode/x")
+  end
+
+  test "file reads a file's raw text at a ref, not_found when absent" do
+    Req.Test.stub(ForgeStub, fn conn ->
+      assert conn.request_path == "/api/v1/repos/kalcode/x/raw/CLAUDE.md"
+      assert URI.decode_query(conn.query_string)["ref"] == "main"
+      assert auth(conn) == ["token forge-token"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("text/plain")
+      |> Plug.Conn.send_resp(200, "# Guide\n\nbrainstorming (HARD GATE)")
+    end)
+
+    assert {:ok, "# Guide\n\nbrainstorming (HARD GATE)"} =
+             Forge.file("kalcode/x", "CLAUDE.md", "main")
+
+    Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 404, "") end)
+    assert {:error, :not_found} = Forge.file("kalcode/x", "AGENTS.md", "main")
+  end
+
   test "401 -> :unauthorized, 404 -> :not_found, 500 -> {:http, 500}" do
     for {s, want} <- [{401, :unauthorized}, {404, :not_found}, {500, {:http, 500}}] do
       Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, s, "") end)
@@ -160,9 +225,17 @@ defmodule App.Dispatch.ForgeTest do
     end
   end
 
-  test "transport errors are tagged, not raised" do
+  test "transport errors are tagged, not raised (after the never-executed retries)" do
+    # A STUBBED refusal, not a real connection: App.Http.Retry retries it (it never reached the
+    # server) and logs each retry, which this captures so the suite output stays clean.
     Req.Test.stub(ForgeStub, fn conn -> Req.Test.transport_error(conn, :econnrefused) end)
-    assert {:error, %{reason: :econnrefused}} = Forge.list_repos()
+
+    log =
+      capture_log(fn ->
+        assert {:error, %{reason: :econnrefused}} = Forge.list_repos()
+      end)
+
+    assert log =~ "[http] retrying transient :econnrefused"
   end
 
   test ":not_configured when the env is absent" do

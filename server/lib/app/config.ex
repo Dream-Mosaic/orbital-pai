@@ -63,7 +63,7 @@ defmodule App.Config do
             ],
             # Toolkits (App.Toolkits.Toolkit): suites opened on demand via `use_toolkit`.
             # `open_toolkits` holds the ids opened so far this turn.
-            toolkits: [App.Toolkits.Home],
+            toolkits: [App.Toolkits.Home, App.Toolkits.Repos],
             open_toolkits: [],
             # Google-Search grounding on the brain request (web search). Toggle off if the model
             # ever rejects googleSearch alongside function tools.

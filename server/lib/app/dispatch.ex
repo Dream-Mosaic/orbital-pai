@@ -34,6 +34,32 @@ defmodule App.Dispatch do
     )
   end
 
+  @doc "A repo's queued and running jobs, newest first."
+  def active_jobs(repo) do
+    Repo.all(
+      from j in Job, where: j.repo == ^repo and j.status in @active, order_by: [desc: j.id]
+    )
+  end
+
+  @doc """
+  Create a job unless the issue already has an active one: `{:ok, job}` or
+  `{:error, {:active, job}}`. The check and the insert share one IMMEDIATE transaction, so two
+  starts racing on the same issue can't both create (a deferred read-then-write would get
+  SQLite's BUSY_SNAPSHOT instead).
+  """
+  def create_job_unless_active(user_id, repo, issue) do
+    Repo.transaction(
+      fn ->
+        case active_job(repo, issue) do
+          nil -> Repo.insert!(%Job{user_id: user_id, repo: repo, issue: issue})
+          job -> Repo.rollback({:active, job})
+        end
+      end,
+      mode: :immediate
+    )
+    |> broadcast()
+  end
+
   def mark_dispatched(job, %{run_id: run_id, run_number: run_number}) do
     job
     |> Ecto.Changeset.change(run_id: run_id, run_number: run_number)

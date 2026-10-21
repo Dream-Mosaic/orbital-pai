@@ -96,4 +96,37 @@ defmodule App.DispatchTest do
     assert Dispatch.get_job(job.id).status == "queued"
     assert {:ok, %{status: "lost"}, :changed} = Dispatch.set_status(job, "lost")
   end
+
+  test "active_jobs lists a repo's queued and running jobs, newest first", %{u: u, job: job} do
+    {:ok, other} = Dispatch.create_job(u.id, "kalcode/x", 32)
+    {:ok, _, :changed} = Dispatch.apply_callback(other, %{status: "running"})
+    {:ok, done} = Dispatch.create_job(u.id, "kalcode/x", 33)
+    {:ok, _, :changed} = Dispatch.apply_callback(done, %{status: "pr"})
+    {:ok, _elsewhere} = Dispatch.create_job(u.id, "kalcode/y", 31)
+
+    assert [%{issue: 32, status: "running"}, %{issue: 31, status: "queued"}] =
+             Dispatch.active_jobs("kalcode/x")
+
+    assert job.issue == 31
+  end
+
+  test "create_job_unless_active refuses an issue that already has an active job", %{
+    u: u,
+    job: job
+  } do
+    assert {:error, {:active, %{id: id}}} =
+             Dispatch.create_job_unless_active(u.id, "kalcode/x", 31)
+
+    assert id == job.id
+
+    assert {:ok, %{issue: 32, status: "queued"} = fresh} =
+             Dispatch.create_job_unless_active(u.id, "kalcode/x", 32)
+
+    assert_received {:dispatch_job, %{issue: 32}}
+    assert Dispatch.active_job("kalcode/x", 32).id == fresh.id
+
+    # Once the old job has ended, the issue can be started again.
+    {:ok, _, :changed} = Dispatch.set_status(job, "failed", "r")
+    assert {:ok, %{issue: 31}} = Dispatch.create_job_unless_active(u.id, "kalcode/x", 31)
+  end
 end

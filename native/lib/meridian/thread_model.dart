@@ -61,6 +61,11 @@ const Map<String, String> kToolLabels = {
   'list_recipes': 'checking your recipes',
   'edit_recipe': 'updating the recipe',
   'delete_recipe': 'deleting a recipe',
+  // claude dispatch (the repos toolkit)
+  'code_board': 'checking the board',
+  'start_claude': 'starting Claude',
+  'claude_jobs': 'checking on Claude',
+  'file_issue': 'filing an issue',
 };
 
 String toolLabel(String name) => kToolLabels[name] ?? name.replaceAll('_', ' ');
