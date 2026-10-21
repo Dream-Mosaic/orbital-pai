@@ -5,7 +5,7 @@ defmodule App.Dispatch do
   """
   import Ecto.Query
 
-  alias App.Dispatch.Job
+  alias App.Dispatch.{Forge, Job}
   alias App.Repo
 
   @active ~w(queued running)
@@ -139,7 +139,7 @@ defmodule App.Dispatch do
 
   defp changes(status, attrs) do
     [status: status] ++
-      for k <- [:branch, :pr_url, :summary, :reason],
+      for k <- [:branch, :pr_url, :summary, :reason, :run_url],
           v = fetch(attrs, k),
           is_binary(v),
           do: {k, v}
@@ -161,6 +161,20 @@ defmodule App.Dispatch do
       from j in Job, where: j.status in @active and j.inserted_at < ^cutoff, order_by: j.id
     )
   end
+
+  @doc "The job's issue page, for a human (the forge's public base), or nil."
+  def issue_url(%{repo: repo, issue: n}) when is_binary(repo) and is_integer(n),
+    do: Forge.issue_url(repo, n)
+
+  def issue_url(_), do: nil
+
+  @doc """
+  The job's run log, for a human: the `run_url` the box sent in a callback when there is one
+  (the forge built it), else one built from the run number on the public base, or nil.
+  """
+  def run_url(%{run_url: url}) when is_binary(url) and url != "", do: url
+  def run_url(%{run_number: n}) when is_integer(n), do: Forge.run_url(n)
+  def run_url(_), do: nil
 
   @doc "Set a status directly (watchdog), same broadcast and end-state guard."
   def set_status(job, status, reason \\ nil) do

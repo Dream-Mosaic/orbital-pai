@@ -90,6 +90,34 @@ defmodule App.Dispatch.NotifierTest do
              "https://forge.test/kalcode/claude-dispatch/actions/runs/12"
   end
 
+  describe "with a LAN API base and a public link base" do
+    setup do
+      Application.put_env(:app, :forge, %{
+        url: "http://192.168.50.249:3000",
+        public_url: "https://code.test",
+        token: "t",
+        dispatch_repo: "kalcode/claude-dispatch"
+      })
+    end
+
+    test "the issue Click uses the public base", %{job: job} do
+      j = finish(job, %{status: "failed", reason: "step tests failed"})
+      Notifier.notify(j)
+      assert_received {:ntfy, _, h}
+      assert h["click"] == "https://code.test/kalcode/chronicles/issues/31"
+    end
+
+    test "the run Click uses the public base", %{job: job} do
+      assert Notifier.click(%{job | pr_url: nil, issue: nil}) ==
+               "https://code.test/kalcode/claude-dispatch/actions/runs/12"
+    end
+
+    test "the callback's own run_url is preferred over a built one", %{job: job} do
+      j = %{job | pr_url: nil, issue: nil, run_url: "https://code.test/kalcode/d/actions/runs/7"}
+      assert Notifier.click(j) == "https://code.test/kalcode/d/actions/runs/7"
+    end
+  end
+
   test "titles per status", %{job: job} do
     for {s, t} <- [
           {"draft", "Draft PR"},

@@ -53,6 +53,14 @@ defmodule App.DispatchTest do
     assert {:ok, %{status: "draft"}, :changed} = Dispatch.apply_callback(job, %{status: "draft"})
   end
 
+  test "a callback's run_url is stored, from the first callback that has one", %{job: job} do
+    url = "https://code.test/kalcode/claude-dispatch/actions/runs/57"
+    {:ok, j, :changed} = Dispatch.apply_callback(job, %{"status" => "running", "run_url" => url})
+    assert j.run_url == url
+    {:ok, j, :changed} = Dispatch.apply_callback(j, %{"status" => "pr"})
+    assert j.run_url == url
+  end
+
   test "end_state?" do
     refute Dispatch.end_state?("queued")
     refute Dispatch.end_state?("running")

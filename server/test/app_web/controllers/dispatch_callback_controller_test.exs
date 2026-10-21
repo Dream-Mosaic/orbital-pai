@@ -157,7 +157,8 @@ defmodule AppWeb.DispatchCallbackControllerTest do
              status: "pr",
              branch: "claude/31-fix-truncated-filter-r57",
              pr_url: "https://code.clausens.cloud/kalcode/unwritten-chronicles/pulls/40",
-             summary: "Fixed the truncated action filter. Tests pass."
+             summary: "Fixed the truncated action filter. Tests pass.",
+             run_url: "https://code.clausens.cloud/kalcode/claude-dispatch/actions/runs/57"
            } = Dispatch.get_job(42)
   end
 

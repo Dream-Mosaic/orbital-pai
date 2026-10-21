@@ -8,6 +8,7 @@ defmodule App.Dispatch.Job do
     field :issue, :integer
     field :run_id, :integer
     field :run_number, :integer
+    field :run_url, :string
     field :status, :string, default: "queued"
     field :branch, :string
     field :pr_url, :string

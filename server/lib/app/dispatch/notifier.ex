@@ -104,36 +104,9 @@ defmodule App.Dispatch.Notifier do
   defp blank_to_nil(_), do: nil
 
   @doc false
-  def click(job) do
-    job.pr_url || issue_url(job) || run_url(job)
-  end
-
-  defp forge_url do
-    case Application.get_env(:app, :forge) do
-      %{url: url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-      _ -> nil
-    end
-  end
-
-  defp issue_url(%{issue: n} = job) when is_integer(n) do
-    if base = forge_url(), do: "#{base}/#{job.repo}/issues/#{n}"
-  end
-
-  defp issue_url(_), do: nil
-
-  defp run_url(%{run_number: n}) when is_integer(n) do
-    if base = forge_url() do
-      repo =
-        case Application.get_env(:app, :forge) do
-          %{dispatch_repo: r} when is_binary(r) and r != "" -> r
-          _ -> "kalcode/claude-dispatch"
-        end
-
-      "#{base}/#{repo}/actions/runs/#{n}"
-    end
-  end
-
-  defp run_url(_), do: nil
+  # Every link is on the forge's PUBLIC base (FORGE_PUBLIC_URL): the phone opens it, so it must
+  # never be the LAN address the API uses.
+  def click(job), do: job.pr_url || Dispatch.issue_url(job) || Dispatch.run_url(job)
 
   # One spoken sentence. Numbers are spelled out so Sonic says "thirty-one", not "three one".
   defp spoken(job) do

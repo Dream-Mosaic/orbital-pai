@@ -689,6 +689,60 @@ defmodule App.Tools.ClaudeDispatchTest do
     end
   end
 
+  describe "links a human opens use the public base, not the API base" do
+    setup do
+      Application.put_env(:app, :forge, %{
+        url: "http://192.168.50.249:3000",
+        public_url: "https://code.test",
+        token: "t",
+        dispatch_repo: "kalcode/claude-dispatch"
+      })
+    end
+
+    test "a started issue carries its run link", %{david: d} do
+      forge()
+
+      assert {:ok, %{started: [%{issue: 31, run_url: url}]}} =
+               Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
+
+      assert url == "https://code.test/kalcode/claude-dispatch/actions/runs/31"
+    end
+
+    test "claude_jobs rows carry the run link, the callback's own when it sent one",
+         %{david: d} do
+      {:ok, a} = Dispatch.create_job(d.id, "kalcode/unwritten-chronicles", 31)
+      {:ok, a} = Dispatch.mark_dispatched(a, %{run_id: 531, run_number: 31})
+      {:ok, b} = Dispatch.create_job(d.id, "kalcode/unwritten-chronicles", 15)
+
+      {:ok, _, :changed} =
+        Dispatch.apply_callback(b, %{
+          status: "running",
+          run_url: "https://code.test/kalcode/claude-dispatch/actions/runs/77"
+        })
+
+      {:ok, _c} = Dispatch.create_job(d.id, "kalcode/unwritten-chronicles", 16)
+
+      assert {:ok, %{jobs: [c_row, b_row, a_row]}} = Tool.execute("claude_jobs", %{}, ctx(d))
+      assert a_row.run_url == "https://code.test/kalcode/claude-dispatch/actions/runs/31"
+      assert b_row.run_url == "https://code.test/kalcode/claude-dispatch/actions/runs/77"
+      refute Map.has_key?(c_row, :run_url)
+      assert a.issue == 31
+    end
+
+    test "a filed issue's url", %{david: d} do
+      forge()
+
+      assert {:ok, %{number: 99, url: url}} =
+               Tool.execute(
+                 "file_issue",
+                 %{"repo" => "chronicles", "title" => "T", "body" => "B"},
+                 ctx(d)
+               )
+
+      assert url == "https://code.test/kalcode/unwritten-chronicles/issues/99"
+    end
+  end
+
   describe "claude_jobs" do
     test "the user's recent jobs with status, elapsed, PR and summary", %{david: d, tanya: t} do
       {:ok, a} = Dispatch.create_job(d.id, "kalcode/unwritten-chronicles", 31)

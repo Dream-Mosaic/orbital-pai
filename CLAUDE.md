@@ -446,8 +446,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   and its callback must still be accepted. The watchdog never marks `lost` by age alone, because
   the box runs ONE job at a time and the third queued issue legitimately waits hours: a run still
   waiting/running is left alone; 404 = `lost` ("the run disappeared"); read errors only count after
-  24 h; a job with no `run_id` is `lost` after 6 h. `FORGE_URL` should be the LAN URL
-  `http://192.168.50.249:3000` (Coolify, CT 102) so API POSTs skip Cloudflare's browser check.
+  24 h; a job with no `run_id` is `lost` after 6 h. Two forge bases: `FORGE_URL` is the API base,
+  the forge's LAN address `http://192.168.50.249:3000`, so API POSTs skip Cloudflare's browser
+  check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to `FORGE_URL`) is the base
+  of every link a human opens (ntfy Click, issue/run links, `file_issue`'s url). A callback's own
+  `run_url` is stored and preferred over one built from the run number.
   Token and secret come from env only (names in `server/.env.example`).
 - **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
   `kalcode/claude-dispatch` (workflow, runner, `CLAUDE_CODE_OAUTH_TOKEN` and `DISPATCH_FORGE_TOKEN`

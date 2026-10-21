@@ -186,8 +186,17 @@ if forge_url != "" and forge_token != "" and System.get_env("CLAUDE_DISPATCH") n
       repo -> repo
     end
 
+  # FORGE_URL is the API base (the LAN address in prod, so POSTs skip Cloudflare's browser
+  # check); FORGE_PUBLIC_URL is the base of every link a human opens. Unset, links use FORGE_URL.
+  forge_public_url =
+    case System.get_env("FORGE_PUBLIC_URL", "") do
+      "" -> forge_url
+      url -> url
+    end
+
   config :app, :forge, %{
     url: String.trim_trailing(forge_url, "/"),
+    public_url: String.trim_trailing(forge_public_url, "/"),
     token: forge_token,
     dispatch_repo: dispatch_repo
   }

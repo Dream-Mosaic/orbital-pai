@@ -2,8 +2,12 @@ defmodule App.Dispatch.Forge do
   @moduledoc """
   Forgejo adapter for Claude dispatch: list repos and issues, detect agent context files and open
   PRs, create issues and comments, and dispatch/inspect the `work-issue.yml` workflow in the
-  dispatch repo. Config: `:app, :forge` -> `%{url:, token:, dispatch_repo:}` (absent =
-  `:not_configured`; see `App.Config.forge?/0`). Req options are overridable via
+  dispatch repo. Config: `:app, :forge` -> `%{url:, public_url:, token:, dispatch_repo:}`
+  (absent = `:not_configured`; see `App.Config.forge?/0`).
+
+  Two bases: `url` (FORGE_URL) is where API calls go, the LAN address in prod so POSTs skip
+  Cloudflare; `public_url` (FORGE_PUBLIC_URL, defaulting to FORGE_URL) is the base of every link
+  a human opens (`issue_url/2`, `run_url/1`). Req options are overridable via
   `:dispatch_req_opts` (test seam). Errors flatten to `:not_configured | :unauthorized |
   :not_found | {:http, status} | transport`; every call returns `{:ok, _}` or `{:error, _}`.
   """
@@ -150,6 +154,38 @@ defmodule App.Dispatch.Forge do
   end
 
   defp parse_time(_), do: nil
+
+  @doc "The base for links a human opens: `public_url`, else the API `url`; nil without a forge."
+  def public_url do
+    case Application.get_env(:app, :forge) do
+      %{} = cfg ->
+        Enum.find_value([cfg[:public_url], cfg[:url]], fn
+          u when is_binary(u) and u != "" -> String.trim_trailing(u, "/")
+          _ -> nil
+        end)
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc "An issue's page on the public base, or nil."
+  def issue_url(full_name, n) do
+    if base = public_url(), do: "#{base}/#{full_name}/issues/#{n}"
+  end
+
+  @doc "A dispatch run's page on the public base (by run NUMBER, as the forge's UI is), or nil."
+  def run_url(run_number) do
+    if base = public_url() do
+      repo =
+        case Application.get_env(:app, :forge) do
+          %{dispatch_repo: r} when is_binary(r) and r != "" -> r
+          _ -> @default_dispatch_repo
+        end
+
+      "#{base}/#{repo}/actions/runs/#{run_number}"
+    end
+  end
 
   @doc false
   def normalize_issue(i) do

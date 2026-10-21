@@ -547,7 +547,7 @@ defmodule App.Tools.ClaudeDispatch do
         case guarded(fn -> Forge.dispatch(full, n, job.id) end) do
           {:ok, run} ->
             mark_dispatched(job, run, full, n)
-            {:started, n, job, nil}
+            {:started, n, %{job | run_id: run.run_id, run_number: run[:run_number]}, nil}
 
           {:error, reason} ->
             case dispatch_outcome(reason) do
@@ -629,7 +629,13 @@ defmodule App.Tools.ClaudeDispatch do
   defp shape_start(repo, outcomes, gated?) do
     started =
       for {:started, n, job, note} <- outcomes do
-        drop_nils(%{issue: n, job_id: job.id, note: note, design_gated: if(gated?, do: true)})
+        drop_nils(%{
+          issue: n,
+          job_id: job.id,
+          run_url: Dispatch.run_url(job),
+          note: note,
+          design_gated: if(gated?, do: true)
+        })
       end
 
     result = %{
@@ -725,6 +731,7 @@ defmodule App.Tools.ClaudeDispatch do
       elapsed: plain_duration(DateTime.diff(until, job.inserted_at)),
       finished: if(ended?, do: ago(DateTime.diff(now, job.updated_at))),
       pr_url: job.pr_url,
+      run_url: Dispatch.run_url(job),
       summary: job.summary,
       reason: job.reason
     }
@@ -771,7 +778,8 @@ defmodule App.Tools.ClaudeDispatch do
       {:ok, %{number: n, url: url}} ->
         Logger.info("[dispatch] filed #{repo.full_name} ##{n}")
 
-        %{repo: repo.name, number: n, url: url}
+        # The public link (FORGE_PUBLIC_URL), like every link Henry hands a human.
+        %{repo: repo.name, number: n, url: Forge.issue_url(repo.full_name, n) || url}
         |> then(&if(skipped == [], do: &1, else: Map.put(&1, :skipped_labels, skipped)))
         |> then(&{:ok, &1})
 
