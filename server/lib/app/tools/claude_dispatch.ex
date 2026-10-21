@@ -6,7 +6,10 @@ defmodule App.Tools.ClaudeDispatch do
       candidates. A repo: its open issues triaged (`App.Dispatch.Board`), whether it has a
       CLAUDE.md, whether it's design-gated, and its active jobs.
     * `start_claude` (write). One job per issue. Each job is created, gets the notes comment,
-      is dispatched to the workflow, and has its run recorded.
+      is dispatched to the workflow, and has its run recorded. A started issue carries its run
+      link, and `design_pr: true` when it's feature work in a design-gated repo (a design doc
+      comes back, not code). The result says `has_context: false` for a repo with no
+      CLAUDE.md or AGENTS.md.
     * `claude_jobs` (read, database only). The user's recent jobs.
     * `file_issue` (write). Creates an issue, with label names turned into ids.
 
@@ -31,7 +34,7 @@ defmodule App.Tools.ClaudeDispatch do
   require Logger
 
   alias App.Dispatch
-  alias App.Dispatch.{Board, Forge, Notifier, Repos}
+  alias App.Dispatch.{Board, Forge, Notifier, Repos, Triage}
 
   @not_yours "that's not set up for you"
   @not_configured "the forge isn't configured on this server"
@@ -380,7 +383,9 @@ defmodule App.Tools.ClaudeDispatch do
   # -- start_claude --
 
   # Outcomes, one per issue:
-  #   {:started, n, job, note | nil}   dispatched; note when the forge gave no run id
+  #   {:started, n, job, note | nil, kind}
+  #                                    dispatched; note when the forge gave no run id; kind is
+  #                                    Triage.work_kind/2 ungated (:bug | :debt | :feature)
   #   {:uncertain, n, job}             the dispatch may have started a run; the job stays queued
   #   {:refused, n, why}               not started, nothing created
   #   {:failed, n, why, announce}      not started; `announce` is the job id whose notice was
@@ -398,12 +403,12 @@ defmodule App.Tools.ClaudeDispatch do
 
     work = fn ->
       outcomes = Enum.map(now, &start_one(repo, &1, note_body, user.id))
-      {outcomes, design_gated?(repo, outcomes)}
+      {outcomes, started_context(repo, outcomes)}
     end
 
     case run_detached(work, started_at) do
-      {:ok, {outcomes, gated?}} ->
-        {:ok, shape_start(repo, outcomes ++ refused_up_front, gated?)}
+      {:ok, {outcomes, context}} ->
+        {:ok, shape_start(repo, outcomes ++ refused_up_front, context)}
 
       :late ->
         Logger.warning("[dispatch] start #{repo.full_name} still running after the budget")
@@ -489,9 +494,16 @@ defmodule App.Tools.ClaudeDispatch do
     end
   end
 
-  defp design_gated?(repo, outcomes) do
-    Enum.any?(outcomes, &match?({:started, _, _, _}, &1)) and
-      match?({:ok, %{design_gated: true}}, guarded(fn -> Board.context(repo) end))
+  # The repo's context files (cached by Board), read only when something started: whether it's
+  # design-gated decides which started issues come back as design-doc PRs, and a repo with no
+  # CLAUDE.md is worth saying. nil when nothing started or it can't be read.
+  defp started_context(repo, outcomes) do
+    if Enum.any?(outcomes, &match?({:started, _, _, _, _}, &1)) do
+      case guarded(fn -> Board.context(repo) end) do
+        {:ok, ctx} -> ctx
+        _ -> nil
+      end
+    end
   end
 
   defp start_one(repo, n, notes, user_id) do
@@ -500,9 +512,12 @@ defmodule App.Tools.ClaudeDispatch do
     outcome =
       try do
         with :ok <- not_active(n, Dispatch.active_job(full, n)),
-             :ok <- startable(n, Forge.issue(full, n)),
+             {:ok, issue} <- startable(n, Forge.issue(full, n)),
              {:ok, job} <- create(n, Dispatch.create_job_unless_active(user_id, full, n)) do
-          launch(repo, n, job, notes)
+          case launch(repo, n, job, notes) do
+            {:started, n, job, note} -> {:started, n, job, note, Triage.work_kind(issue, false)}
+            other -> other
+          end
         end
       rescue
         # Before a job exists (launch/4 guards its own steps), so nothing is left queued.
@@ -510,10 +525,10 @@ defmodule App.Tools.ClaudeDispatch do
       end
 
     case outcome do
-      {:started, _, job, nil} ->
+      {:started, _, job, nil, _} ->
         Logger.info("[dispatch] start #{full} ##{n}: job #{job.id}")
 
-      {:started, _, job, _note} ->
+      {:started, _, job, _note, _} ->
         Logger.warning("[dispatch] start #{full} ##{n}: job #{job.id}, no run id returned")
 
       {:uncertain, _, job} ->
@@ -533,7 +548,7 @@ defmodule App.Tools.ClaudeDispatch do
   defp not_active(n, _job), do: {:refused, n, "already running"}
 
   defp startable(n, {:ok, %{pull_request: true}}), do: {:refused, n, "that's a pull request"}
-  defp startable(_n, {:ok, %{state: "open"}}), do: :ok
+  defp startable(_n, {:ok, %{state: "open"} = issue}), do: {:ok, issue}
   defp startable(n, {:ok, %{state: state}}), do: {:refused, n, "it's #{state}"}
   defp startable(n, {:error, :not_found}), do: {:refused, n, "no such issue"}
 
@@ -635,15 +650,20 @@ defmodule App.Tools.ClaudeDispatch do
     end
   end
 
-  defp shape_start(repo, outcomes, gated?) do
+  # `design_pr: true` only on a feature-like issue in a design-gated repo (Triage's rule): it
+  # comes back as a design doc, not code. A bug or debt fix goes straight to code even there.
+  # `has_context: false` when the repo has no CLAUDE.md or AGENTS.md.
+  defp shape_start(repo, outcomes, context) do
+    gated? = match?(%{design_gated: true}, context)
+
     started =
-      for {:started, n, job, note} <- outcomes do
+      for {:started, n, job, note, kind} <- outcomes do
         drop_nils(%{
           issue: n,
           job_id: job.id,
           run_url: Dispatch.run_url(job),
           note: note,
-          design_gated: if(gated?, do: true)
+          design_pr: if(gated? and kind == :feature, do: true)
         })
       end
 
@@ -658,6 +678,11 @@ defmodule App.Tools.ClaudeDispatch do
       refused: for({:refused, n, why} <- outcomes, do: %{issue: n, why: why}),
       failed: for({:failed, n, why, _} <- outcomes, do: %{issue: n, why: why})
     }
+
+    result =
+      if match?(%{has_context: false}, context),
+        do: Map.put(result, :has_context, false),
+        else: result
 
     if length(started) > 1,
       do: Map.put(result, :note, "Claude takes them one at a time; the others wait their turn"),

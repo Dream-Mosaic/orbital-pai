@@ -574,16 +574,47 @@ defmodule App.Tools.ClaudeDispatchTest do
       assert log =~ ~r/\[dispatch\] job \d+ left queued/
     end
 
-    test "a design-gated repo's started issues say so", %{david: d} do
+    test "in a design-gated repo only feature-like issues are marked design_pr", %{david: d} do
       forge()
 
-      assert {:ok, %{started: [%{issue: 23, design_gated: true}]}} =
-               Tool.execute("start_claude", %{"repo" => "Henry", "issues" => [23]}, ctx(d))
+      assert {:ok, %{started: [bug, debt, feature]}} =
+               Tool.execute(
+                 "start_claude",
+                 %{"repo" => "Henry", "issues" => [23, 24, 17]},
+                 ctx(d)
+               )
 
+      assert %{issue: 23} = bug
+      assert %{issue: 24} = debt
+      refute Map.has_key?(bug, :design_pr)
+      refute Map.has_key?(debt, :design_pr)
+      assert %{issue: 17, design_pr: true} = feature
+      refute Enum.any?([bug, debt, feature], &Map.has_key?(&1, :design_gated))
+
+      # Not gated: a feature issue is code.
       assert {:ok, %{started: [started]}} =
+               Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [16]}, ctx(d))
+
+      refute Map.has_key?(started, :design_pr)
+    end
+
+    test "a repo with no CLAUDE.md or AGENTS.md: the start result says so", %{david: d} do
+      forge(%{
+        {"GET", "/repos/kalcode/unwritten-chronicles/raw/CLAUDE.md"} =>
+          &Plug.Conn.send_resp(&1, 404, "")
+      })
+
+      assert {:ok, %{started: [_], has_context: false}} =
                Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [31]}, ctx(d))
 
-      refute Map.has_key?(started, :design_gated)
+      # With a CLAUDE.md there's nothing to say.
+      Board.forget()
+      forge()
+
+      assert {:ok, %{started: [_]} = res} =
+               Tool.execute("start_claude", %{"repo" => "chronicles", "issues" => [15]}, ctx(d))
+
+      refute Map.has_key?(res, :has_context)
     end
 
     test "notes are posted once on each issue, before the dispatch", %{david: d} do

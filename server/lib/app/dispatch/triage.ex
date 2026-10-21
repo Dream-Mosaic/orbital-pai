@@ -23,17 +23,25 @@ defmodule App.Dispatch.Triage do
       ctx[:active_job?] -> {:skip, "job already active"}
       Enum.any?(labels, &(&1 in @idea)) -> {:skip, "idea"}
       blank?(issue[:body]) -> {:skip, "no description"}
-      true -> kind(labels, ctx)
+      true -> {:candidate, kind(labels, ctx[:design_gated?])}
     end
   end
 
-  defp kind(labels, ctx) do
+  @doc """
+  The kind of work an issue is, by its labels alone (no skip rules): `:bug`, `:debt`, or
+  feature work, which is `:design` (a design-doc PR, not code) in a design-gated repo.
+  """
+  @spec work_kind(map(), boolean()) :: :bug | :debt | :feature | :design
+  def work_kind(issue, design_gated?),
+    do: kind(Enum.map(issue[:labels] || [], &String.downcase/1), design_gated?)
+
+  defp kind(labels, design_gated?) do
     cond do
-      Enum.any?(labels, &(&1 in @bug)) -> {:candidate, :bug}
-      Enum.any?(labels, &(&1 in @debt)) -> {:candidate, :debt}
+      Enum.any?(labels, &(&1 in @bug)) -> :bug
+      Enum.any?(labels, &(&1 in @debt)) -> :debt
       # Anything with a real body and no type label (or only area labels) is feature work.
-      ctx[:design_gated?] -> {:candidate, :design}
-      true -> {:candidate, :feature}
+      design_gated? -> :design
+      true -> :feature
     end
   end
 

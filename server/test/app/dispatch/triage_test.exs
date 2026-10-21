@@ -27,6 +27,15 @@ defmodule App.Dispatch.TriageTest do
     assert Triage.classify(issue("personal-assistant", 23), gated) == {:candidate, :bug}
   end
 
+  test "work_kind/2 is the kind by labels alone, whatever would skip the issue" do
+    assert Triage.work_kind(issue("personal-assistant", 23), true) == :bug
+    assert Triage.work_kind(issue("personal-assistant", 24), true) == :debt
+    assert Triage.work_kind(issue("personal-assistant", 17), true) == :design
+    assert Triage.work_kind(issue("personal-assistant", 17), false) == :feature
+    # An idea would be skipped on the board, but if David starts it anyway, it's feature work.
+    assert Triage.work_kind(issue("personal-assistant", 25), true) == :design
+  end
+
   test "empty body, open PR, active job, pull requests and pull requests" do
     base = %{number: 1, title: "t", labels: ["bug"], body: "x", pull_request: false}
     assert {:skip, "no description"} = Triage.classify(%{base | body: "  \n"}, @ctx)

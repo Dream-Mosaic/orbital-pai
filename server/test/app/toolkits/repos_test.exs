@@ -14,8 +14,8 @@ defmodule App.Toolkits.ReposTest do
               "David says as notes. Claude works unattended on a branch and opens a PR (or a " <>
               "draft, or asks a question on the issue); nothing merges without David. Use " <>
               "claude_jobs for \"how's Claude doing\". file_issue creates an issue — read the " <>
-              "title back first. For a design-gated repo, a feature issue becomes a design-doc " <>
-              "PR, not code — say so."
+              "title back first. A started issue marked design_pr comes back as a design-doc " <>
+              "PR, not code (feature work in a design-gated repo) — say so."
 
   setup do
     Application.put_env(:app, :forge, %{
