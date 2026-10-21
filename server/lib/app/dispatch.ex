@@ -180,6 +180,17 @@ defmodule App.Dispatch do
     Repo.all(from j in Job, where: j.user_id == ^user_id, order_by: [desc: j.id], limit: ^limit)
   end
 
+  @doc "Jobs that reached an end state since `since` and were never announced, oldest first."
+  def unannounced_ends(since) do
+    since = DateTime.truncate(since, :second)
+
+    Repo.all(
+      from j in Job,
+        where: j.status not in @active and is_nil(j.notified_at) and j.updated_at >= ^since,
+        order_by: j.id
+    )
+  end
+
   @doc "Active jobs created more than `older_than_ms` before `now`."
   def stale_jobs(now, older_than_ms) do
     cutoff = now |> DateTime.add(-older_than_ms, :millisecond) |> DateTime.truncate(:second)

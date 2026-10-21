@@ -7,7 +7,12 @@ defmodule App.Dispatch.Notifier do
   `notify/1` is also called directly by the watchdog. Dedupe is race-safe: `notified_at` is
   claimed with a conditional `update_all` (`where is_nil(notified_at)`), and only the caller that
   changed exactly one row sends anything, so a redelivered or concurrent message never notifies
-  twice. An ntfy failure is logged and does not stop the wall line.
+  twice. An ntfy failure, even a raise, is logged and does not stop the wall line.
+
+  It starts on `:start_dispatch_notifier` alone, not on the forge: with the kill switch on, a
+  job already running still reports back and must still be announced. On start it catches up
+  on end states from the last 24 h that nobody announced (a deploy, a crash), through the same
+  `notified_at` claim, so nothing is announced twice.
   """
   use GenServer
   require Logger
@@ -34,12 +39,36 @@ defmodule App.Dispatch.Notifier do
     "lost" => "ghost"
   }
 
+  @catch_up_ms 24 * 3_600_000
+
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @impl true
   def init(_) do
     Phoenix.PubSub.subscribe(App.PubSub, "dispatch")
-    {:ok, %{}}
+    {:ok, %{}, {:continue, :catch_up}}
+  end
+
+  # Off init, so a slow ntfy can't hold up boot. Subscribed first: an end state that lands
+  # meanwhile is in the mailbox, and the claim keeps it from being announced twice.
+  @impl true
+  def handle_continue(:catch_up, state) do
+    since = DateTime.add(DateTime.utc_now(), -@catch_up_ms, :millisecond)
+
+    try do
+      n = Enum.count(Dispatch.unannounced_ends(since), &(notify(&1) == :notified))
+
+      if n > 0,
+        do:
+          Logger.info(
+            "[dispatch] announced #{n} job#{if n == 1, do: "", else: "s"} that ended while " <>
+              "nobody was listening"
+          )
+    rescue
+      e -> Logger.warning("[dispatch] notifier catch-up failed: #{inspect(e.__struct__)}")
+    end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -68,9 +97,12 @@ defmodule App.Dispatch.Notifier do
       priority: if(job.status in ~w(pr draft), do: "default", else: "high")
     }
 
-    case Ntfy.publish(msg) do
+    case push(msg) do
       :ok ->
         :ok
+
+      {:error, {:raised, what}} ->
+        Logger.warning("dispatch #{job.id}: ntfy push raised (#{what}); the wall line still goes")
 
       {:error, reason} ->
         Logger.warning("dispatch #{job.id}: ntfy not sent (#{inspect_reason(reason)})")
@@ -85,6 +117,16 @@ defmodule App.Dispatch.Notifier do
     })
 
     :notified
+  end
+
+  # The phone push must never cost the wall line. Only the exception's name is kept: a message
+  # can carry the URL, and the URL carries the topic.
+  defp push(msg) do
+    Ntfy.publish(msg)
+  rescue
+    e -> {:error, {:raised, inspect(e.__struct__)}}
+  catch
+    :exit, _ -> {:error, {:raised, "exit"}}
   end
 
   defp inspect_reason({:http, s}), do: "HTTP #{s}"
@@ -134,7 +176,9 @@ defmodule App.Dispatch.Notifier do
     clause =
       text
       |> speakable()
-      |> String.split(~r/[.,;:!?\n]|\s[—–-]\s/, parts: 2)
+      # Sentence punctuation only before a space or the end, so "lib/app.ex" and "1.18" stay
+      # whole; commas, newlines and a spaced dash always end it.
+      |> String.split(~r/[.!?;:](?=\s|\z)|,|\n|\s[—–-]\s/u, parts: 2)
       |> hd()
       |> String.trim()
       |> String.slice(0, 120)

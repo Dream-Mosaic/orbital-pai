@@ -441,7 +441,9 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   (the query string isn't signed), and a body's `repo`/`issue`, when present, must be the job's.
   Callbacks are idempotent and end states are sticky: `Dispatch.set_status/3` and `claim_notice`
   are race-safe (a no-op once a real end state landed, one notification per job), so the
-  watchdog and a late callback can't double-notify or overwrite each other. An AMBIGUOUS dispatch
+  watchdog and a late callback can't double-notify or overwrite each other. The `Notifier` starts
+  on its own flag, not the forge (the kill switch mustn't silence a running job's end), and on
+  boot announces end states from the last 24 h that nobody announced. An AMBIGUOUS dispatch
   outcome (no run info, timeout) leaves the job `queued` rather than `failed` — the run may exist
   and its callback must still be accepted. The watchdog never marks `lost` by age alone, because
   the box runs ONE job at a time and the third queued issue legitimately waits hours: a run still

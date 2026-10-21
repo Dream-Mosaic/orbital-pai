@@ -137,9 +137,12 @@ defmodule App.Application do
        else: []
   end
 
-  # Claude dispatch: the end-of-job notifier and the silent-job watchdog (need the forge).
-  defp dispatch_notifier do
-    if App.Config.forge?() and Application.get_env(:app, :start_dispatch_notifier, true),
+  # Claude dispatch: the end-of-job notifier runs whatever the forge config says (a job already
+  # running when the kill switch flips still reports back, and must still be announced); the
+  # silent-job watchdog needs the forge.
+  @doc false
+  def dispatch_notifier do
+    if Application.get_env(:app, :start_dispatch_notifier, true),
       do: [App.Dispatch.Notifier],
       else: []
   end

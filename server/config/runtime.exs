@@ -173,9 +173,10 @@ end
 # Claude dispatch (spec 2026-10-21-claude-dispatch-design.md): Henry's own forge token reads the
 # boards, files issues and comments, and dispatches the work-issue workflow on DISPATCH_REPO.
 # FORGE_URL + FORGE_TOKEN must both be set, and CLAUDE_DISPATCH not "false"/"0" (the kill
-# switch), or `:forge` stays absent: the repos toolkit isn't registered and the notifier and
-# watchdog don't start. The callback secret and the user list are read either way, so a job
-# already running when the switch flips can still report back.
+# switch), or `:forge` stays absent: the repos toolkit isn't registered and the watchdog
+# doesn't start. The callback secret and the user list are read either way, and the notifier
+# runs either way, so a job already running when the switch flips can still report back and be
+# announced.
 forge_url = System.get_env("FORGE_URL", "")
 forge_token = System.get_env("FORGE_TOKEN", "")
 

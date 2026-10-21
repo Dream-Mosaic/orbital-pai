@@ -1,6 +1,7 @@
 defmodule App.Dispatch.NotifierTest do
   use App.DataCase, async: false
   import ExUnit.CaptureLog
+  import Ecto.Query, only: [where: 2]
 
   alias App.{Dispatch, Users}
   alias App.Agenda.Item
@@ -143,6 +144,58 @@ defmodule App.Dispatch.NotifierTest do
     assert Dispatch.get_job(j.id).notified_at
   end
 
+  test "an ntfy push that raises still delivers the wall line", %{job: job} do
+    Req.Test.stub(NtfyStub, fn _conn -> raise "boom at https://ntfy.test/henry" end)
+    j = finish(job, %{status: "blocked", reason: "needs a decision"})
+
+    log = capture_log(fn -> assert :notified = Notifier.notify(j) end)
+    assert log =~ "ntfy push raised"
+    refute log =~ "ntfy.test"
+
+    assert_received {:agenda_due,
+                     %Item{prompt: "Claude is stuck on chronicles thirty-one — needs a decision."}}
+
+    assert Dispatch.get_job(j.id).notified_at
+  end
+
+  test "on start it announces end states it missed in the last 24 h, once", %{u: u, job: job} do
+    # Ended while no notifier ran (a deploy, or the kill switch was on).
+    j = finish(job, %{status: "pr", summary: "Fixed it."})
+
+    {:ok, old} = Dispatch.create_job(u.id, "kalcode/chronicles", 40)
+    old = finish(old, %{status: "failed", reason: "x"})
+    day_ago = DateTime.utc_now() |> DateTime.add(-25 * 3600) |> DateTime.truncate(:second)
+    App.Repo.update_all(where(App.Dispatch.Job, id: ^old.id), set: [updated_at: day_ago])
+
+    {:ok, seen} = Dispatch.create_job(u.id, "kalcode/chronicles", 41)
+    seen = finish(seen, %{status: "pr"})
+    true = Dispatch.claim_notice(seen.id)
+
+    {:ok, running} = Dispatch.create_job(u.id, "kalcode/chronicles", 42)
+    running = finish(running, %{status: "running"})
+
+    Req.Test.set_req_test_to_shared()
+    start_supervised!(Notifier)
+
+    assert_receive {:agenda_due, %Item{prompt: p}}, 1000
+    assert p == "Claude's PR for chronicles thirty-one is up — Fixed it."
+    refute_receive {:agenda_due, _}, 100
+
+    assert Dispatch.get_job(j.id).notified_at
+    assert Dispatch.get_job(old.id).notified_at == nil
+    assert Dispatch.get_job(running.id).notified_at == nil
+  end
+
+  test "the notifier is started by its own flag, not the forge's" do
+    Application.delete_env(:app, :forge)
+    Application.put_env(:app, :start_dispatch_notifier, true)
+    on_exit(fn -> Application.put_env(:app, :start_dispatch_notifier, false) end)
+
+    assert App.Application.dispatch_notifier() == [Notifier]
+    Application.put_env(:app, :start_dispatch_notifier, false)
+    assert App.Application.dispatch_notifier() == []
+  end
+
   test "the GenServer notifies on a broadcast", %{job: job} do
     Req.Test.set_req_test_to_shared()
     start_supervised!(Notifier)
@@ -161,6 +214,36 @@ defmodule App.Dispatch.NotifierTest do
     assert_received {:agenda_due, %Item{prompt: prompt, expires_at: exp}}
     assert prompt == "Claude's PR for chronicles thirty-one is up — Fixed the login bug see."
     assert_in_delta DateTime.diff(exp, DateTime.utc_now()), 7200, 5
+  end
+
+  test "a dot inside a filename or a version doesn't end the spoken clause", %{job: job} do
+    j = finish(job, %{status: "pr", summary: "Fixed the parser in lib/app.ex"})
+    Notifier.notify(j)
+    assert_received {:agenda_due, %Item{prompt: p}}
+    assert p == "Claude's PR for chronicles thirty-one is up — Fixed the parser in lib/app.ex."
+  end
+
+  test "a version number survives, and a sentence still ends the clause", %{u: u} do
+    {:ok, job} = Dispatch.create_job(u.id, "kalcode/chronicles", 31)
+    j = finish(job, %{status: "draft", summary: "Bumped Elixir to 1.18. Two tests fail."})
+    Notifier.notify(j)
+    assert_received {:agenda_due, %Item{prompt: p}}
+    assert p == "Claude opened a draft PR for chronicles thirty-one — Bumped Elixir to 1.18."
+  end
+
+  test "a clause ends at a comma, a newline, a colon or a spaced dash", %{u: u} do
+    for {summary, clause} <- [
+          {"Fixed it, and more", "Fixed it"},
+          {"Fixed it\nMore", "Fixed it"},
+          {"Fixed it: details", "Fixed it"},
+          {"Fixed it - details", "Fixed it"},
+          {"Fixed the well-known bug", "Fixed the well-known bug"}
+        ] do
+      {:ok, job} = Dispatch.create_job(u.id, "kalcode/chronicles", 31)
+      Notifier.notify(finish(job, %{status: "pr", summary: summary}))
+      assert_received {:agenda_due, %Item{prompt: p}}
+      assert p == "Claude's PR for chronicles thirty-one is up — #{clause}."
+    end
   end
 
   test "a heading marker and backticks are stripped", %{job: job} do
