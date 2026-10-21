@@ -1,11 +1,24 @@
 defmodule App.Dispatch.Watchdog do
   @moduledoc """
-  Catches dispatch jobs that never report back. Every 5 minutes, for each `queued`/`running`
-  job: if the forge says its run finished (status success/failure/cancelled/skipped, or `stopped` set) and the job is >= 10 min old and the run stopped >= 3 min ago (grace for an in-flight callback), the job ended without calling back (`failed`). A run still waiting/running is left alone
-  whatever its age (the box runs one job at a time, so queueing for hours is legitimate); a run the forge no longer knows (404) is `lost`; if every read errors for 24 h it is `lost`; a job with no `run_id` is `lost` after 6 h of silence. Status changes go ONLY through `Dispatch.set_status/3`
-  (race-safe: a no-op if a real callback landed first), then the job is handed to the notifier,
-  whose `notified_at` claim keeps a double path from notifying twice. `tick/1` takes an
-  injectable `now` so tests drive it directly.
+  Catches dispatch jobs that never report back. Every 5 minutes it checks each `queued`/
+  `running` job older than 10 minutes. Age alone never marks a job lost: the box runs one job
+  at a time, so a run can legitimately wait hours in the forge's queue. The rules:
+
+    * With a `run_id`, the forge's run decides. A run that finished (status success/failure/
+      cancelled/skipped, or `stopped` set) at least 3 minutes ago (grace for an in-flight
+      callback) means the job ended without calling back: `failed`, "check the issue for a
+      PR" (a lost callback or a wrong secret looks just like this). A run still waiting or
+      running is left alone. A run the forge no longer knows (404) is `lost`.
+    * Read errors: the first failed read of a streak is stamped on the job
+      (`read_error_since`, cleared by the next good read), and only 24 h of failed reads in a
+      row mark it `lost`. A restart doesn't reset the streak.
+    * Without a `run_id`, nothing can be read. A `queued` job is `lost` 6 h after it was
+      created. A `running` job proved itself alive, so its 6 h count from its last callback
+      (`updated_at`).
+
+  Status changes go ONLY through `Dispatch.set_status/3` (race-safe: a no-op if a real callback
+  landed first), then the job is handed to the notifier, whose `notified_at` claim keeps a
+  double path from notifying twice. `tick/1` takes an injectable `now` so tests drive it.
 
   It also warms the repos toolkit's repo names once, 10 seconds after boot
   (`App.Dispatch.Board.warm/0`, in a task), so a repo's name preselects the kit from the first
@@ -27,6 +40,7 @@ defmodule App.Dispatch.Watchdog do
   @finished ~w(success failure cancelled skipped)
   # A lost callback or a mismatched secret looks exactly like this, and the PR may well exist.
   @silent_reason "the job ended without reporting back — check the issue for a PR"
+  @quiet_reason "it started but never reported back — check the issue for a PR"
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -62,11 +76,11 @@ defmodule App.Dispatch.Watchdog do
     :ok
   end
 
-  # Age alone never marks a job lost: the box runs ONE job at a time, so a legitimately queued
-  # run can wait hours in the forge's queue. The run's own state decides.
   defp check(%{run_id: id} = job, now) when is_integer(id) do
     case Forge.run(id) do
       {:ok, %{status: status, stopped: stopped}} ->
+        Dispatch.clear_read_error(job)
+
         if finished?(status, stopped) and
              (is_nil(stopped) or DateTime.diff(now, stopped, :millisecond) >= @grace_ms),
            do: finish(job, "failed", @silent_reason)
@@ -75,20 +89,30 @@ defmodule App.Dispatch.Watchdog do
         finish(job, "lost", "the run disappeared")
 
       _ ->
-        if older_than?(job, now, @blind_ms),
-          do: finish(job, "lost", "couldn't check on the run")
+        read_failed(job, now)
     end
   end
 
-  # No run info (accepted without it, or uncertain): only a long silence counts as lost.
-  defp check(job, now) do
-    if older_than?(job, now, @no_run_ms), do: finish(job, "lost", "never heard from the run")
+  # No run info (accepted without it, or uncertain): only a long silence counts as lost. A
+  # running job has called back, so its silence counts from that callback.
+  defp check(%{status: "running"} = job, now) do
+    if since?(job.updated_at, now, @no_run_ms), do: finish(job, "lost", @quiet_reason)
   end
 
-  defp older_than?(job, now, ms) do
-    DateTime.diff(now, DateTime.from_naive!(to_naive(job.inserted_at), "Etc/UTC"), :millisecond) >=
-      ms
+  defp check(job, now) do
+    if since?(job.inserted_at, now, @no_run_ms),
+      do: finish(job, "lost", "never heard from the run")
   end
+
+  # The streak's start lives on the row, so a restart doesn't reset it.
+  defp read_failed(%{read_error_since: nil} = job, now), do: Dispatch.note_read_error(job, now)
+
+  defp read_failed(%{read_error_since: first} = job, now) do
+    if since?(first, now, @blind_ms), do: finish(job, "lost", "couldn't check on the run")
+  end
+
+  defp since?(at, now, ms),
+    do: DateTime.diff(now, DateTime.from_naive!(to_naive(at), "Etc/UTC"), :millisecond) >= ms
 
   defp to_naive(%DateTime{} = dt), do: DateTime.to_naive(dt)
   defp to_naive(%NaiveDateTime{} = n), do: n

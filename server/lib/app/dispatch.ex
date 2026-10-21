@@ -214,6 +214,27 @@ defmodule App.Dispatch do
   def run_url(%{run_number: n}) when is_integer(n), do: Forge.run_url(n)
   def run_url(_), do: nil
 
+  @doc """
+  The watchdog's read-error streak: `note_read_error/2` stamps the first failed run read (a
+  no-op while a streak is open), `clear_read_error/1` ends the streak after a good read. Both are
+  bare `update_all`s on that one column: they never touch the status, `updated_at`, or a
+  broadcast, so they can't race a callback.
+  """
+  def note_read_error(%Job{id: id}, now) do
+    Repo.update_all(from(j in Job, where: j.id == ^id and is_nil(j.read_error_since)),
+      set: [read_error_since: DateTime.truncate(now, :second)]
+    )
+
+    :ok
+  end
+
+  def clear_read_error(%Job{read_error_since: nil}), do: :ok
+
+  def clear_read_error(%Job{id: id}) do
+    Repo.update_all(from(j in Job, where: j.id == ^id), set: [read_error_since: nil])
+    :ok
+  end
+
   @doc "Set a status directly (watchdog), same broadcast and end-state guard."
   def set_status(job, status, reason \\ nil) do
     apply_callback(job, %{status: status, reason: reason})

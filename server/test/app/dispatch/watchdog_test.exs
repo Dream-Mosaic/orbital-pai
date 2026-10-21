@@ -1,8 +1,10 @@
 defmodule App.Dispatch.WatchdogTest do
   use App.DataCase, async: false
 
+  import Ecto.Query, only: [where: 2]
+
   alias App.{Dispatch, Users}
-  alias App.Dispatch.Watchdog
+  alias App.Dispatch.{Job, Watchdog}
 
   setup do
     Application.put_env(:app, :allowed_users, [%{email: "d@x.com", name: "D"}])
@@ -106,6 +108,22 @@ defmodule App.Dispatch.WatchdogTest do
       Watchdog.tick(later(120))
       assert Dispatch.get_job(job.id).status == "queued"
     end
+
+    test "a running job proved alive: 6 h are counted from its last word, not its age",
+         %{bare: job} do
+      long_ago = later(-10 * 60) |> DateTime.truncate(:second)
+      App.Repo.update_all(where(Job, id: ^job.id), set: [inserted_at: long_ago])
+      {:ok, _, :changed} = Dispatch.apply_callback(job, %{status: "running"})
+
+      Watchdog.tick(later(120))
+      assert Dispatch.get_job(job.id).status == "running"
+
+      Watchdog.tick(later(7 * 60))
+      j = Dispatch.get_job(job.id)
+      assert j.status == "lost"
+      assert j.reason == "it started but never reported back — check the issue for a PR"
+      assert j.notified_at
+    end
   end
 
   test "a job already at an end state is left alone", %{job: job} do
@@ -115,13 +133,47 @@ defmodule App.Dispatch.WatchdogTest do
     assert Dispatch.get_job(job.id).status == "pr"
   end
 
-  test "a forge error leaves the job alone until it is 24 hours old", %{job: job} do
-    Req.Test.stub(ForgeStub, fn conn -> Plug.Conn.send_resp(conn, 500, "x") end)
+  defp forge_error, do: Req.Test.stub(ForgeStub, &Plug.Conn.send_resp(&1, 500, "x"))
+
+  test "read errors mark it lost only after 24 h of them in a row", %{job: job} do
+    forge_error()
     Watchdog.tick(later(10 * 60))
-    assert Dispatch.get_job(job.id).status == "queued"
+    j = Dispatch.get_job(job.id)
+    assert j.status == "queued"
+    assert j.read_error_since
+    first = j.read_error_since
+
+    # 25 h old, but only 15 h of errors.
     Watchdog.tick(later(25 * 60))
+    assert %{status: "queued", read_error_since: ^first} = Dispatch.get_job(job.id)
+
+    Watchdog.tick(later(34 * 60 + 1))
     j = Dispatch.get_job(job.id)
     assert j.status == "lost"
     assert j.reason == "couldn't check on the run"
+  end
+
+  test "a good read restarts the 24 h", %{job: job} do
+    forge_error()
+    Watchdog.tick(later(60))
+    run_stub("waiting")
+    Watchdog.tick(later(12 * 60))
+    assert Dispatch.get_job(job.id).read_error_since == nil
+
+    forge_error()
+    Watchdog.tick(later(13 * 60))
+    Watchdog.tick(later(26 * 60))
+    assert Dispatch.get_job(job.id).status == "queued"
+    Watchdog.tick(later(37 * 60 + 1))
+    assert Dispatch.get_job(job.id).status == "lost"
+  end
+
+  test "noting a read error never touches the status or updated_at", %{job: job} do
+    {:ok, running, :changed} = Dispatch.apply_callback(job, %{status: "running"})
+    forge_error()
+    Watchdog.tick(later(20))
+    j = Dispatch.get_job(job.id)
+    assert {j.status, j.updated_at} == {"running", running.updated_at}
+    assert j.read_error_since
   end
 end

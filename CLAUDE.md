@@ -447,12 +447,14 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   outcome (no run info, timeout) leaves the job `queued` rather than `failed` — the run may exist
   and its callback must still be accepted. The watchdog never marks `lost` by age alone, because
   the box runs ONE job at a time and the third queued issue legitimately waits hours: a run still
-  waiting/running is left alone; 404 = `lost` ("the run disappeared"); read errors only count after
-  24 h; a job with no `run_id` is `lost` after 6 h. Two forge bases: `FORGE_URL` is the API base,
-  the forge's LAN address `http://192.168.50.249:3000`, so API POSTs skip Cloudflare's browser
-  check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to `FORGE_URL`) is the base
-  of every link a human opens (ntfy Click, issue/run links, `file_issue`'s url). A callback's own
-  `run_url` is stored and preferred over one built from the run number.
+  waiting/running is left alone; 404 = `lost` ("the run disappeared"); only 24 h of failed reads
+  IN A ROW mark it `lost` (the streak's start is `read_error_since` on the row, cleared by a good
+  read, so a restart doesn't reset it). With no `run_id`, a `queued` job is `lost` 6 h after it
+  was created, a `running` one 6 h after its last callback (`updated_at`). Two forge bases:
+  `FORGE_URL` is the API base, the forge's LAN address `http://192.168.50.249:3000`, so API POSTs
+  skip Cloudflare's browser check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to
+  `FORGE_URL`) is the base of every link a human opens (ntfy Click, issue/run links,
+  `file_issue`'s url). A callback's own `run_url` is stored and preferred over a built one.
   Token and secret come from env only (names in `server/.env.example`). With the forge set but
   no `DISPATCH_CALLBACK_SECRET`, boot logs a warning and `start_claude` refuses up front (no job,
   no dispatch): every callback would be refused, so a job could never report back.

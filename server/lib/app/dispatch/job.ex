@@ -1,5 +1,5 @@
 defmodule App.Dispatch.Job do
-  @moduledoc "One Claude dispatch job: an issue handed to the CT 107 runner, and how it ended."
+  @moduledoc "One Claude dispatch job: an issue handed to the CT 109 runner, and how it ended."
   use Ecto.Schema
 
   schema "dispatch_jobs" do
@@ -15,6 +15,8 @@ defmodule App.Dispatch.Job do
     field :summary, :string
     field :reason, :string
     field :notified_at, :utc_datetime
+    # The watchdog's first failed run read in an unbroken streak (nil after a good one).
+    field :read_error_since, :utc_datetime
 
     timestamps(type: :utc_datetime)
   end
