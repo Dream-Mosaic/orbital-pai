@@ -125,7 +125,13 @@ defmodule App.Config do
             voice_lock_min_verify_ms: 1_200,
             voice_lock_verify_budget_ms: 250,
             voice_lock_ring_seconds: 30,
-            voice_lock_slice_max_seconds: 12
+            voice_lock_slice_max_seconds: 12,
+            # Spoken names -> repo name, for Claude dispatch (App.Dispatch.Repos).
+            repo_aliases: %{
+              "henry" => "personal-assistant",
+              "you" => "personal-assistant",
+              "yourself" => "personal-assistant"
+            }
 
   @type t :: %__MODULE__{}
 
@@ -174,6 +180,22 @@ defmodule App.Config do
   @spec home_assistant?() :: boolean()
   def home_assistant? do
     case Application.get_env(:app, :home_assistant) do
+      %{url: url, token: token}
+      when is_binary(url) and url != "" and is_binary(token) and token != "" ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Forge (Forgejo) configured for Claude dispatch? True iff `:app, :forge` carries a non-empty
+  url + token. Mirrors `home_assistant?/0`; the env reading lives in config/runtime.exs.
+  """
+  @spec forge?() :: boolean()
+  def forge? do
+    case Application.get_env(:app, :forge) do
       %{url: url, token: token}
       when is_binary(url) and url != "" and is_binary(token) and token != "" ->
         true
