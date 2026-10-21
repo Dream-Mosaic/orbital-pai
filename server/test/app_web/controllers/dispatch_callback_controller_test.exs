@@ -1,5 +1,6 @@
 defmodule AppWeb.DispatchCallbackControllerTest do
   use AppWeb.ConnCase, async: false
+  import ExUnit.CaptureLog
   alias App.{Dispatch, Users}
 
   @secret "s3cret"
@@ -35,26 +36,34 @@ defmodule AppWeb.DispatchCallbackControllerTest do
   end
 
   test "bad signature -> 401, no change", %{conn: conn, job: job} do
-    b = body(job, "pr")
-    assert post_cb(conn, b, sign(b, "wrong")).status == 401
+    b = body(job, "pr", %{summary: "SECRETSUMMARY"})
+    bad = sign(b, "wrong")
+
+    log = capture_log(fn -> assert post_cb(conn, b, bad).status == 401 end)
+    assert log =~ "callback rejected (bad signature)"
+    refute log =~ bad
+    refute log =~ "SECRETSUMMARY"
     assert Dispatch.get_job(job.id).status == "queued"
   end
 
   test "no header -> 401", %{conn: conn, job: job} do
-    assert post_cb(conn, body(job, "pr"), nil).status == 401
+    log = capture_log(fn -> assert post_cb(conn, body(job, "pr"), nil).status == 401 end)
+    assert log =~ "callback rejected (no signature)"
   end
 
   test "missing secret config -> 401", %{conn: conn, job: job} do
     Application.delete_env(:app, :dispatch_callback_secret)
     b = body(job, "pr")
-    assert post_cb(conn, b, sign(b)).status == 401
+    log = capture_log(fn -> assert post_cb(conn, b, sign(b)).status == 401 end)
+    assert log =~ "no secret configured"
     Application.put_env(:app, :dispatch_callback_secret, "")
-    assert post_cb(conn, b, sign(b, "")).status == 401
+    capture_log(fn -> assert post_cb(build_conn(), b, sign(b, "")).status == 401 end)
   end
 
   test "unknown job -> 401", %{conn: conn} do
     b = Jason.encode!(%{job_id: "999999", status: "pr"})
-    assert post_cb(conn, b, sign(b)).status == 401
+    log = capture_log(fn -> assert post_cb(conn, b, sign(b)).status == 401 end)
+    assert log =~ "callback rejected (unknown job)"
   end
 
   test "replay -> 204 and exactly one broadcast", %{conn: conn, job: job} do
@@ -83,8 +92,32 @@ defmodule AppWeb.DispatchCallbackControllerTest do
     assert resp in 400..499
   end
 
-  test "other API routes unaffected", %{conn: conn} do
-    conn = post(conn, "/api/auth/exchange", %{"code" => "nope"})
+  test "HMAC over non-canonical bytes verifies (raw bytes are used)", %{conn: conn, job: job} do
+    b = ~s({  "status" :  "running",\n "job_id":"#{job.id}"  })
+    assert post_cb(conn, b, sign(b)).status == 204
+    assert Dispatch.get_job(job.id).status == "running"
+  end
+
+  test "missing job_id -> 422", %{conn: conn} do
+    b = Jason.encode!(%{status: "pr"})
+    assert post_cb(conn, b, sign(b)).status == 422
+  end
+
+  test "body reader caches only the callback path" do
+    {:ok, other} = {:ok, Plug.Test.conn(:post, "/api/other", "{}")}
+    {:ok, _, other} = AppWeb.CacheBodyReader.read_body(other, [])
+    refute Map.has_key?(other.assigns, :raw_body)
+    cb = Plug.Test.conn(:post, "/api/dispatch/callback", "{}")
+    {:ok, "{}", cb} = AppWeb.CacheBodyReader.read_body(cb, [])
+    assert cb.assigns.raw_body == "{}"
+  end
+
+  test "other API routes still parse JSON", %{conn: conn} do
+    conn =
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post("/api/auth/exchange", ~s({"code":"nope"}))
+
     assert conn.status in 400..499
   end
 end

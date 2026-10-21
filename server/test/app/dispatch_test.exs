@@ -66,4 +66,34 @@ defmodule App.DispatchTest do
     assert id == job.id
     assert [%{id: ^id}] = Dispatch.list_jobs(u.id, limit: 5)
   end
+
+  test "a stale struct cannot overwrite a committed end state", %{job: job} do
+    {:ok, stale, :changed} = Dispatch.apply_callback(job, %{"status" => "running"})
+    {:ok, _, :changed} = Dispatch.apply_callback(Dispatch.get_job(job.id), %{"status" => "pr"})
+    assert_received {:dispatch_job, %{status: "running"}}
+    assert_received {:dispatch_job, %{status: "running"}}
+    assert_received {:dispatch_job, %{status: "pr"}}
+    assert_received {:dispatch_job, %{status: "pr"}}
+
+    assert {:ok, j, :unchanged} = Dispatch.set_status(stale, "failed", "x")
+    assert j.status == "pr"
+    assert Dispatch.get_job(job.id).status == "pr"
+    refute_received {:dispatch_job, _}
+  end
+
+  test "identical end callbacks applied twice broadcast once", %{job: job} do
+    assert {:ok, _, :changed} = Dispatch.apply_callback(job, %{status: "failed"})
+    assert {:ok, _, :unchanged} = Dispatch.apply_callback(job, %{status: "failed"})
+    assert_received {:dispatch_job, _}
+    assert_received {:dispatch_job, _}
+    refute_received {:dispatch_job, _}
+  end
+
+  test "invalid status is rejected without a write", %{job: job} do
+    assert {:error, :invalid_status} = Dispatch.apply_callback(job, %{status: "bogus"})
+    assert {:error, :invalid_status} = Dispatch.apply_callback(job, %{status: "queued"})
+    assert {:error, :invalid_status} = Dispatch.apply_callback(job, %{})
+    assert Dispatch.get_job(job.id).status == "queued"
+    assert {:ok, %{status: "lost"}, :changed} = Dispatch.set_status(job, "lost")
+  end
 end

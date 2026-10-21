@@ -10,6 +10,7 @@ defmodule App.Dispatch do
 
   @active ~w(queued running)
   @callback_statuses ~w(running pr draft blocked failed usage_limit)
+  @valid_statuses @callback_statuses ++ ["lost"]
 
   def callback_statuses, do: @callback_statuses
 
@@ -43,32 +44,58 @@ defmodule App.Dispatch do
   @doc """
   Apply a callback map (string or atom keys). Idempotent: the same status, or any status after
   an end state, is `:unchanged`. The only transition out of a running job is to an end state.
+  The transition is decided against a FRESH row inside an immediate transaction (the passed
+  struct may be stale), and the broadcast happens after commit, only on `:changed`.
   """
-  def apply_callback(%Job{} = job, attrs) do
+  def apply_callback(%Job{id: id}, attrs) do
     status = fetch(attrs, :status)
 
-    cond do
-      status == job.status -> {:ok, job, :unchanged}
-      end_state?(job.status) -> {:ok, job, :unchanged}
-      job.status == "running" and not end_state?(status) -> {:ok, job, :unchanged}
-      true -> do_apply(job, status, attrs)
+    if status in @valid_statuses do
+      result =
+        Repo.transaction(
+          fn ->
+            fresh = Repo.get!(Job, id)
+
+            if transition?(fresh.status, status) do
+              {:changed, fresh |> Ecto.Changeset.change(changes(status, attrs)) |> Repo.update!()}
+            else
+              {:unchanged, fresh}
+            end
+          end,
+          mode: :immediate
+        )
+
+      case result do
+        {:ok, {:changed, job}} ->
+          broadcast({:ok, job})
+          {:ok, job, :changed}
+
+        {:ok, {:unchanged, job}} ->
+          {:ok, job, :unchanged}
+
+        error ->
+          error
+      end
+    else
+      {:error, :invalid_status}
     end
   end
 
-  defp do_apply(job, status, attrs) do
-    changes =
-      [status: status]
-      |> Keyword.merge(
-        for k <- [:branch, :pr_url, :summary, :reason],
-            v = fetch(attrs, k),
-            is_binary(v),
-            do: {k, v}
-      )
-
-    case job |> Ecto.Changeset.change(changes) |> Repo.update() |> broadcast() do
-      {:ok, job} -> {:ok, job, :changed}
-      error -> error
+  defp transition?(current, status) do
+    cond do
+      status == current -> false
+      end_state?(current) -> false
+      current == "running" and not end_state?(status) -> false
+      true -> true
     end
+  end
+
+  defp changes(status, attrs) do
+    [status: status] ++
+      for k <- [:branch, :pr_url, :summary, :reason],
+          v = fetch(attrs, k),
+          is_binary(v),
+          do: {k, v}
   end
 
   defp fetch(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))

@@ -6,9 +6,14 @@ defmodule AppWeb.CacheBodyReader do
   @path "/api/dispatch/callback"
 
   def read_body(%Plug.Conn{request_path: @path} = conn, opts) do
-    {status, body, conn} = Plug.Conn.read_body(conn, opts)
-    prev = conn.assigns[:raw_body] || ""
-    {status, body, Plug.Conn.assign(conn, :raw_body, prev <> body)}
+    case Plug.Conn.read_body(conn, opts) do
+      {status, body, conn} ->
+        prev = conn.assigns[:raw_body] || ""
+        {status, body, Plug.Conn.assign(conn, :raw_body, prev <> body)}
+
+      other ->
+        other
+    end
   end
 
   def read_body(conn, opts), do: Plug.Conn.read_body(conn, opts)
