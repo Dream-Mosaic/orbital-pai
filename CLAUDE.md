@@ -434,8 +434,11 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 
 - **Claude dispatch is a contract, not a call.** Henry starts a job by dispatching the
   `work-issue.yml` workflow on `kalcode/claude-dispatch` with `inputs` `repo`, `issue`, `job_id`
-  (plus a top-level `return_run_info: true` beside them); the box reports back by POSTing a callback signed with HMAC over the RAW
-  request bytes (`DISPATCH_CALLBACK_SECRET`; verify before parsing, never re-encode the JSON).
+  (plus a top-level `return_run_info: true` beside them); the box reports back by POSTing a
+  callback signed with HMAC over the RAW request bytes (`DISPATCH_CALLBACK_SECRET`). Plug.Parsers
+  parses first; the HMAC is checked against the cached raw bytes (`AppWeb.CacheBodyReader`)
+  before anything is trusted, and the JSON is never re-encoded. Only `conn.body_params` count
+  (the query string isn't signed), and a body's `repo`/`issue`, when present, must be the job's.
   Callbacks are idempotent and end states are sticky: `Dispatch.set_status/3` and `claim_notice`
   are race-safe (a no-op once a real end state landed, one notification per job), so the
   watchdog and a late callback can't double-notify or overwrite each other. An AMBIGUOUS dispatch

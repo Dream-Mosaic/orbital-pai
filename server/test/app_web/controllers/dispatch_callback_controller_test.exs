@@ -98,6 +98,69 @@ defmodule AppWeb.DispatchCallbackControllerTest do
     assert Dispatch.get_job(job.id).status == "running"
   end
 
+  test "a query-string field is ignored: only the signed body counts", %{conn: conn, job: job} do
+    b = body(job, "pr", %{summary: "done"})
+
+    conn =
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-dispatch-signature", sign(b))
+      |> post("/api/dispatch/callback?pr_url=https://evil.test/pr&status=failed", b)
+
+    assert conn.status == 204
+    assert %{status: "pr", pr_url: nil, summary: "done"} = Dispatch.get_job(job.id)
+  end
+
+  test "a signed body naming another repo or issue is refused", %{conn: conn, job: job} do
+    for extra <- [%{repo: "kalcode/other"}, %{issue: 32}, %{repo: "kalcode/x", issue: "30"}] do
+      b = body(job, "pr", extra)
+
+      log = capture_log(fn -> assert post_cb(build_conn(), b, sign(b)).status == 401 end)
+      assert log =~ "[dispatch] callback rejected (job mismatch)"
+    end
+
+    assert Dispatch.get_job(job.id).status == "queued"
+
+    # The matching repo and issue (an integer, or its string) are accepted.
+    b = body(job, "running", %{repo: "kalcode/x", issue: 31})
+    assert post_cb(conn, b, sign(b)).status == 204
+    b = body(job, "pr", %{repo: "kalcode/x", issue: "31"})
+    assert post_cb(build_conn(), b, sign(b)).status == 204
+    assert Dispatch.get_job(job.id).status == "pr"
+  end
+
+  # Verbatim output of claude-dispatch's `scripts/callback.sh --dry-run pr …` with
+  # JOB_ID=42, REPO=kalcode/unwritten-chronicles, ISSUE=31, RUN_URL=…/runs/57 and a test
+  # secret: the exact bytes and signature the box sends.
+  @track_a_secret "test-secret"
+  @track_a_sig "sha256=1818ace28d2ae39a158ca863bccbc4a807c4ffc0b39c8b48a65e6321bad27478"
+  @track_a_body ~s({"job_id":"42","status":"pr","repo":"kalcode/unwritten-chronicles","issue":31,) <>
+                  ~s("branch":"claude/31-fix-truncated-filter-r57",) <>
+                  ~s("pr_url":"https://code.clausens.cloud/kalcode/unwritten-chronicles/pulls/40",) <>
+                  ~s("summary":"Fixed the truncated action filter. Tests pass.",) <>
+                  ~s("run_url":"https://code.clausens.cloud/kalcode/claude-dispatch/actions/runs/57"})
+
+  test "the dispatcher's real callback body and signature are accepted", %{conn: conn, job: job} do
+    Application.put_env(:app, :dispatch_callback_secret, @track_a_secret)
+    App.Repo.delete_all(Dispatch.Job)
+
+    App.Repo.insert!(%Dispatch.Job{
+      id: 42,
+      user_id: job.user_id,
+      repo: "kalcode/unwritten-chronicles",
+      issue: 31
+    })
+
+    assert post_cb(conn, @track_a_body, @track_a_sig).status == 204
+
+    assert %{
+             status: "pr",
+             branch: "claude/31-fix-truncated-filter-r57",
+             pr_url: "https://code.clausens.cloud/kalcode/unwritten-chronicles/pulls/40",
+             summary: "Fixed the truncated action filter. Tests pass."
+           } = Dispatch.get_job(42)
+  end
+
   test "missing job_id -> 422", %{conn: conn} do
     b = Jason.encode!(%{status: "pr"})
     assert post_cb(conn, b, sign(b)).status == 422
