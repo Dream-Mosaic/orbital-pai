@@ -93,7 +93,8 @@ defmodule App.Dispatch.Notifier do
       kind: :heads_up,
       prompt: spoken(job),
       canned: true,
-      deliver: :when_idle
+      deliver: :when_idle,
+      expires_at: DateTime.add(DateTime.utc_now(), 2 * 3600, :second)
     })
 
     :notified
@@ -172,12 +173,22 @@ defmodule App.Dispatch.Notifier do
   defp first_clause(text) do
     clause =
       text
+      |> speakable()
       |> String.split(~r/[.,;:!?\n]|\s[—–-]\s/, parts: 2)
       |> hd()
       |> String.trim()
       |> String.slice(0, 120)
 
     if clause == "", do: nil, else: clause
+  end
+
+  # No symbols or URLs for TTS: links lose their target, markdown markers go.
+  defp speakable(text) do
+    text
+    |> String.replace(~r/\[([^\]]*)\]\([^)]*\)/, "\\1")
+    |> String.replace(~r{https?://[^\s,;)]+}, "")
+    |> String.replace(~r/^\s*\#+\s*/m, "")
+    |> String.replace(~r/[*`~]+/, "")
   end
 
   @ones ~w(zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen)

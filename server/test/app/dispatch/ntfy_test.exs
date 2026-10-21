@@ -69,4 +69,14 @@ defmodule App.Dispatch.NtfyTest do
     Application.delete_env(:app, :ntfy)
     assert {:error, :not_configured} = Ntfy.publish(@msg)
   end
+
+  test "a Click with control characters is omitted" do
+    Req.Test.stub(NtfyStub, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "click") == []
+      assert Plug.Conn.get_req_header(conn, "title") == ["PR ready: chronicles #31"]
+      Plug.Conn.send_resp(conn, 200, "{}")
+    end)
+
+    assert :ok = Ntfy.publish(%{@msg | click: "https://x.test/a\r\nX-Evil: 1"})
+  end
 end

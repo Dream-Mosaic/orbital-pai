@@ -96,10 +96,19 @@ defmodule App.Dispatch.Forge do
     with {:ok, cfg} <- config(),
          {:ok, r} <- get("/repos/#{dispatch_repo(cfg)}/actions/runs/#{run_id}", []) do
       if is_map(r),
-        do: {:ok, %{status: r["status"], conclusion: r["conclusion"]}},
+        do: {:ok, %{status: r["status"], stopped: parse_time(r["stopped"])}},
         else: {:error, :bad_body}
     end
   end
+
+  defp parse_time(s) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+
+  defp parse_time(_), do: nil
 
   @doc false
   def normalize_issue(i) do

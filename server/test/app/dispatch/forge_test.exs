@@ -136,13 +136,21 @@ defmodule App.Dispatch.ForgeTest do
     assert {:error, :bad_body} = Forge.open_prs("kalcode/x")
   end
 
-  test "run returns status and conclusion" do
+  test "run returns Forgejo's status and stopped time" do
     Req.Test.stub(ForgeStub, fn conn ->
       assert conn.request_path == "/api/v1/repos/kalcode/claude-dispatch/actions/runs/555"
-      Req.Test.json(conn, %{"status" => "completed", "conclusion" => "success"})
+
+      Req.Test.json(conn, %{
+        "id" => 555,
+        "status" => "success",
+        "conclusion" => nil,
+        "stopped" => "2026-10-21T12:00:00Z",
+        "index_in_repo" => 3,
+        "html_url" => "https://forge.example.test/x"
+      })
     end)
 
-    assert {:ok, %{status: "completed", conclusion: "success"}} = Forge.run(555)
+    assert {:ok, %{status: "success", stopped: ~U[2026-10-21 12:00:00Z]}} = Forge.run(555)
   end
 
   test "401 -> :unauthorized, 404 -> :not_found, 500 -> {:http, 500}" do

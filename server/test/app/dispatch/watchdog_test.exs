@@ -23,25 +23,55 @@ defmodule App.Dispatch.WatchdogTest do
     %{job: job}
   end
 
-  defp run_stub(status) do
+  defp run_stub(status, stopped \\ nil) do
     Req.Test.stub(ForgeStub, fn conn ->
-      Req.Test.json(conn, %{"status" => status, "conclusion" => "success"})
+      Req.Test.json(conn, %{
+        "status" => status,
+        "conclusion" => nil,
+        "stopped" => stopped && DateTime.to_iso8601(stopped)
+      })
     end)
   end
 
   defp later(min), do: DateTime.add(DateTime.utc_now(), min * 60, :second)
 
-  test "a completed run with no callback fails and is notified", %{job: job} do
-    run_stub("completed")
-    Watchdog.tick(later(10))
-    j = Dispatch.get_job(job.id)
-    assert j.status == "failed"
-    assert j.reason == "the job ended without reporting back"
-    assert j.notified_at
+  for st <- ~w(success failure cancelled) do
+    test "a #{st} run with no callback fails and is notified", %{job: job} do
+      now = later(20)
+      run_stub(unquote(st), DateTime.add(now, -300, :second))
+      Watchdog.tick(now)
+      j = Dispatch.get_job(job.id)
+      assert j.status == "failed"
+      assert j.reason == "the job ended without reporting back"
+      assert j.notified_at
+    end
+  end
+
+  test "a run that stopped 1 minute ago is within the callback grace", %{job: job} do
+    now = later(20)
+    run_stub("success", DateTime.add(now, -60, :second))
+    Watchdog.tick(now)
+    assert Dispatch.get_job(job.id).status == "queued"
+  end
+
+  test "a finished run with unknown stop time fails once the job is 10 minutes old", %{job: job} do
+    run_stub("failure")
+    Watchdog.tick(later(5))
+    assert Dispatch.get_job(job.id).status == "queued"
+    Watchdog.tick(later(11))
+    assert Dispatch.get_job(job.id).status == "failed"
+  end
+
+  for st <- ~w(running waiting) do
+    test "a #{st} run is untouched", %{job: job} do
+      run_stub(unquote(st))
+      Watchdog.tick(later(20))
+      assert Dispatch.get_job(job.id).status == "queued"
+    end
   end
 
   test "a job over 130 minutes becomes lost and is notified", %{job: job} do
-    run_stub("in_progress")
+    run_stub("running")
     Watchdog.tick(later(131))
     j = Dispatch.get_job(job.id)
     assert j.status == "lost"
@@ -49,7 +79,7 @@ defmodule App.Dispatch.WatchdogTest do
   end
 
   test "a running job under 130 minutes is untouched", %{job: job} do
-    run_stub("in_progress")
+    run_stub("running")
     Watchdog.tick(later(129))
     j = Dispatch.get_job(job.id)
     assert j.status == "queued"
@@ -58,7 +88,7 @@ defmodule App.Dispatch.WatchdogTest do
 
   test "a job already at an end state is left alone", %{job: job} do
     {:ok, _, :changed} = Dispatch.apply_callback(job, %{status: "pr"})
-    run_stub("completed")
+    run_stub("success", DateTime.add(later(200), -600, :second))
     Watchdog.tick(later(200))
     assert Dispatch.get_job(job.id).status == "pr"
   end

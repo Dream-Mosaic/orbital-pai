@@ -44,6 +44,9 @@ defmodule App.Dispatch.Ntfy do
     end
   end
 
+  # A header value must not carry CR/LF or non-ASCII; drop a Click that does.
+  defp printable_ascii?(v), do: String.match?(v, ~r/\A[\x20-\x7e]+\z/)
+
   defp headers(cfg, msg) do
     base =
       for {h, k} <- [
@@ -54,6 +57,7 @@ defmodule App.Dispatch.Ntfy do
           ],
           v = msg[k],
           is_binary(v) and v != "",
+          k != :click or printable_ascii?(v),
           do: {h, v}
 
     case cfg[:token] do

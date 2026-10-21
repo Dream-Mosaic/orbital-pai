@@ -121,4 +121,24 @@ defmodule App.Dispatch.NotifierTest do
     Dispatch.apply_callback(job, %{status: "draft", summary: "Half done"})
     assert_receive {:agenda_due, %Item{}}, 1000
   end
+
+  test "the spoken line has no markdown or URLs, and expires in 2 hours", %{job: job} do
+    j =
+      finish(job, %{
+        status: "pr",
+        summary: "**Fixed** the [login bug](https://x.test/a) see https://x.test/b, done"
+      })
+
+    Notifier.notify(j)
+    assert_received {:agenda_due, %Item{prompt: prompt, expires_at: exp}}
+    assert prompt == "Claude's PR for chronicles thirty-one is up — Fixed the login bug see."
+    assert_in_delta DateTime.diff(exp, DateTime.utc_now()), 7200, 5
+  end
+
+  test "a heading marker and backticks are stripped", %{job: job} do
+    j = finish(job, %{status: "draft", summary: "## Use `foo` helper"})
+    Notifier.notify(j)
+    assert_received {:agenda_due, %Item{prompt: p}}
+    assert p =~ "— Use foo helper."
+  end
 end
