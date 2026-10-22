@@ -81,8 +81,10 @@ paths where a platform needs them.
 `mix compile --warnings-as-errors`, `mix test`. JS changes also: `mix assets.build` must bundle clean
 (no JS unit tests, and no JS voice code left to test — the web has no voice client any more).
 **From `native/`:** `flutter test` + `flutter analyze` clean; Kotlin changes need
-`flutter build apk --debug` (analyze does NOT compile Kotlin). Flutter is **not on PATH** — the SDK
-lives at `~/flutter/bin` (prepend `export PATH="$HOME/flutter/bin:$PATH"; ` per command).
+`flutter build apk --debug` (analyze does NOT compile Kotlin). On David's Mac Flutter is **not on
+PATH** — the SDK lives at `~/flutter/bin` (prepend `export PATH="$HOME/flutter/bin:$PATH"; ` per
+command). On the Claude dispatch box (CT 109) `flutter`, the Android SDK and JDK are already on PATH,
+and `.tool-versions` (repo root) pins Erlang/Elixir for mise — don't look for `~/flutter` there.
 
 ## Running it
 
