@@ -125,6 +125,9 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   `lib/app/home_assistant/{directory,resolve,actions,socket,live,phrases,media}.ex` (live WS
   directory, the words → entities resolver, REST writes, the socket, the supervised glue, the
   names preselection matches, Music Assistant players).
+- Claude dispatch (2026-10-21): `lib/app/dispatch*` (jobs, `Forge` API client, HMAC-signed callback
+  endpoint, `Notifier`, `Watchdog`, `Board`), `lib/app/toolkits/repos.ex` (the repos kit: board,
+  start_claude, claude_jobs, file_issue) and `lib/app/tools/claude_dispatch.ex`.
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
@@ -428,6 +431,43 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   honest outcomes as first-class results, safety as absent code paths, one greppable log line per
   decision, a fixture eval from a real snapshot, and degrade rather than die. The repos toolkit
   (and any later connector) should follow it; the home kit is the reference implementation.
+
+- **Claude dispatch is a contract, not a call.** Henry starts a job by dispatching the
+  `work-issue.yml` workflow on `kalcode/claude-dispatch` with `inputs` `repo`, `issue`, `job_id`
+  (plus a top-level `return_run_info: true` beside them); the box reports back by POSTing a
+  callback signed with HMAC over the RAW request bytes (`DISPATCH_CALLBACK_SECRET`). Plug.Parsers
+  parses first; the HMAC is checked against the cached raw bytes (`AppWeb.CacheBodyReader`)
+  before anything is trusted, and the JSON is never re-encoded. Only `conn.body_params` count
+  (the query string isn't signed), and a body's `repo`/`issue`, when present, must be the job's.
+  Callbacks are idempotent and end states are sticky: `Dispatch.set_status/3` and `claim_notice`
+  are race-safe (a no-op once a real end state landed, one notification per job), so the
+  watchdog and a late callback can't double-notify or overwrite each other. The `Notifier` starts
+  on its own flag, not the forge (the kill switch mustn't silence a running job's end), and on
+  boot announces end states from the last 24 h that nobody announced. An AMBIGUOUS dispatch
+  outcome (no run info, timeout) leaves the job `queued` rather than `failed` — the run may exist
+  and its callback must still be accepted. The watchdog never marks `lost` by age alone, because
+  the box runs ONE job at a time and the third queued issue legitimately waits hours: a run still
+  waiting/running is left alone; 404 = `lost` ("the run disappeared"); only 24 h of failed reads
+  IN A ROW mark it `lost` (the streak's start is `read_error_since` on the row, cleared by a good
+  read, so a restart doesn't reset it). With no `run_id`, a `queued` job is `lost` 6 h after it
+  was created, a `running` one 6 h after its last callback (`updated_at`). Two forge bases:
+  `FORGE_URL` is the API base, the forge's LAN address `http://192.168.50.249:3000`, so API POSTs
+  skip Cloudflare's browser check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to
+  `FORGE_URL`) is the base of every link a human opens (ntfy Click, issue/run links,
+  `file_issue`'s url). A callback's own `run_url` is stored and preferred over a built one.
+  Token and secret come from env only (names in `server/.env.example`). With the forge set but
+  no `DISPATCH_CALLBACK_SECRET`, boot logs a warning and `start_claude` refuses up front (no job,
+  no dispatch): every callback would be refused, so a job could never report back.
+- **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
+  `kalcode/claude-dispatch` (workflow, runner, `CLAUDE_CODE_OAUTH_TOKEN` and `DISPATCH_FORGE_TOKEN`
+  repo secrets). Server-side code here only dispatches and receives callbacks.
+- **The repos kit is registered for everyone; the per-user gate is inside the tools.**
+  `Repos.enabled?/1` is just `App.Config.forge?()` and `wants?/2` preselects with no user check.
+  Each dispatch tool calls `allowed?/1` (`claude_dispatch.ex`) against `CLAUDE_DISPATCH_USERS`
+  (unset = nobody); anyone else gets "that's not set up for you" with no forge call. Preselection
+  by repo name (`Board.warm/0` loads the names 10 s after boot) is filtered by Board's `@not_topic`
+  stop-list plus minimum word/phrase lengths (`@min_word` 6, `@min_phrase` 4), so common words that
+  are also repo names don't open the kit.
 
 ## Testing patterns
 

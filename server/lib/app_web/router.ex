@@ -41,6 +41,7 @@ defmodule AppWeb.Router do
 
     post "/auth/exchange", AuthController, :exchange
     get "/auth/session", AuthController, :session
+    post "/dispatch/callback", DispatchCallbackController, :create, log: false
   end
 
   # Enable LiveDashboard in development

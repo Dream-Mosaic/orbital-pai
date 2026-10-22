@@ -1,0 +1,648 @@
+{
+ "repos": [
+  {
+   "full_name": "kalcode/4rc4de-site",
+   "name": "4rc4de-site",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-06-05T14:55:10Z"
+  },
+  {
+   "full_name": "kalcode/air-1-quality-dashboard",
+   "name": "air-1-quality-dashboard",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-02-06T18:17:17Z"
+  },
+  {
+   "full_name": "kalcode/claude-code-mcps",
+   "name": "claude-code-mcps",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2025-04-24T18:26:27Z"
+  },
+  {
+   "full_name": "kalcode/doughty-lab",
+   "name": "doughty-lab",
+   "default_branch": "main",
+   "open_issues_count": 1,
+   "updated_at": "2026-10-07T02:44:27Z"
+  },
+  {
+   "full_name": "kalcode/drone-video-extractions",
+   "name": "drone-video-extractions",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-06-25T19:15:31Z"
+  },
+  {
+   "full_name": "kalcode/finpersona",
+   "name": "finpersona",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-08-26T18:42:26Z"
+  },
+  {
+   "full_name": "kalcode/garden-planner",
+   "name": "garden-planner",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-02-02T20:32:47Z"
+  },
+  {
+   "full_name": "kalcode/grim-dawn-mp-more-players-mod",
+   "name": "grim-dawn-mp-more-players-mod",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-09-13T01:35:44Z"
+  },
+  {
+   "full_name": "kalcode/homelab",
+   "name": "homelab",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-10-05T22:17:51Z"
+  },
+  {
+   "full_name": "kalcode/isthereyanydeals-epic-json-importer",
+   "name": "isthereyanydeals-epic-json-importer",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-02-01T20:32:24Z"
+  },
+  {
+   "full_name": "kalcode/personal-assistant",
+   "name": "personal-assistant",
+   "default_branch": "main",
+   "open_issues_count": 15,
+   "updated_at": "2026-10-20T16:20:58Z"
+  },
+  {
+   "full_name": "kalcode/pomodoro-timer-tui-cats",
+   "name": "pomodoro-timer-tui-cats",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-10-19T17:15:42Z"
+  },
+  {
+   "full_name": "kalcode/text-rpg",
+   "name": "text-rpg",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2025-06-13T18:42:27Z"
+  },
+  {
+   "full_name": "kalcode/track-it-native",
+   "name": "track-it-native",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2025-06-12T18:00:00Z"
+  },
+  {
+   "full_name": "kalcode/tracker-app",
+   "name": "tracker-app",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2025-05-01T03:47:35Z"
+  },
+  {
+   "full_name": "kalcode/unwritten-chronicles",
+   "name": "unwritten-chronicles",
+   "default_branch": "main",
+   "open_issues_count": 23,
+   "updated_at": "2026-03-29T22:24:54Z"
+  },
+  {
+   "full_name": "kalcode/website-blog",
+   "name": "website-blog",
+   "default_branch": "main",
+   "open_issues_count": 0,
+   "updated_at": "2026-08-25T18:59:43Z"
+  }
+ ],
+ "issues": {
+  "personal-assistant": [
+   {
+    "number": 25,
+    "title": "Native camera vision (\"Henry, look at this\")",
+    "labels": [
+     {
+      "name": "idea"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\n\n\"Henry, look at this\" existed only on the web (webcam frame on a look-phrase) and was deleted\nwith the web voice client in #21. The Lenovo wall tablet has a camera; the app has no camera path.\n\n## Current state\n\n- Deleted in the #21 vision commit (`git log --grep \"delete vision end to end\"`): LookIntent,\n  capture_frame/vision_frame, client caps, VISION flag, the Gemini inlineData imag",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 24,
+    "title": "Lenovo test day: smoke the audio/wake commits, then keep the tablet or shop for one",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\n\nTwo questions, one session with the Lenovo:\n\n1. **Do the 2026-09-23 commits work on real hardware?** `11ef57e` (wake-word decode in a worker\n   isolate) and `1828d70` (AudioRouteOwner: one owner of mode/route/focus) passed every test, but\n   neither can be exercised by `flutter test`. The isolate change fails OPEN: if sherpa will not load\n   inside the worker, nothing errors, the gate ",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 23,
+    "title": "mix test: SQLite 'Database busy' fails 1-7 tests on most full runs",
+    "labels": [
+     {
+      "name": "bug"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\n\n`mix precommit` rarely passes: nearly every full `mix test` run fails 1-7 tests with\n`(Exqlite.Error) Database busy`. The gate everyone is told to run before a commit is red on a clean\ntree, so a real failure is easy to wave through as \"the flake\". CLAUDE.md documents one intermittent\n`App.Google.AccountsTest` busy flake; this is broader and more frequent.\n\n## Current state\n\n- Reproduc",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 21,
+    "title": "Web/LiveView demotion: dead JS, dead handle_ins, duplicate write paths",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nNow that the LiveView is a monitor, parts of the web client and the server's web-only surface are dead weight, and some of them still cost native (the vision protocol) or duplicate write paths that can drift (LiveView vs panel channels).\n\n## Current state\nDelete candidates (server/JS):\n- `assets/js/voice/camera.js`, `kiosk.js`, kiosk branches in `index.js:93-108,178,405-418`; `capture_f",
+    "pull_request": null,
+    "comments": 1
+   },
+   {
+    "number": 20,
+    "title": "Port leftovers: unused dep, stubs, dead Search station, stale README, empty AEC table",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nLeftovers from the port that cost nothing to keep individually but add up to a client that describes itself wrong.\n\n## Current state\n- `pubspec.yaml`: `permission_handler` declared, never imported.\n- `native/lib/voice/device_mode.dart`: \"1a stub\", hardcoded `companion` (real fix in the Android always-on issue; this is the cleanup if that lands differently).\n- `native/lib/meridian/search",
+    "pull_request": null,
+    "comments": 2
+   },
+   {
+    "number": 19,
+    "title": "Per-device voice prefs (PTT/ABI/wake/relock keyed by device_id)",
+    "labels": [
+     {
+      "name": "idea"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nPTT, allow-interruptions, voice-activation and relock are per-user server preferences, but they are really per-device: the wall wants wake-word on and PTT off; the same user's phone wants PTT on. The detent toggles are session-only and lost on restart.\n\n## Current state\n- `settings_panel.dart:100-118` \u2192 `set_pref default_ptt/default_abi/voice_activation`; applied once per session by `_a",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 18,
+    "title": "Background reminder delivery when the socket is down (FCM vs foreground service)",
+    "labels": [
+     {
+      "name": "idea"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nReminder and briefing delivery assume a live socket. A reminder that fires while the app is killed, dozed or offline reaches nobody, is stamped `fired_at`, and is only recovered by the pull-on-connect nudge at the next launch. There is no push channel of any kind.\n\n## Current state\n- `Scheduler.tick` \u2192 `App.Agenda.deliver` \u2192 PubSub `agenda:<uid>` \u2192 the user's `Conversation` (`scheduler.",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 17,
+    "title": "Windows target: WASAPI audio plugin with AEC, loopback auth return",
+    "labels": [
+     {
+      "name": "feature"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nThere is no `windows/` target, and two of the current dependencies do not carry over: `record_windows` has no echo cancellation (the flags are parsed and ignored) and a hardcoded-true mic permission, and `flutter_web_auth_2` on Windows is WebView2-or-loopback with no `orbital://` support.\n\n## Current state\n- `record_windows_plugin.cpp:318-323` parses `echoCancel/noiseSuppress/autoGain`,",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 16,
+    "title": "macOS target: runner, entitlements, Swift AVAudioEngine audio",
+    "labels": [
+     {
+      "name": "feature"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nThere is no `macos/` target. Playback is a `MethodChannel` implemented only in Kotlin, so a macOS build would sign in, hear you and run the wake word, but be mute.\n\n## Current state\n- `native/lib/audio/audio_track_player.dart:7` `MethodChannel('henry/audio_track')` \u2192 `AudioTrackPlayer.kt` only; `_initPlayer` catches `MissingPluginException` (`voice_controller.dart:850-856`).\n- `record_d",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 15,
+    "title": "Android always-on (M1b): foreground mic service, lifecycle, focus, keep-screen-on, kiosk join",
+    "labels": [
+     {
+      "name": "feature"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nThe spec's Milestone 1b (foreground mic service, keep-screen-on, launcher, boot) never shipped. Once the activity is backgrounded, screen-off or dozed, Android delivers silence into `AudioRecord` with no error and no stream end, so the restart backoff cannot help: the wall goes deaf. A reminder that fires while the socket is down is deferred to the next launch.\n\n## Current state\n- `nati",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 14,
+    "title": "Adaptive shell: landscape/tablet/wide layouts, keyboard, hover, theme, selection",
+    "labels": [
+     {
+      "name": "feature"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nThe client knows nothing about width, pointer type or keyboard. That blocks landscape, tablet, macOS and Windows equally, and leaves every non-hand-painted Material widget in M3's default lavender.\n\n## Current state\n- No `LayoutBuilder`/breakpoints; fixed `Column` in `voice_screen.dart`; panels are a 384px right-edge modal route (`drawer.dart`) with `barrierDismissible: false` (so Esc/`",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 13,
+    "title": "Server pre-formats display strings and pushes heroicon names",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nThe server formats display strings for the client using a server-global timezone and English pluralisation, and pushes web icon-set names. Native therefore cannot show relative times (\"in 20 min\"), device timezone or locale, and must bundle heroicons.\n\n## Current state\n- `server/lib/app_web/reminder_format.ex:14-49` `due_label` (`\"%b %-d %-I:%M%P\"`) + `recurrence_label`, via `reminders_",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 12,
+    "title": "Page-shaped layout caps and rem-derived sub-9px type",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nThe screen is capped to a transcribed CSS width and the small type is transcribed rem sizes. This makes any wider surface a phone column centred in black, and sub-7px labels defeat the user's accessibility font scale.\n\n## Current state\n- `native/lib/meridian/tokens.dart:48-49` `maxWidth = 416.0 // max-w-[26rem]`, `orbPaneMaxWidth = 320.0`; `test/meridian/tokens_test.dart:59-62` locks th",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 11,
+    "title": "Join reply should carry identity + protocol constants; retire the parity locks",
+    "labels": [
+     {
+      "name": "debt"
+     },
+     {
+      "name": "native"
+     },
+     {
+      "name": "server"
+     }
+    ],
+    "body": "## Problem\nNative hardcodes things the server already knows, and copies server copy verbatim with test locks to keep it in sync. Every new tool, user, or prompt tweak needs a Dart release; two of the tests are cross-tree parity locks CLAUDE.md already says to retire.\n\n## Current state\n- `native/lib/main.dart:432` `userName: 'David'` \u2014 user #2 sees the wrong name; server has `user.name` (`voice_cha",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 10,
+    "title": "record_android and AudioTrackPlayer both own audio mode, focus and Bluetooth",
+    "labels": [
+     {
+      "name": "bug"
+     },
+     {
+      "name": "native"
+     }
+    ],
+    "body": "## Problem\nTwo components own Android audio mode and Bluetooth routing: `AudioTrackPlayer.kt` sets `MODE_IN_COMMUNICATION` and picks the communication device; `record_android` independently manages SCO and restores *its* captured `AudioManager.mode` on every stop. The result is order-dependent: a mic stop/start while the track lives can flip the mode back to NORMAL mid-session (killing AEC), and S",
+    "pull_request": null,
+    "comments": 0
+   }
+  ],
+  "unwritten-chronicles": [
+   {
+    "number": 32,
+    "title": "DM Clarification Verbosity",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nClamp down on the DM's verbosity when requesting a clarification.\n\n### Why would this be cool?\n\nStreamlines user experience. Already dealing with a lot of text. Don't need more.\n\n### Anything else?\n\nI think the verbosity is helpful right now for troubleshooting, but I would like to tighten it up before we go to a public facing release. \r\n\r\nThere can be multiple questions in a",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 31,
+    "title": "Truncated Action fitler - John John",
+    "labels": [
+     {
+      "name": "bug"
+     }
+    ],
+    "body": "### What happened?\n\nEarlier actions for John John do not show up under the my actions filter. The first action I can see in the filter is Log #267.\n\n### What should have happened?\n\nI should see all my actions in the filter.\n\n### How can we reproduce it?\n\nFor John John, just click the filter my actions button and scroll to the top. Other players do not appear to be affected.\n\n### Anything else?\n\n![",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 30,
+    "title": "DM retconned a little too much",
+    "labels": [
+     {
+      "name": "bug"
+     }
+    ],
+    "body": "### What happened?\n\nThe DM re-wrote the story intro\n\n### What should have happened?\n\nThe story intro should be locked from the moment of game creation.\n\n### How can we reproduce it?\n\nMaybe argue with the DM a lot and ask it to retcon the right things?\n\n### Anything else?\n\n![image](/attachments/33e35dcc-2da9-450a-b1b8-77400e8e4c1e)\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 29,
+    "title": "Story Intro Expanded by default",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nThe Story intro on the character creation sheet is expanded by default\n\n### Why would this be cool?\n\nI have missed it before and I think others have too.\n\n### Anything else?\n\nIt could still be easily collapsed after reading or if the user just wants to dismiss it.\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 28,
+    "title": "SigNoz - observability + error tracking",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nSigNoz is supported in this flow \u2014 SigNoz even has official documentation for monitoring Fly.io, using the OpenTelemetry Collector to scrape Fly's Prometheus federation endpoint and send metrics to SigNoz\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 27,
+    "title": "Structures logging",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nStructure logging allows more information in a compact format, interacts better with tracing or metric platforms.\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 26,
+    "title": "NPC improvements",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nDoes the DM know where the NPC or does it rely on the notes it makes in the NPC or ROOM? And does the prompts on NPC need improvement to know where the NPC is so it doesnt suddenly appear across the galaxy while talking to another player. \r\n\r\nShould the DM use the NPC entry and room ids like the log # reference? Maybe this would help\r\nShould the npc have a room id column?\r\n\r\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 25,
+    "title": "Improve accessibility for app",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nImprove accessibility for app\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 24,
+    "title": "Improve accessibility for emails",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nImprove accessibility for emails\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 23,
+    "title": "enemy NPC type",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nLightweight context, help consistency\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 21,
+    "title": "Plausible - analytics",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nSelf host so we keep analytics in house and not third party.\n\n### Why would this be cool?\n\n_No response_\n\n### Anything else?\n\n_No response_\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 20,
+    "title": "New logo",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nCurrent one was placeholder\n\n### Why would this be cool?\n\nAny we need favixons generated again afterwards.\n\n### Anything else?\n\nThat covers it\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 19,
+    "title": "Chat auto scroll",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "### What's the idea?\n\nThe chat will autoscroll when a new message comes in and the window is scrolled all the way \"down\". Don't auto scroll though if user is somewhere else in the chat thread.\n\n### Why would this be cool?\n\nI wouldn't have to scroll down every time I want to see the new messages.\n\n### Anything else?\n\n\ud83d\ude4f\n\n",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 16,
+    "title": "Clocks to hide or improve",
+    "labels": [
+     {
+      "name": "enhancement"
+     }
+    ],
+    "body": "To hide them from players aka no dedicated display block anymore or do we add the advances and complete to it? ",
+    "pull_request": null,
+    "comments": 3
+   },
+   {
+    "number": 15,
+    "title": "Ooc causing DM block after the OOC block when not necessary",
+    "labels": [
+     {
+      "name": "bug"
+     }
+    ],
+    "body": "Whenever we talking to the DM, sometimes it's still wanting to call narrate. It's shorter these days and not bad. But still rather do narrate if the ooc is about want to do some story related by talking to the DM \"Ooc DM can I get a background in this voice recorder in my inventory?\" DM can OOC that or Narrate that, if it does both, the ooc should just acknowledge and then use the narrate tool.\r\n\r",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 12,
+    "title": "Real notification system",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "A real app has notifications beyond the browser. We could have a email/sms system so they can get a what did you miss while your away. Turn off able. ",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 11,
+    "title": "Improve lock and unlock system, invite user",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "We have a lock and unlock system. It's fine, but an invite user by email would be much simpler and bullet proof in malicious actors. Leaving the locking mechanism allows admins to run it how they want, but giving folks the option to invite by email removes friction and stops malicious actors waiting for opportunity.",
+    "pull_request": null,
+    "comments": 1
+   },
+   {
+    "number": 7,
+    "title": "Bookmark system",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "We want players to be able to share moments that happen with the players. I think a bookmark button on the game messages would be cool. Then we can open the bookmark menu and see a list of recent bookmarks, click them to visit that point in the log. ",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 6,
+    "title": "DM tags messages to retcon",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "We now have a visibility system for context handling. If this works well, we should give the DM the power to retcon. Leave the tool usage only for review or retcon. Making it a more deliberate choice between the players and the DM. ",
+    "pull_request": null,
+    "comments": 1
+   },
+   {
+    "number": 5,
+    "title": "Captcha for auth screens",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "As a developer I don't want bots even trying, captcha v3 is great for this. Practically free. \r\n\r\nWe'd add the captcha to the frontend routes. And send the captcha token received along each endpoint.\r\n\r\nWe'd need to update our sign up, login, forgot password with captcha token input so the server can check with Google first in success rate. \r\n\r\nBuild a fallback loop so a challenge is opened if we ",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 3,
+    "title": "Sign up, request server process (new codebase)",
+    "labels": [
+     {
+      "name": "ideas"
+     }
+    ],
+    "body": "We need a website folks can land on to sign up, request a server and handle interactions with support. This systems would be a new codebase separate. \r\n\r\nAs a user I would like to play. I need a site to sign up, request a server, submit support tickets, and the landing page and marketing materials should live here instead of the app\r\n\r\nSomething like\r\ngame-name.com\r\napp.game-name.com\r\n\r\nThis is wh",
+    "pull_request": null,
+    "comments": 1
+   },
+   {
+    "number": 2,
+    "title": "Level up!",
+    "labels": [
+     {
+      "name": "enhancement"
+     }
+    ],
+    "body": "Currently leveling up is in the ruleset in the prompts, but not a first class mechanism. It relies on Claude to do it, and use update character. Nothing but a level up message is server/code handled. ",
+    "pull_request": null,
+    "comments": 0
+   },
+   {
+    "number": 1,
+    "title": "DM and players private notes",
+    "labels": [
+     {
+      "name": "enhancement"
+     }
+    ],
+    "body": "Currently the DM loves to spil stuff. Great currently for testing but we need to figure that out. If we can have DM notes and even player private notes. Other game types open up like who dun it, werewolf, or a space station 13 like game with a traitor. ",
+    "pull_request": null,
+    "comments": 1
+   }
+  ]
+ }
+}
