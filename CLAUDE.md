@@ -455,7 +455,12 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   skip Cloudflare's browser check; `FORGE_PUBLIC_URL` (`https://code.clausens.cloud`, defaults to
   `FORGE_URL`) is the base of every link a human opens (ntfy Click, issue/run links,
   `file_issue`'s url). A callback's own `run_url` is stored and preferred over a built one.
-  Token and secret come from env only (names in `server/.env.example`). With the forge set but
+  Token and secret come from env only (names in `server/.env.example`). Henry's `FORGE_TOKEN`
+  needs **`read:user`** as well as `write:repository` + `write:issue`: Forgejo puts
+  `GET /user/repos` (the repo list) behind the *user* scope, so without it every board read is a
+  403 (`[dispatch] repo list failed: the forge answered HTTP 403`). Token scopes can't be edited
+  in Forgejo — make a new token. The box's `DISPATCH_FORGE_TOKEN` calls no `/user` endpoint and
+  stays at `write:repository` + `write:issue`. With the forge set but
   no `DISPATCH_CALLBACK_SECRET`, boot logs a warning and `start_claude` refuses up front (no job,
   no dispatch): every callback would be refused, so a job could never report back.
 - **The box (CT 109) and the dispatcher repo** are documented in `homelab/runbooks/claude.md` and
