@@ -8,7 +8,8 @@ defmodule App.Tools.HomeAssistant do
       `{domain, service, data}`. The common command is one tool call, not find-then-act.
     * `home_status` — reads state from the directory through the same resolver; no HTTP at all.
       With no targets it gives a short overview (rooms, what's on, what's open, what's playing).
-    * `play_music` — Music Assistant, players read from the directory.
+    * `play_music` — Music Assistant, players read from the directory. A refused play is
+      `cant` on that speaker, with Music Assistant's own reason when HA passes it on.
 
   Safety is STRUCTURAL: locks, alarm panels and garage-class covers have no action→service
   mapping anywhere (`App.HomeAssistant.Entities`), and the resolver refuses them in `:control`,
@@ -49,6 +50,9 @@ defmodule App.Tools.HomeAssistant do
   @hub_trouble "the home hub had trouble"
   # A timed-out call may still have reached HA, so it is never reported as a plain failure.
   @not_in_time "the home hub didn't answer in time — it may still happen"
+  # Repeating a request Music Assistant just refused only refuses again.
+  @not_played "It didn't play — say so plainly, never that it's playing, and offer another " <>
+                "name or speaker instead of repeating the same request."
 
   # Each list a result can carry is capped (the overview's, and status rows).
   @cap 25
@@ -606,17 +610,31 @@ defmodule App.Tools.HomeAssistant do
           Media.play_media_data(query, media_type, enqueue) |> Map.put(:entity_id, p.entity_id)
 
         case call("music_assistant", "play_media", data) do
-          {:ok, _} ->
-            {:ok, %{playing: query, player: p.name, enqueue: data.enqueue}}
-
-          {:error, reason} ->
-            {:ok,
-             %{error: "couldn't play that — the music service had trouble (#{inspect(reason)})"}}
+          {:ok, _} -> {:ok, %{playing: query, player: p.name, enqueue: data.enqueue}}
+          {:error, reason} -> {:ok, play_failed(p, reason)}
         end
     end
   end
 
   defp player_names(players), do: players |> Enum.map(& &1.name) |> Enum.join(", ")
+
+  # A timed-out call may still start the music; any other failure definitely didn't play.
+  defp play_failed(p, %Req.TransportError{reason: :timeout}),
+    do: %{cant: [%{name: p.name, why: @not_in_time}]}
+
+  defp play_failed(p, reason),
+    do: %{cant: [%{name: p.name, why: play_why(reason)}], note: @not_played}
+
+  # Music Assistant raises for a search that finds nothing ("Could not resolve … to playable
+  # media item") and for a player or provider that won't take it; HA answers both with a 500.
+  defp play_why({:http, _status, message}), do: "the music service said: #{message}"
+
+  defp play_why({:http, 500}),
+    do:
+      "the music service hit an error without saying why — it either couldn't find that or " <>
+        "couldn't play it on this speaker"
+
+  defp play_why(_reason), do: @hub_trouble
 
   # -- the silent no-op watch (spec §2.6) --
 
@@ -708,13 +726,14 @@ defmodule App.Tools.HomeAssistant do
     ms = System.monotonic_time(:millisecond) - started
     {ids, rest} = Map.pop(data, :entity_id)
 
-    outcome =
+    {level, outcome} =
       case result do
-        {:ok, _} -> "ok in #{ms}ms"
-        {:error, reason} -> "error in #{ms}ms (#{inspect(reason)})"
+        {:ok, _} -> {:info, "ok in #{ms}ms"}
+        {:error, reason} -> {:warning, "error in #{ms}ms (#{inspect(reason)})"}
       end
 
-    Logger.info(
+    Logger.log(
+      level,
       "[home] control #{ids |> List.wrap() |> Enum.join(",")} #{domain}.#{service} " <>
         "#{inspect(rest)} #{outcome}"
     )

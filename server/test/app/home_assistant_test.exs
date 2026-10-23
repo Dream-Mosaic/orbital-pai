@@ -57,6 +57,34 @@ defmodule App.HomeAssistantTest do
     assert {:error, :not_found} = HomeAssistant.call_service("nope", "nothing", %{entity_id: "x"})
   end
 
+  test "an error answer carrying HA's message keeps it: {:http, status, message}" do
+    # HA 2026.10+ answers a service that raised with its message (Music Assistant's own words).
+    Req.Test.stub(HaStub, fn conn ->
+      conn
+      |> Plug.Conn.put_status(500)
+      |> Req.Test.json(%{"message" => "Could not resolve ['jazz'] to playable media item"})
+    end)
+
+    assert {:error, {:http, 500, "Could not resolve ['jazz'] to playable media item"}} =
+             HomeAssistant.call_service("music_assistant", "play_media", %{entity_id: "x"})
+  end
+
+  test "a bare 500 (older HA's plain-text body, or a blank message) stays {:http, 500}" do
+    Req.Test.stub(HaStub, fn conn ->
+      Plug.Conn.send_resp(conn, 500, "500 Internal Server Error\n\nServer got itself in trouble")
+    end)
+
+    assert {:error, {:http, 500}} =
+             HomeAssistant.call_service("music_assistant", "play_media", %{entity_id: "x"})
+
+    Req.Test.stub(HaStub, fn conn ->
+      conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"message" => " "})
+    end)
+
+    assert {:error, {:http, 500}} =
+             HomeAssistant.call_service("music_assistant", "play_media", %{entity_id: "x"})
+  end
+
   test "transport errors flatten to a tagged error, never a raise" do
     Req.Test.stub(HaStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
 

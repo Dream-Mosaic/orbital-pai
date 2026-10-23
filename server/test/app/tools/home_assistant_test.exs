@@ -33,7 +33,7 @@ defmodule App.Tools.HomeAssistantTest do
   end
 
   # Every request HA receives is recorded to the test process as {:ha, method, path, json_body}.
-  defp stub(status) do
+  defp stub(status, body \\ []) do
     test = self()
 
     Req.Test.stub(HaToolStub, fn conn ->
@@ -44,7 +44,7 @@ defmodule App.Tools.HomeAssistantTest do
         {:ha, conn.method, conn.request_path, if(raw == "", do: nil, else: Jason.decode!(raw))}
       )
 
-      conn |> Plug.Conn.put_status(status) |> Req.Test.json([])
+      conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
     end)
   end
 
@@ -415,9 +415,15 @@ defmodule App.Tools.HomeAssistantTest do
   test "a failed service call → cant (the home hub had trouble), never a crash" do
     stub(500)
 
-    assert {:ok, r} = control(["fireplace"], "on")
-    assert r.cant == [%{name: "Fireplace Switch", why: "the home hub had trouble"}]
-    refute Map.has_key?(r, :done)
+    # A failed call's control line is a warning, so it shows at the default log level.
+    log =
+      capture_log(fn ->
+        assert {:ok, r} = control(["fireplace"], "on")
+        assert r.cant == [%{name: "Fireplace Switch", why: "the home hub had trouble"}]
+        refute Map.has_key?(r, :done)
+      end)
+
+    assert log =~ "[home] control switch.fireplace_switch switch.turn_on %{} error in"
   end
 
   @in_time "the home hub didn't answer in time — it may still happen"
@@ -444,8 +450,10 @@ defmodule App.Tools.HomeAssistantTest do
   test "an HTTP receive timeout is the same: HA may have acted" do
     Req.Test.stub(HaToolStub, &Req.Test.transport_error(&1, :timeout))
 
-    assert {:ok, r} = control(["fireplace"], "on")
-    assert r.cant == [%{name: "Fireplace Switch", why: @in_time}]
+    capture_log(fn ->
+      assert {:ok, r} = control(["fireplace"], "on")
+      assert r.cant == [%{name: "Fireplace Switch", why: @in_time}]
+    end)
   end
 
   test "missing targets or an unknown action → a guidance note, no call" do
@@ -775,14 +783,64 @@ defmodule App.Tools.HomeAssistantTest do
     assert note =~ "last seen offline"
   end
 
-  test "a play_media failure flattens to an error note" do
+  test "a bare 500 from play_media → cant on that speaker, a speakable why, never the tuple" do
     with_states(@ma_players)
     stub(500)
 
-    assert {:ok, %{error: err}} =
-             Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
+    log =
+      capture_log(fn ->
+        assert {:ok, %{cant: [%{name: "Sonos Kitchen", why: why}], note: note} = r} =
+                 Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
 
-    assert err =~ "music service"
+        # Music Assistant raised without saying why (HA before 2026.10): name both causes.
+        assert why =~ "music service"
+        assert why =~ "couldn't find"
+        refute why =~ "http"
+        assert note =~ "didn't play"
+        refute Map.has_key?(r, :playing)
+      end)
+
+    assert log =~ "[home] control media_player.sonos_kitchen music_assistant.play_media"
+    assert log =~ "{:http, 500}"
+  end
+
+  test "a 500 carrying Music Assistant's message passes the reason through, and logs it" do
+    with_states(@ma_players)
+    stub(500, %{"message" => "Could not resolve ['jazz'] to playable media item"})
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{cant: [%{name: "Sonos Kitchen", why: why}], note: note}} =
+                 Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
+
+        assert why == "the music service said: Could not resolve ['jazz'] to playable media item"
+        assert note =~ "didn't play"
+      end)
+
+    assert log =~ "Could not resolve ['jazz'] to playable media item"
+  end
+
+  test "a play_media that times out may still start — never reported as a plain failure" do
+    with_states(@ma_players)
+    Req.Test.stub(HaToolStub, fn conn -> Req.Test.transport_error(conn, :timeout) end)
+
+    capture_log(fn ->
+      assert {:ok, %{cant: [%{name: "Sonos Kitchen", why: why}]} = r} =
+               Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
+
+      assert why =~ "may still happen"
+      refute Map.has_key?(r, :note)
+    end)
+  end
+
+  test "any other hub failure on play_media → cant with the hub-trouble why" do
+    with_states(@ma_players)
+    stub(502)
+
+    capture_log(fn ->
+      assert {:ok, %{cant: [%{name: "Sonos Kitchen", why: "the home hub had trouble"}]}} =
+               Tool.execute("play_music", %{"query" => "jazz", "player" => "kitchen"}, @ctx)
+    end)
   end
 
   test "malformed args (no query) → a guidance note, no HTTP call" do

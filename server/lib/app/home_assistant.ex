@@ -11,7 +11,8 @@ defmodule App.HomeAssistant do
   HOME_ASSISTANT_URL / HOME_ASSISTANT_TOKEN in config/runtime.exs; absent = unconfigured — see
   App.Config.home_assistant?/0). Req options are overridable via `:home_assistant_req_opts`
   (test seam, same as `:google_req_opts`). Errors flatten to tagged tuples (`:not_configured`,
-  `:unauthorized`, `:not_found`, `{:http, status}`, transport reasons) — never a raw crash.
+  `:unauthorized`, `:not_found`, `{:http, status}` or `{:http, status, message}` when HA's
+  error body says why, transport reasons) — never a raw crash.
   `App.Http.Retry.opts/0` covers the cold-Finch-pool `:pool_not_available` first-call race
   (retries only request-never-executed failures, so the service POST is safe).
   """
@@ -29,11 +30,24 @@ defmodule App.HomeAssistant do
         {:ok, %{status: s, body: body}} when s in 200..299 -> {:ok, body}
         {:ok, %{status: 401}} -> {:error, :unauthorized}
         {:ok, %{status: 404}} -> {:error, :not_found}
-        {:ok, %{status: s}} -> {:error, {:http, s}}
+        {:ok, %{status: s, body: body}} -> {:error, http_error(s, body)}
         {:error, reason} -> {:error, reason}
       end
     end
   end
+
+  # HA 2026.10+ answers a service that raised with `{"message": str(error)}` (400 for a
+  # validation error, 500 otherwise), so the reason survives — for `music_assistant.play_media`
+  # it is Music Assistant's own. Older HA answers aiohttp's bare-text 500 and keeps the reason in
+  # its own log ("Error handling request").
+  defp http_error(status, %{"message" => message}) when is_binary(message) do
+    case String.trim(message) do
+      "" -> {:http, status}
+      message -> {:http, status, message}
+    end
+  end
+
+  defp http_error(status, _body), do: {:http, status}
 
   @doc """
   The house directory (`App.HomeAssistant.Directory`), the read seam for the resolver and tools.
