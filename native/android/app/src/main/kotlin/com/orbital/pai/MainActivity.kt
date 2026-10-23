@@ -7,12 +7,14 @@ class MainActivity : FlutterActivity() {
     private var player: AudioTrackPlayer? = null
     private var alarm: AlarmPlayer? = null
     private var notifier: HenryNotifier? = null
+    private var windowChannel: WindowChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         player = AudioTrackPlayer(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         alarm = AlarmPlayer(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         notifier = HenryNotifier(flutterEngine.dartExecutor.binaryMessenger, this)
+        windowChannel = WindowChannel(flutterEngine.dartExecutor.binaryMessenger, this)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -20,6 +22,8 @@ class MainActivity : FlutterActivity() {
         alarm?.stop()
         notifier?.detach()
         notifier = null
+        windowChannel?.detach()
+        windowChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
