@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show Widget;
 import '../audio/alarm_sound.dart';
 import '../audio/audio_track_player.dart';
 import '../audio/keyword_spotter.dart';
@@ -7,12 +8,15 @@ import '../audio/mic_capture.dart';
 import '../audio/playback_levels.dart';
 import '../audio/wake_gate.dart';
 import '../auth/device_id.dart';
+import '../camera/camera_service.dart';
+import '../camera/plugin_camera_service.dart';
 import '../connection/app_connection.dart';
 import '../meridian/audio_levels.dart';
 import '../meridian/orb_painter.dart';
 import '../meridian/orb_state.dart';
 import '../meridian/thread_model.dart';
 import '../notify/background_notices.dart';
+import 'camera_relay.dart';
 import 'glance.dart';
 import 'mic_state.dart';
 import 'timers_model.dart';
@@ -34,6 +38,8 @@ class VoiceController extends ChangeNotifier {
     AlarmSound? alarm,
     MonoClock? timerClock,
     BackgroundNotices? notices,
+    CameraService? camera,
+    CameraTimings cameraTimings = const CameraTimings(),
     bool Function() isWall = _notWall,
     bool Function() isShared = _notShared,
   })  : _connection = connection,
@@ -45,7 +51,17 @@ class VoiceController extends ChangeNotifier {
         _spotter = spotter ?? SherpaWakeSpotter(),
         _gate = gate ?? WakeGate(),
         _deviceId = deviceId ?? DeviceId(),
+        _cameraService = camera ?? PluginCameraService(),
         _timers = TimersModel(clock: timerClock, alarm: alarm) {
+    _cameraRelay = CameraRelay(
+      service: _cameraService,
+      // The joined channel or nowhere: a frame for a conversation that went
+      // away has nobody waiting on it.
+      push: (event, payload) => _live?.push(event, payload),
+      changed: _safeNotify,
+      log: _log,
+      timings: cameraTimings,
+    );
     // The other half of the mic-restore contract: a deliberate teardown that
     // happens while the mic is ALREADY down (i.e. mid-outage, so there is no
     // second channel death to notice it) must still disarm the flag.
@@ -768,6 +784,27 @@ class VoiceController extends ChangeNotifier {
   /// forgot it was "Started" would happily start a second timer.
   final Set<String> startedPills = <String>{};
 
+  // ---- the camera ("Henry, look at this", spec 2026-10-23 §1) ----
+
+  /// Injected (defaulted to the plugin) so no controller test touches it.
+  final CameraService _cameraService;
+
+  /// The `camera_capture` / `camera_frame` / `camera_done` exchange.
+  late final CameraRelay _cameraRelay;
+
+  /// What the orb's glass shows for a capture: null when none is live, else
+  /// the countdown, the shutter or the frozen snapshot. Takes precedence over
+  /// the resting face.
+  CameraShot? get camera => _cameraRelay.shot;
+
+  /// The open camera's viewfinder; an empty box while nothing is open.
+  Widget cameraPreview() => _cameraService.preview();
+
+  /// A snapshot taken on this device this session, by a photo card's
+  /// `capture_id`; null once evicted, or for one this device never took.
+  Uint8List? snapshotFor(String captureId) =>
+      _cameraRelay.snapshotFor(captureId);
+
   // ---- controls ----
 
   /// The native twin of index.js's startTalking()/stopTalking().
@@ -984,6 +1021,8 @@ class VoiceController extends ChangeNotifier {
     // opening into an outage.
     _channel = null;
     _log('channel down');
+    // A capture in flight has nobody left to answer; its camera closes.
+    _cameraRelay.abort();
     _talking = false;
     _turnState = TurnState.idle;
     final held = _micState;
@@ -1239,6 +1278,10 @@ class VoiceController extends ChangeNotifier {
         }
       case 'timers':
         _timers.apply(p);
+      case 'camera_capture':
+        _cameraRelay.capture(p);
+      case 'camera_done':
+        _cameraRelay.done(p);
       case 'stop_playback':
         _handleStopPlayback();
       case 'duck':
@@ -1958,6 +2001,8 @@ class VoiceController extends ChangeNotifier {
     orbFrame.dispose();
     // A sign-out mid-ring must not leave the phone ringing.
     _timers.dispose();
+    // Nor a camera open.
+    _cameraRelay.dispose();
     super.dispose();
   }
 }
