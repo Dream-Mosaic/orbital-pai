@@ -24,7 +24,7 @@ void main() {
     expect(toolLabel('file_issue'), 'filing an issue');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(51));
+    expect(kToolLabels, hasLength(55));
   });
 
   test('every registered server tool has a friendly label', () {
@@ -48,6 +48,7 @@ void main() {
       'save_routine', 'list_routines', 'delete_routine', 'run_routine',
       'save_recipe', 'get_recipe', 'list_recipes', 'edit_recipe', 'delete_recipe',
       'code_board', 'start_claude', 'claude_jobs', 'file_issue',
+      'roll_dice', 'flip_coin', 'pick_one', 'keep_score',
     ];
     for (final name in registered) {
       expect(kToolLabels.containsKey(name), isTrue, reason: '$name has no label');
@@ -60,7 +61,8 @@ void main() {
     expect(card.data['title'], 'Groceries');
     expect(ThreadCard.knownTypes, {
       'weather', 'agenda', 'list', 'reminders', 'email', //
-      'tracker', 'tracker_logged', 'recipe', 'cook_step',
+      'tracker', 'tracker_logged', 'recipe', 'cook_step', //
+      'dice', 'coin', 'pick', 'scoreboard',
     });
   });
 

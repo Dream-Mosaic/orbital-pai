@@ -61,6 +61,11 @@ const Map<String, String> kToolLabels = {
   'list_recipes': 'checking your recipes',
   'edit_recipe': 'updating the recipe',
   'delete_recipe': 'deleting a recipe',
+  // game night
+  'roll_dice': 'rolling the dice',
+  'flip_coin': 'flipping a coin',
+  'pick_one': 'picking',
+  'keep_score': 'keeping score',
   // claude dispatch (the repos toolkit)
   'code_board': 'checking the board',
   'start_claude': 'starting Claude',
@@ -229,6 +234,10 @@ class ThreadCard extends ThreadItem {
     'tracker_logged',
     'recipe',
     'cook_step',
+    'dice',
+    'coin',
+    'pick',
+    'scoreboard',
   };
 
   /// A card as the channel sends it (the live `card` push and each history

@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../thread_model.dart';
 import 'agenda_card.dart';
+import 'coin_card.dart';
 import 'cook_step_card.dart';
+import 'dice_card.dart';
 import 'email_card.dart';
 import 'list_card.dart';
+import 'pick_card.dart';
 import 'recipe_card.dart';
 import 'reminders_card.dart';
+import 'scoreboard_card.dart';
 import 'tracker_card.dart';
 import 'weather_card.dart';
 
@@ -34,6 +38,10 @@ class ThreadCardView extends StatelessWidget {
         'recipe' => RecipeCard(data: card.data),
         'cook_step' => CookStepCard(
             data: card.data, onStartTimer: onStartTimer, startedPills: startedPills),
+        'dice' => DiceCard(data: card.data),
+        'coin' => CoinCard(data: card.data),
+        'pick' => PickCard(data: card.data),
+        'scoreboard' => ScoreboardCard(data: card.data),
         _ => const SizedBox.shrink(),
       };
 }

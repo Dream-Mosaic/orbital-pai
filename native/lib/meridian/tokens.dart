@@ -43,6 +43,11 @@ abstract final class M {
   /// coral [timer] pills on a cook step stand out against it.
   static const Color recipe = Color(0xFFE1C792);
 
+  /// Game night (dice, coins, picks, the scoreboard) — oklch(0.85 0.15 125), a
+  /// lime on the warm side of Henry's mint: playful, and far enough from every
+  /// speaker's colour that a lit leader never reads as someone talking.
+  static const Color game = Color(0xFFB4DB64);
+
   /// daisyUI dark `--color-success` = oklch(0.60 0.118 184.704) — the power
   /// detent's icon while ON (`setPower()` toggles Tailwind's `.text-success`).
   ///
