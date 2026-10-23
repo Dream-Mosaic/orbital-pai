@@ -23,7 +23,11 @@ class LoginScreen extends StatelessWidget {
           child: Center(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Column(
+              // Hand-sized on a landscape tablet, where the button used to
+              // stretch the whole screen.
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
@@ -84,6 +88,7 @@ class LoginScreen extends StatelessWidget {
                     ),
                   ],
                 ],
+              ),
               ),
             ),
           ),

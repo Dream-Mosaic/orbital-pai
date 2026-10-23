@@ -424,6 +424,22 @@ void main() {
       expect(find.byType(MeridianVoiceScreen), findsNothing);
     });
 
+    testWidgets('on a landscape tablet the Sign in button keeps a hand-sized width',
+        (tester) async {
+      // The Lenovo's landscape: the button used to stretch the whole 1191 dp.
+      tester.view.physicalSize = const Size(1340, 800);
+      tester.view.devicePixelRatio = 1.125;
+      addTearDown(tester.view.reset);
+      final auth = AuthController(store: freshStore());
+      addTearDown(auth.dispose);
+      await tester.pumpWidget(MaterialApp(home: HenryHome(auth: auth)));
+      await tester.pump();
+      await tester.pump();
+
+      final button = find.ancestor(of: find.text('Sign in'), matching: find.byType(FilledButton));
+      expect(tester.getSize(button.first).width, lessThanOrEqualTo(420));
+    });
+
     testWidgets(
         "tapping Sign in opens Authentik's login in the OS auth session",
         (tester) async {
