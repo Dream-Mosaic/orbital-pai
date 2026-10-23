@@ -19,6 +19,8 @@ defmodule App.Application do
       {Phoenix.PubSub, name: App.PubSub},
       AppWeb.Presence,
       App.Tools.Cache,
+      # Game night's scoreboards (in memory; a restart clears them).
+      App.Games.Scores,
       # HTTP pool for Gemini + Cartesia REST (sized for reflex+brain+tts+memory concurrency).
       # Connect timeout covers TCP+TLS AND a possible IPv6→IPv4 fallback (some hosts, e.g. the
       # Coolify box, have no IPv6 egress and the BEAM tries the AAAA first). 2s was too tight there

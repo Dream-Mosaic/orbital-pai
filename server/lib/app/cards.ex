@@ -14,7 +14,8 @@ defmodule App.Cards do
   type, not a flag on `tracker`: one entry, no series); `recipe` (get_recipe, save_recipe,
   edit_recipe) and `cook_step` (get_recipe called with `step` in cook mode: the one step,
   large, its timers and a glance at the next); `photo` (look: the capture id and the
-  question, never the image). Everything else — an unknown tool, an error-
+  question, never the image). Game night's `dice`, `coin`, `pick` and `scoreboard` are built
+  in `App.Cards.Games`. Everything else — an unknown tool, an error-
   or note-shaped result, an empty one — is `nil`. A malformed result never raises: a card is decoration and must never
   cost the turn, so it logs at debug and returns `nil`.
   """
@@ -102,6 +103,12 @@ defmodule App.Cards do
 
   defp build("edit_recipe", _args, %{recipe: %{} = recipe}, _ctx),
     do: recipe_card(recipe, "Updated")
+
+  # Game night (App.Tools.Games): built in App.Cards.Games; an empty board is no card.
+  defp build("roll_dice", _args, r, _ctx), do: App.Cards.Games.dice(r)
+  defp build("flip_coin", _args, r, _ctx), do: App.Cards.Games.coin(r)
+  defp build("pick_one", _args, r, _ctx), do: App.Cards.Games.pick(r)
+  defp build("keep_score", _args, r, _ctx), do: App.Cards.Games.scoreboard(r)
 
   defp build(_name, _args, _result, _ctx), do: nil
 

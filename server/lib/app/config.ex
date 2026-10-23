@@ -56,6 +56,8 @@ defmodule App.Config do
               App.Tools.Look,
               App.Tools.Reminders,
               App.Tools.Timers,
+              # Game night: dice, coins, picks and the scoreboard (always on, no toolkit hop).
+              App.Tools.Games,
               App.Tools.Lists,
               App.Tools.Garden,
               App.Tools.Calendar,
