@@ -130,6 +130,10 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - Claude dispatch (2026-10-21): `lib/app/dispatch*` (jobs, `Forge` API client, HMAC-signed callback
   endpoint, `Notifier`, `Watchdog`, `Board`), `lib/app/toolkits/repos.ex` (the repos kit: board,
   start_claude, claude_jobs, file_issue) and `lib/app/tools/claude_dispatch.ex`.
+- Wall tablet (2026-10-23, epic #38): server `lib/app/conversations/scope.ex` (the bound
+  device's household/personal scope); native `lib/device/` (device role, `henry/window`
+  channel, `WallModeHost` + `WallActivityScope`), `lib/meridian/wall_type.dart` (the wall type
+  floor), `lib/meridian/today_board.dart` (the at-rest board; `App.Glance` feeds it).
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
@@ -482,6 +486,26 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   stop-list plus minimum word/phrase lengths (`@min_word` 6, `@min_phrase` 4), so common words that
   are also repo names don't open the kit.
 - **Production logs never carry what someone said.** `App.LogText.said/1` logs content verbatim in dev and test and only its length in prod (`log_speech: false`), because prod logs ship to SigNoz, which the Claude dispatch box can read. Any new log line that prints speech, typed text, a calendar/email title, a memory fact or tool arguments goes through it.
+
+- **The window's size reads 0x0 in `main()` on Android** (no metrics yet). Anything that sizes
+  itself before `runApp` must await `settledLogicalSize()` (`orientation_lock.dart`); reading
+  the view directly made the Lenovo a "phone": portrait-locked and in the personal role.
+- **A wall is a device role, not a user pref** (`lib/device/device_role.dart`, a JSON file on
+  the device; tablets default to wall). A wall joins `kiosk: true`, holds the screen on, hides
+  the bars, dims 22:00–07:00 at rest, IGNORES the account's Default PTT (PTT closes the mic to
+  all but the held button, so a wall in PTT cannot hear "Henry") and powers its own mic on once
+  per launch (a phone waits for the power button). Don't "fix" either back to the account's
+  defaults; that is #19's per-device split, decided.
+- **Household scope follows the BOUND device, never the user.** The Conversation is one per user,
+  so a scope stored on it leaked from the wall onto the phone (July's C1). It keeps each
+  channel's `%{kiosk, shared}` role and publishes the bound one's scope as its Registry value;
+  `App.Conversations.Scope.current(session_id)` reads it from any process (tools, the Gemini
+  adapter). Household: bare "remind me" is the household's, Gmail is withheld (declarations AND
+  dispatch), and the brain's note rides the user message. `[scope]` logs each change.
+- **Ink idle-closes the STT socket after ~3 minutes, and a locked wall sends no audio**, so most
+  wakes reconnect. The adapter HOLDS frames pushed while connecting (capped 8 s) and flushes them
+  on the 101; dropping them clipped the first words of nearly every wake (`[stt] socket up;
+  sending N frames held during the connect`).
 
 ## Testing patterns
 
