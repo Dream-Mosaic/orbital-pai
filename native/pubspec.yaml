@@ -19,6 +19,7 @@ dependencies:
   flutter_web_auth_2: ^5.1.0
   flutter_secure_storage: ^11.1.0
   http: ^1.2.0
+  camera: ^0.12.1
 
 dev_dependencies:
   flutter_test:

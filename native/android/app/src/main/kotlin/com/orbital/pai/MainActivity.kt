@@ -8,6 +8,7 @@ class MainActivity : FlutterActivity() {
     private var alarm: AlarmPlayer? = null
     private var notifier: HenryNotifier? = null
     private var windowChannel: WindowChannel? = null
+    private var jpegChannel: JpegChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -15,6 +16,7 @@ class MainActivity : FlutterActivity() {
         alarm = AlarmPlayer(flutterEngine.dartExecutor.binaryMessenger, applicationContext)
         notifier = HenryNotifier(flutterEngine.dartExecutor.binaryMessenger, this)
         windowChannel = WindowChannel(flutterEngine.dartExecutor.binaryMessenger, this)
+        jpegChannel = JpegChannel(flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -24,6 +26,8 @@ class MainActivity : FlutterActivity() {
         notifier = null
         windowChannel?.detach()
         windowChannel = null
+        jpegChannel?.detach()
+        jpegChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

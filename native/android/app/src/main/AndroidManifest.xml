@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -7,6 +8,15 @@
     <!-- Local notifications while backgrounded (HenryNotifier.kt). A RUNTIME permission from
          Android 13: asked once after sign-in; a "no" just means no notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- "Henry, look at this" (lib/camera/): one still per request, asked for at the first
+         capture; a "no" answers `denied` and is not asked again that launch. The camera never
+         records audio (enableAudio: false), so no microphone request rides along with it. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Not required: a device without a camera still installs, and Henry says he can't see.
+         The camera plugin's own manifest declares `camera.any` as required; overridden here. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.any" android:required="false"
+        tools:replace="android:required"/>
     <application
         android:label="Orbital P.A.I"
         android:name="${applicationName}"
