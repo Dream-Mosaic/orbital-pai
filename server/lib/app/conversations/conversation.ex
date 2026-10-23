@@ -129,6 +129,18 @@ defmodule App.Conversations.Conversation do
   """
   def unsaved_turns(pid), do: :gen_statem.call(pid, :unsaved_turns, 1_000)
 
+  @doc """
+  Ask the BOUND device for one photo ("Henry, look at this" — `App.Camera`): pushes
+  `{:camera_capture, id, facing}` to the bound channel. `facing` is "front" or "back", or
+  `:auto` — "front" for a wall (the channel declared `kiosk: true`), else "back".
+
+  Replies `{:ok, %{client: channel_pid, facing: facing}}` (the channel that was asked, so the
+  matching `camera_done` reaches the device holding the photo), or `{:error, :no_device}` when
+  nothing live is bound.
+  """
+  def camera_capture(pid, id, facing \\ :auto),
+    do: :gen_statem.call(pid, {:camera_capture, id, facing}, 2_000)
+
   @doc false
   def child_spec(opts) do
     %{
@@ -542,6 +554,18 @@ defmodule App.Conversations.Conversation do
 
   def handle_event({:call, from}, :unsaved_turns, _s, data),
     do: {:keep_state_and_data, [{:reply, from, unsaved_turns_of(data)}]}
+
+  # The look tool wants a photo (App.Camera). Only the bound device is asked — it is the one
+  # the user is talking to — and only while it is alive; a lingering session has no camera.
+  def handle_event({:call, from}, {:camera_capture, id, facing}, _s, %{client: client} = data) do
+    if live?(client) do
+      facing = camera_facing(facing, Map.get(data.device_roles, client))
+      emit(data, {:camera_capture, id, facing})
+      {:keep_state_and_data, [{:reply, from, {:ok, %{client: client, facing: facing}}}]}
+    else
+      {:keep_state_and_data, [{:reply, from, {:error, :no_device}}]}
+    end
+  end
 
   # A channel declared (or changed) its device role. It counts only while that channel is the
   # bound one; a standby device's role waits for its claim (rebind/3 publishes).
@@ -2084,6 +2108,12 @@ defmodule App.Conversations.Conversation do
   end
 
   defp live?(pid), do: is_pid(pid) and Process.alive?(pid)
+
+  # A wall faces the room, so the person showing it something stands in front of its screen;
+  # a phone is held up and pointed. An explicit facing wins.
+  defp camera_facing(facing, _role) when facing in ["front", "back"], do: facing
+  defp camera_facing(_auto, %{kiosk: true}), do: "front"
+  defp camera_facing(_auto, _role), do: "back"
 
   defp standby_joined?(data),
     do: Enum.any?(Map.keys(data.device_ids), &(&1 != data.client and live?(&1)))

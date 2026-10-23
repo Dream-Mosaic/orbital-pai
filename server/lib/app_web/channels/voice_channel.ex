@@ -10,7 +10,8 @@ defmodule AppWeb.VoiceChannel do
     this channel becomes the bound one or joins **standby** (connected and fed state, but not
     the audio owner, until it claims by speaking). Either way the channel gets a `state`
     snapshot carrying `bound`.
-  - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`.
+  - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`; a photo the
+    look tool asked for (`"camera_frame"`) → `App.Camera.deliver/2`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
     relayed to the browser as a JSON event (`speak_start` / `metrics` / `transcript` /
     `stop_playback` / `state`) — except `audio`, which is pushed as a raw binary
@@ -252,6 +253,28 @@ defmodule AppWeb.VoiceChannel do
   def handle_in("start_timer", _payload, socket),
     do: {:reply, {:error, %{reason: "bad_request"}}, socket}
 
+  # The app's answer to a `camera_capture` ("Henry, look at this", App.Camera): a base64 JPEG
+  # or the reason there is none. Handed to whoever waits on the id; an unknown or expired id
+  # is ignored there. The image is never logged, stored or kept past the hand-off.
+  @max_frame_bytes 2 * 1024 * 1024
+  # base64 is 4 bytes per 3, so anything longer than this can't decode under the cap — refused
+  # before decoding a payload that size.
+  @max_frame_b64 div(@max_frame_bytes + 2, 3) * 4
+
+  def handle_in("camera_frame", %{"id" => id, "jpeg" => b64}, socket)
+      when is_binary(id) and is_binary(b64) do
+    App.Camera.deliver(id, decode_frame(b64))
+    {:noreply, socket}
+  end
+
+  def handle_in("camera_frame", %{"id" => id, "error" => error}, socket)
+      when is_binary(id) and is_binary(error) do
+    App.Camera.deliver(id, {:error, {:device, error}})
+    {:noreply, socket}
+  end
+
+  def handle_in("camera_frame", _payload, socket), do: {:noreply, socket}
+
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do
@@ -430,6 +453,24 @@ defmodule AppWeb.VoiceChannel do
     {:noreply, socket}
   end
 
+  # The look tool wants one photo from this device (App.Camera); the app counts down, shoots
+  # and answers `camera_frame`.
+  def handle_info({:to_client, {:camera_capture, id, facing}}, socket) do
+    push(socket, "camera_capture", %{
+      id: id,
+      facing: facing,
+      countdown_ms: App.Camera.countdown_ms()
+    })
+
+    {:noreply, socket}
+  end
+
+  # The photo has been looked at (or the capture failed): release the frozen snapshot.
+  def handle_info({:to_client, {:camera_done, id}}, socket) do
+    push(socket, "camera_done", %{id: id})
+    {:noreply, socket}
+  end
+
   # If the bound Conversation dies — a crash, or a linger-expiry we raced during join (the join is a
   # cast, so a lookup→dead-pid gap is possible) — drop this channel so the browser's auto-rejoin starts a
   # fresh session instead of talking silently to a dead pid.
@@ -491,6 +532,19 @@ defmodule AppWeb.VoiceChannel do
   # too old to send it (or anything but a literal true) is a personal device.
   defp device_role(payload),
     do: %{kiosk: payload["kiosk"] == true, shared: payload["shared"] == true}
+
+  # A camera_frame's base64 JPEG → `{:ok, jpeg}`, or why it can't be used. Anything that
+  # doesn't start with the JPEG SOI marker is refused here rather than sent to the model.
+  defp decode_frame(b64) when byte_size(b64) > @max_frame_b64, do: {:error, :too_large}
+
+  defp decode_frame(b64) do
+    case Base.decode64(b64, ignore: :whitespace) do
+      {:ok, jpeg} when byte_size(jpeg) > @max_frame_bytes -> {:error, :too_large}
+      {:ok, <<0xFF, 0xD8, _::binary>> = jpeg} -> {:ok, jpeg}
+      {:ok, _not_jpeg} -> {:error, :bad_frame}
+      :error -> {:error, :bad_frame}
+    end
+  end
 
   # remaining_ms is computed at push time, so each device anchors its countdown to its own
   # clock (no server/device skew).
