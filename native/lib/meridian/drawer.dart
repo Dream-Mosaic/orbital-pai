@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 
 import 'hero_icon.dart';
 import 'tokens.dart';
+import 'wall_layout.dart';
 
 /// The port of the web's slide-in panel drawer (`#voice-modal`).
 ///
 /// The CSS is already responsive — `absolute inset-y-0 right-0 w-full
 /// max-w-[24rem]` — so this is full-bleed on a phone and a 384px right-hand
-/// drawer once there is room, rather than a bottom sheet. Scrim is
+/// drawer once there is room, rather than a bottom sheet (a wall tablet's is
+/// wider still — see [MeridianDrawer.widthFor]). Scrim is
 /// `rgba(2,3,9,0.6)` with `blur(3px)`; the panel fill is `color-mix(in srgb,
 /// var(--m-shell) 94%, transparent)` with a faint top-left gradient sheen, a
 /// hairline left edge, an outer drop shadow cast back toward the
@@ -30,8 +32,21 @@ class MeridianDrawer extends StatelessWidget {
     this.onBack,
   });
 
-  /// `max-w-[24rem]`.
+  /// `max-w-[24rem]` — the phone's drawer, and the narrowest a wall's gets.
   static const double maxWidth = 384;
+
+  /// The widest a wall's drawer gets.
+  static const double wallMaxWidth = 520;
+
+  /// The panel's width cap on a screen [screenWidth] wide. A phone keeps the
+  /// web's 384 (full-bleed below it). A wall layout ([WallLayout]) takes half
+  /// the screen within [maxWidth]..[wallMaxWidth]: a 384dp panel on a
+  /// 1191dp landscape tablet is a phone's drawer stranded at the edge of the
+  /// glass, and half of a 711dp portrait one would be narrower than a phone's.
+  static double widthFor(double screenWidth) =>
+      WallLayout.forWidth(screenWidth) == WallLayout.compact
+          ? maxWidth
+          : (screenWidth / 2).clamp(maxWidth, wallMaxWidth);
 
   /// `duration-300`.
   static const Duration slide = Duration(milliseconds: 300);
@@ -67,6 +82,13 @@ class MeridianDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final curved = CurvedAnimation(parent: animation, curve: Curves.easeOut);
+    // From the width the drawer is GIVEN (the whole route), as the voice
+    // screen picks its layout — never from what the device says it is.
+    return LayoutBuilder(
+        builder: (context, screen) => _drawer(curved, screen.maxWidth));
+  }
+
+  Widget _drawer(Animation<double> curved, double screenWidth) {
     return Stack(
       children: [
         Positioned.fill(
@@ -90,7 +112,7 @@ class MeridianDrawer extends StatelessWidget {
             position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
                 .animate(curved),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: maxWidth),
+              constraints: BoxConstraints(maxWidth: widthFor(screenWidth)),
               // width: infinity inside a max-width box == the CSS `w-full
               // max-w-[24rem]` pair.
               child: _SwipeToClose(

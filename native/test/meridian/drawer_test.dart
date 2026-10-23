@@ -52,11 +52,51 @@ void main() {
         reason: 'the web drawer is w-full below its max-width');
   });
 
-  testWidgets('a 384px drawer once there is room', (tester) async {
-    await pumpDrawer(tester, const Size(800, 800));
+  testWidgets('a 384px drawer once there is room, on a phone', (tester) async {
+    // The widest compact screen: still the phone's drawer.
+    await pumpDrawer(tester, const Size(599, 800));
     expect(tester.getSize(find.byKey(MeridianDrawer.panelKey)).width,
         MeridianDrawer.maxWidth,
         reason: 'max-w-[24rem]');
+  });
+
+  group('on a wall: half the screen, within 384..520', () {
+    double panel(WidgetTester tester) =>
+        tester.getSize(find.byKey(MeridianDrawer.panelKey)).width;
+
+    test('the rule, from the width alone', () {
+      expect(MeridianDrawer.widthFor(360), 384, reason: 'phone: the cap');
+      expect(MeridianDrawer.widthFor(599), 384);
+      expect(MeridianDrawer.widthFor(600), 384, reason: 'never narrower');
+      expect(MeridianDrawer.widthFor(711), 384);
+      expect(MeridianDrawer.widthFor(800), 400, reason: 'half');
+      expect(MeridianDrawer.widthFor(1000), 500);
+      expect(MeridianDrawer.widthFor(1191), 520, reason: 'capped');
+      expect(MeridianDrawer.widthFor(1920), 520);
+    });
+
+    testWidgets('a phone (360) is full-bleed', (tester) async {
+      await pumpDrawer(tester, const Size(360, 800));
+      expect(panel(tester), 360);
+    });
+
+    testWidgets('the Lenovo in portrait (711) keeps 384', (tester) async {
+      await pumpDrawer(tester, const Size(711, 1191));
+      expect(panel(tester), 384, reason: 'half would be narrower than 384');
+    });
+
+    testWidgets('an 800 portrait tablet gets half', (tester) async {
+      await pumpDrawer(tester, const Size(800, 800));
+      expect(panel(tester), 400);
+    });
+
+    testWidgets('the Lenovo in landscape (1191) is capped at 520',
+        (tester) async {
+      await pumpDrawer(tester, const Size(1191, 711));
+      expect(panel(tester), MeridianDrawer.wallMaxWidth);
+      expect(tester.getRect(find.byKey(MeridianDrawer.panelKey)).right, 1191,
+          reason: 'still against the right edge');
+    });
   });
 
   testWidgets('it sits against the right edge', (tester) async {
@@ -68,7 +108,7 @@ void main() {
   testWidgets('tapping the scrim closes it', (tester) async {
     var closes = 0;
     await pumpDrawer(tester, const Size(800, 800), onClose: () => closes++);
-    // Well clear of the 384px panel on the right.
+    // Well clear of the panel on the right.
     await tester.tapAt(const Offset(100, 400));
     await tester.pump();
     expect(closes, 1);
