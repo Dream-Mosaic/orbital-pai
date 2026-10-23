@@ -86,7 +86,7 @@ defmodule App.Tools do
 
     case ttl && App.Tools.Cache.get(key) do
       {:ok, _} = hit ->
-        Logger.info("[tool-cache] hit #{name} #{inspect(args)}")
+        Logger.info("[tool-cache] hit #{name} #{App.LogText.said(args)}")
         hit
 
       _miss ->

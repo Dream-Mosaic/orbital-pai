@@ -29,5 +29,8 @@ config :app, start_backup: true
 # Do not print debug messages in production
 config :logger, level: :info
 
+# Prod logs ship to SigNoz: log the length of what people say, never the words (App.LogText)
+config :app, log_speech: false
+
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

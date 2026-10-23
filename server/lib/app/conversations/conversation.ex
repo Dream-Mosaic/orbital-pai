@@ -788,7 +788,7 @@ defmodule App.Conversations.Conversation do
       # turn; brain_fallback guards against a second substitution from the canned line's own done.
       {:keep_state, spawn_canned_brain(@brain_blank, %{clear_brain(data) | brain_fallback: true})}
     else
-      Logger.info("[turn] brain: #{inspect(text)}")
+      Logger.info("[turn] brain: #{App.LogText.said(text)}")
       data = push_or_hold_answer(text, data)
       feed(:brain_done, clear_brain(%{data | brain_text: text}))
     end
@@ -796,7 +796,7 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:info, {:brain_done, text}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
-    Logger.info("[turn] brain: #{inspect(text)}")
+    Logger.info("[turn] brain: #{App.LogText.said(text)}")
     data = push_or_hold_answer(text, data)
     feed(:brain_done, clear_brain(%{data | brain_text: text}))
   end
@@ -964,7 +964,7 @@ defmodule App.Conversations.Conversation do
 
   # ---- reflex task results ----
   defp handle_reflex_result(:reflex_model, {:ok, text}, data) do
-    Logger.info("[turn] reflex: #{inspect(text)}")
+    Logger.info("[turn] reflex: #{App.LogText.said(text)}")
     feed({:reflex_ready, text}, %{data | reflex_text: text})
   end
 
@@ -980,7 +980,7 @@ defmodule App.Conversations.Conversation do
   # Speculative reflex completed. If the turn already endpointed and is waiting on it
   # (commit_speculative?), speak it now; otherwise hold it ready until endpoint.
   defp handle_reflex_result(:speculative_reflex, {:ok, text}, %{commit_speculative?: true} = data) do
-    Logger.info("[turn] reflex (eager head-start): #{inspect(text)}")
+    Logger.info("[turn] reflex (eager head-start): #{App.LogText.said(text)}")
 
     feed(
       {:reflex_ready, text},
@@ -1237,13 +1237,13 @@ defmodule App.Conversations.Conversation do
        when phase != :listening do
     cond do
       sleep_stop?(t, data.config) ->
-        Logger.info(~s|[wake] sleep: "#{t}"|)
+        Logger.info("[wake] sleep: #{App.LogText.said(t)}")
         # halt + re-lock (vs the safety stop below, which halts but stays awake).
         data = lock_now(%{data | interrupt_pending?: false})
         barge_in_feed(%{on_barge_in(data) | pending_request: nil, pending_note: nil})
 
       safety_stop?(t, data.config) ->
-        Logger.info(~s|[wake] safety stop: "#{t}"|)
+        Logger.info("[wake] safety stop: #{App.LogText.said(t)}")
         silence_timers(data)
 
         # wake_hit so the rest of this breath's cumulative partials caption the STRIPPED remainder.
@@ -1270,7 +1270,7 @@ defmodule App.Conversations.Conversation do
         :keep_state_and_data
 
       {:wake, rest} ->
-        Logger.info(~s|[wake] unlocked by partial: "#{t}"|)
+        Logger.info("[wake] unlocked by partial: #{App.LogText.said(t)}")
         data = unlock(%{data | wake_hit: true})
         if rest != "", do: emit(data, {:partial, rest})
         {:keep_state, data, [relock_action(data)]}
@@ -1313,11 +1313,11 @@ defmodule App.Conversations.Conversation do
   defp confirm_interrupt(t, data) do
     case Backchannel.classify(t) do
       :interrupt ->
-        Logger.info("[turn] ⏹ barge-in confirmed by interrupting speech: #{inspect(t)}")
+        Logger.info("[turn] ⏹ barge-in confirmed by interrupting speech: #{App.LogText.said(t)}")
         barge_in_feed(on_barge_in(%{data | interrupt_pending?: false, ducked?: false}))
 
       :backchannel ->
-        Logger.info("[turn] ~ backchannel (#{inspect(t)}) — continuing")
+        Logger.info("[turn] ~ backchannel (#{App.LogText.said(t)}) — continuing")
         data = unduck(data)
         {:keep_state, data}
 
@@ -1446,7 +1446,7 @@ defmodule App.Conversations.Conversation do
   defp handle_gated_endpoint(t, data) do
     case {WakeWord.match(t, data.config), data.locked} do
       {:none, true} ->
-        Logger.info(~s|[wake] locked drop: "#{t}"|)
+        Logger.info("[wake] locked drop: #{App.LogText.said(t)}")
         {:keep_state, %{data | wake_hit: false}}
 
       {:none, false} ->
@@ -1455,7 +1455,7 @@ defmodule App.Conversations.Conversation do
           # and Ink often clips "sleep" to "Slee.") must still re-lock — not leak to the brain,
           # which would grab it as a request (e.g. a Home Assistant goodnight scene).
           WakeWord.sleep_command?(t, data.config) ->
-            Logger.info(~s|[wake] sleep (awake): "#{t}"|)
+            Logger.info("[wake] sleep (awake): #{App.LogText.said(t)}")
             {:keep_state, lock_now(%{data | wake_hit: false})}
 
           ack_echo?(t, data) ->
@@ -1468,7 +1468,7 @@ defmodule App.Conversations.Conversation do
       {{:wake, rest}, _} ->
         if WakeWord.sleep_command?(rest, data.config) do
           # "Henry sleep" / "Henry lock": go silent, no turn, no unlock flicker.
-          Logger.info(~s|[wake] sleep: "#{t}"|)
+          Logger.info("[wake] sleep: #{App.LogText.said(t)}")
           {:keep_state, lock_now(%{data | wake_hit: false})}
         else
           data = if data.locked, do: unlock(data), else: data
@@ -1537,7 +1537,10 @@ defmodule App.Conversations.Conversation do
             feed({:endpoint, t}, data)
 
           {{:drop, reason}, score} ->
-            Logger.info(~s|[gate] ✗ dropped (#{reason}, score #{inspect(score)}): "#{t}"|)
+            Logger.info(
+              "[gate] ✗ dropped (#{reason}, score #{inspect(score)}): #{App.LogText.said(t)}"
+            )
+
             log_gate(data, "drop", reason, score, speech_ms, t)
             emit(data, {:voice_gate, :drop})
             {:keep_state, cancel_speculative_reflex(data)}
@@ -2159,7 +2162,7 @@ defmodule App.Conversations.Conversation do
   defp brain_input(data), do: data.transcript <> data.brain_note
 
   defp announce_heard(t, data) do
-    Logger.info("[turn] ▶ heard: #{inspect(t)}")
+    Logger.info("[turn] ▶ heard: #{App.LogText.said(t)}")
     emit(data, {:transcript, t})
   end
 
@@ -2256,7 +2259,7 @@ defmodule App.Conversations.Conversation do
         {data, actions}
       end
 
-    Logger.info("[turn] ⌨ typed: #{inspect(text)}")
+    Logger.info("[turn] ⌨ typed: #{App.LogText.said(text)}")
     data = cancel_speculative_reflex(%{data | quiet_turn: true})
     emit(data, {:transcript, text})
     {:keep_state, data, actions} = feed({:endpoint_quiet, text}, data)

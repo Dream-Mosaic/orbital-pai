@@ -475,6 +475,7 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   by repo name (`Board.warm/0` loads the names 10 s after boot) is filtered by Board's `@not_topic`
   stop-list plus minimum word/phrase lengths (`@min_word` 6, `@min_phrase` 4), so common words that
   are also repo names don't open the kit.
+- **Production logs never carry what someone said.** `App.LogText.said/1` logs content verbatim in dev and test and only its length in prod (`log_speech: false`), because prod logs ship to SigNoz, which the Claude dispatch box can read. Any new log line that prints speech, typed text, a calendar/email title, a memory fact or tool arguments goes through it.
 
 ## Testing patterns
 

@@ -136,7 +136,11 @@ defmodule App.Agenda.Heads do
             acc
           else
             delay = max(0, DateTime.diff(nudge.fire_at, now, :millisecond))
-            Logger.info("[heads-up] user #{uid}: #{inspect(nudge.title)} armed in #{delay}ms")
+
+            Logger.info(
+              "[heads-up] user #{uid}: #{App.LogText.said(nudge.title)} armed in #{delay}ms"
+            )
+
             Process.send_after(self(), {:nudge, key, nudge}, delay)
             Map.put(acc, key, nudge.start)
           end
@@ -199,7 +203,7 @@ defmodule App.Agenda.Heads do
 
       not state.listening?.(uid) ->
         Logger.info(
-          "[heads-up] user #{uid}: no device listening, dropped #{inspect(nudge.title)}"
+          "[heads-up] user #{uid}: no device listening, dropped #{App.LogText.said(nudge.title)}"
         )
 
         false
@@ -207,12 +211,15 @@ defmodule App.Agenda.Heads do
       true ->
         case still_on_calendar(uid, key, nudge, now, state) do
           {:ok, current} ->
-            Logger.info("[heads-up] user #{uid}: #{inspect(nudge.title)} → agenda:#{uid}")
+            Logger.info(
+              "[heads-up] user #{uid}: #{App.LogText.said(nudge.title)} → agenda:#{uid}"
+            )
+
             Agenda.deliver(uid, item(%{nudge | location: current.location}, now))
             true
 
           :gone ->
-            Logger.info("[heads-up] user #{uid}: #{inspect(nudge.title)} gone, dropped")
+            Logger.info("[heads-up] user #{uid}: #{App.LogText.said(nudge.title)} gone, dropped")
             false
         end
     end
