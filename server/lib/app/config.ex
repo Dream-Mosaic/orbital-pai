@@ -113,10 +113,13 @@ defmodule App.Config do
             source_ingest_batch: 200,
             # Default weather location: {lat, lon, label}. 62221 / Belleville, IL.
             weather_home: {38.52, -89.98, "Belleville, IL"},
-            # Whether a tool call may target a NAMED household member ("remind Sarah to…",
-            # "add milk to Sarah's list"). Off by default: any allowlisted user could then write
-            # into another's reminders and lists. Was `kiosk_user_switch`, a name left over from
-            # the web wall it was first built for (spec 2026-09-26-web-admin-dashboard-design).
+            # Whether a list or garden tool call may target a NAMED household member ("add milk
+            # to Sarah's list"). Off by default: any allowlisted user could then write into
+            # another's lists. Reminders do NOT check it: "remind Sarah to…" always reaches a
+            # named household member (a nudge for someone else is the point of saying it), and
+            # "us"/"the household" goes to the household when this is on OR the bound device is
+            # a shared wall (App.Conversations.Scope). Was `kiosk_user_switch`, a name left over
+            # from the web wall it was first built for (spec 2026-09-26-web-admin-dashboard-design).
             household_named_targets: false,
             # Voice Lock (speaker verification gate; spec 2026-07-12-voice-lock-design).
             # threshold is PROVISIONAL (spike midpoint 0.4642, rounded) until shadow-mode calibration.
