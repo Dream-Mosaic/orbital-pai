@@ -13,7 +13,8 @@ defmodule App.Cards do
   strip, top tags, recent entries) and `tracker_logged` (log_tracker_entry — its own small
   type, not a flag on `tracker`: one entry, no series); `recipe` (get_recipe, save_recipe,
   edit_recipe) and `cook_step` (get_recipe called with `step` in cook mode: the one step,
-  large, its timers and a glance at the next). Everything else — an unknown tool, an error-
+  large, its timers and a glance at the next); `photo` (look: the capture id and the
+  question, never the image). Everything else — an unknown tool, an error-
   or note-shaped result, an empty one — is `nil`. A malformed result never raises: a card is decoration and must never
   cost the turn, so it logs at debug and returns `nil`.
   """
@@ -54,6 +55,11 @@ defmodule App.Cards do
   end
 
   defp build("get_weather", _args, %{current: %{} = cur} = r, _ctx), do: weather(r, cur)
+
+  # "Henry, look at this": the capture id and the question. Never the image — the app shows
+  # the snapshot it kept for that id, and a "photo not kept" placeholder when it has none.
+  defp build("look", args, %{seen: _, capture_id: id}, _ctx) when is_binary(id),
+    do: %{type: "photo", capture_id: id, caption: App.Tools.Look.question(args)}
 
   defp build("get_calendar_events", args, %{events: [_ | _] = events} = r, ctx),
     do: agenda(args, events, r, ctx)

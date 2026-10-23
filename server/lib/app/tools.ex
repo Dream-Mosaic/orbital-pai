@@ -33,8 +33,9 @@ defmodule App.Tools do
 
   # run_routine only RETURNS the steps (their own write tools are what get recorded);
   # check_household_messages is a read despite check_off being a write — hence no check_ prefix.
+  # look changes nothing: an interrupted "what am I holding?" must look again, not answer blind.
   @read_only ~w(home_status use_toolkit recall_memory check_household_messages run_routine
-                code_board claude_jobs)
+                code_board claude_jobs look)
   @read_prefixes ~w(get_ list_ read_ search_)
 
   @doc """

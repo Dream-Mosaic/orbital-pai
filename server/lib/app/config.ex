@@ -9,6 +9,10 @@ defmodule App.Config do
             model_reflex: "gemini-3.6-flash",
             reflex_thinking: "minimal",
             brain_thinking: "medium",
+            # "Henry, look at this" (App.Tools.Look): one multimodal call per photo. nil = the
+            # brain model. `low`, not `minimal` — 3.7+/3.8 Flash reject `minimal` (400).
+            model_vision: nil,
+            vision_thinking: "low",
             # voice_id: "1fcd23d0-bf12-4896-8f60-4f21ef5c9b98",   # Austin
             # voice_id: "3e39e9a5-585c-4f5f-bac6-5e4905c51095",   # Cole
             # voice_id: "630ed21c-2c5c-41cf-9d82-10a7fd668370",   # Corey
@@ -49,6 +53,7 @@ defmodule App.Config do
             # Enabled tool modules (App.Tools.Tool behaviour).
             tools: [
               App.Tools.Weather,
+              App.Tools.Look,
               App.Tools.Reminders,
               App.Tools.Timers,
               App.Tools.Lists,
