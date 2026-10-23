@@ -34,8 +34,10 @@ class VoiceController extends ChangeNotifier {
     AlarmSound? alarm,
     MonoClock? timerClock,
     BackgroundNotices? notices,
+    bool Function() isWall = _notWall,
   })  : _connection = connection,
         _notices = notices,
+        _kiosk = isWall(),
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer(),
         _spotter = spotter ?? SherpaWakeSpotter(),
@@ -68,7 +70,7 @@ class VoiceController extends ChangeNotifier {
     // never does.
     _connection.openChannel(
       _topic,
-      joinPayload: const {'kiosk': false},
+      joinPayload: _joinPayload(),
       essential: true,
       onChannel: _adoptChannel,
     );
@@ -85,6 +87,57 @@ class VoiceController extends ChangeNotifier {
   }
 
   static const String _topic = 'voice:henry';
+
+  static bool _notWall() => false;
+
+  /// Whether this device joins as a wall (`kiosk: true`), which is what the
+  /// server's wall-first delivery of household reminders and the dashboard's
+  /// "Active now · wall" key on. Read from the constructor's `isWall` — which
+  /// main.dart answers from the device role it loaded before `runApp`, so
+  /// the very first join after a cold start already carries it — and changed
+  /// only by [setDeviceRole].
+  bool _kiosk;
+
+  /// What the server was last told [_kiosk] is: the payload the adopted
+  /// channel joined with, or the last `device_role` push. Lets a join that was
+  /// already on the wire when the role changed be corrected once it lands —
+  /// see [_onJoined].
+  bool? _serverKiosk;
+
+  /// The device id once [_enrichJoinWithDeviceId] has it, so a later payload
+  /// rebuild (a role change) keeps it rather than narrowing the join back to
+  /// a legacy one.
+  String? _resolvedDeviceId;
+
+  /// The `voice:henry` join payload as it stands. `openChannel` REPLACES a
+  /// registered non-empty payload, so every registration must carry all of it.
+  Map<String, dynamic> _joinPayload() => {
+        'kiosk': _kiosk,
+        if (_resolvedDeviceId != null) 'device_id': _resolvedDeviceId,
+      };
+
+  /// The device's role changed (Settings ▸ This device). Re-registers the join
+  /// payload so every later (re)join carries it, and tells the live channel
+  /// now, so the server's Presence updates without a reconnect. A channel
+  /// still joining is reconciled when its join lands ([_onJoined]).
+  void setDeviceRole({required bool kiosk}) {
+    if (_disposed || kiosk == _kiosk) return;
+    _kiosk = kiosk;
+    _connection.openChannel(
+      _topic,
+      joinPayload: _joinPayload(),
+      essential: true,
+      onChannel: _adoptChannel,
+    );
+    _pushDeviceRole();
+  }
+
+  void _pushDeviceRole() {
+    final ch = _live;
+    if (ch == null) return;
+    ch.push('device_role', {'kiosk': _kiosk});
+    _serverKiosk = _kiosk;
+  }
 
   /// Local notifications while the app is backgrounded: every JSON push is
   /// offered to it after the router below has handled it. Null (tests, and
@@ -153,9 +206,10 @@ class VoiceController extends ChangeNotifier {
   Future<void> _enrichJoinWithDeviceId() async {
     final id = await _deviceId.get();
     if (_disposed) return;
+    _resolvedDeviceId = id;
     _connection.openChannel(
       _topic,
-      joinPayload: {'kiosk': false, 'device_id': id},
+      joinPayload: _joinPayload(),
       essential: true,
       onChannel: _adoptChannel,
     );
@@ -814,6 +868,9 @@ class VoiceController extends ChangeNotifier {
   void _adoptChannel(PhoenixChannel ch) {
     if (_disposed || identical(ch, _channel)) return;
     _channel = ch;
+    // A fresh channel is created with the registered payload, which always
+    // carries the current [_kiosk] (every registration builds it).
+    _serverKiosk = _kiosk;
     _wireChannel(ch);
     unawaited(ch.onJoin.then(
       (_) => _onJoined(ch),
@@ -832,6 +889,8 @@ class VoiceController extends ChangeNotifier {
     // announce toggles onto a channel nobody is holding.
     if (_disposed || !identical(ch, _channel)) return;
     _announceToggles();
+    // The role changed while this join was on the wire: its payload is stale.
+    if (_serverKiosk != _kiosk) _pushDeviceRole();
     unawaited(_initPlayer());
     _reArmMic();
   }

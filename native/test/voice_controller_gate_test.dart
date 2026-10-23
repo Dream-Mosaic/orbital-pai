@@ -72,13 +72,14 @@ class _DelayedDeviceIdStore implements DeviceIdStore {
 /// One in-memory Phoenix socket: answers `phx_join` and lets a test read back
 /// what the client sent.
 class FakeSocket {
-  FakeSocket({Duration heartbeat = const Duration(days: 1)}) {
+  FakeSocket({Duration heartbeat = const Duration(days: 1), this.holdJoins}) {
     ctrl.foreign.stream.listen((f) {
       sent.add(f);
       if (f is! String) return;
       final p = jsonDecode(f) as List<dynamic>;
       if (p[3] != 'phx_join') return;
-      scheduleMicrotask(() {
+      final reply = holdJoins ?? Future<void>.value();
+      reply.then((_) {
         if (localClosed) return;
         ctrl.foreign.sink.add(jsonEncode([
           null,
@@ -92,6 +93,9 @@ class FakeSocket {
     socket = PhoenixSocket(ctrl.local, heartbeatInterval: heartbeat);
     socket.start();
   }
+
+  /// When set, every join reply waits for it — a join held on the wire.
+  final Future<void>? holdJoins;
 
   final StreamChannelController<dynamic> ctrl = StreamChannelController<dynamic>();
   final List<dynamic> sent = <dynamic>[];
@@ -124,6 +128,14 @@ class FakeSocket {
     return null;
   }
 
+  /// The payloads of every JSON push of [event], in order.
+  List<Map<String, dynamic>> pushes(String event) => sent
+      .whereType<String>()
+      .map((f) => jsonDecode(f) as List<dynamic>)
+      .where((p) => p[3] == event)
+      .map((p) => (p[4] as Map).cast<String, dynamic>())
+      .toList();
+
   Future<void> kill() => ctrl.foreign.sink.close();
 }
 
@@ -133,6 +145,7 @@ class FakeSocket {
   FakeSpotter? spotter,
   WakeGate? gate,
   DeviceId? deviceId,
+  bool wall = false,
 }) {
   final fake = FakeSocket();
   final mic = FakeMic();
@@ -144,6 +157,7 @@ class FakeSocket {
     spotter: spotter ?? FakeSpotter(),
     gate: gate ?? WakeGate(),
     deviceId: deviceId,
+    isWall: () => wall,
   );
   return (conn: conn, vc: vc, fake: fake, mic: mic);
 }
@@ -677,6 +691,142 @@ void main() {
     expect(payload!.containsKey('device_id'), isFalse,
         reason: 'a legacy join with no device_id is valid and binds normally — the server '
             'treats a nil id as today\'s behaviour, not as broken');
+  });
+
+  group('device role (wall mode)', () {
+    test('a personal device joins kiosk: false, as before wall mode', () async {
+      final b = build(deviceId: DeviceId(store: _FixedDeviceIdStore('phone-1')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'), {'kiosk': false, 'device_id': 'phone-1'});
+    });
+
+    test('a wall joins kiosk: true, with the device id', () async {
+      final b = build(wall: true, deviceId: DeviceId(store: _DelayedDeviceIdStore('wall-1')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'wall-1'});
+    });
+
+    test('a wall says kiosk: true on its very first join, even before the device id', () async {
+      final b = build(wall: true, deviceId: DeviceId(store: _NeverResolvingDeviceIdStore()));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true});
+    });
+
+    test('setDeviceRole pushes device_role on the live channel', () async {
+      final b = build(deviceId: DeviceId(store: _FixedDeviceIdStore('tab-1')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      b.vc.setDeviceRole(kiosk: true);
+      await settle();
+      b.vc.setDeviceRole(kiosk: true); // no change: nothing to say
+      await settle();
+      b.vc.setDeviceRole(kiosk: false);
+      await settle();
+
+      expect(b.fake.pushes('device_role'), [
+        {'kiosk': true},
+        {'kiosk': false},
+      ]);
+    });
+
+    test('a role set before connecting rides the join, with no extra push', () async {
+      final b = build(deviceId: DeviceId(store: _FixedDeviceIdStore('tab-1')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+
+      b.vc.setDeviceRole(kiosk: true);
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'tab-1'});
+      expect(b.fake.pushes('device_role'), isEmpty);
+    });
+
+    test('a role changed while the join is on the wire is pushed once it lands', () async {
+      final hold = Completer<void>();
+      final fake = FakeSocket(holdJoins: hold.future);
+      final conn = AppConnection(connector: () async => fake.socket);
+      final vc = VoiceController(
+        connection: conn,
+        mic: FakeMic(),
+        player: FakePlayer(),
+        spotter: FakeSpotter(),
+        gate: WakeGate(),
+        deviceId: DeviceId(store: _FixedDeviceIdStore('tab-3')),
+      );
+      addTearDown(vc.dispose);
+      addTearDown(conn.dispose);
+      await vc.deviceIdReady;
+
+      final connecting = conn.connect();
+      await settle();
+      expect(fake.joinPayload('voice:henry'), {'kiosk': false, 'device_id': 'tab-3'},
+          reason: 'sanity: the join went out before the role changed');
+
+      vc.setDeviceRole(kiosk: true);
+      await settle();
+      expect(fake.pushes('device_role'), isEmpty, reason: 'not joined yet: nowhere to push');
+
+      hold.complete();
+      await connecting;
+      await settle();
+
+      expect(fake.pushes('device_role'), [
+        {'kiosk': true},
+      ]);
+    });
+
+    test('after setDeviceRole, every rejoin carries the new role and keeps the device id',
+        () async {
+      final sockets = <FakeSocket>[];
+      final conn = AppConnection(
+        connector: () async {
+          final s = FakeSocket();
+          sockets.add(s);
+          return s.socket;
+        },
+        rejoinBackoff: const [Duration(milliseconds: 10)],
+      );
+      final vc = VoiceController(
+        connection: conn,
+        mic: FakeMic(),
+        player: FakePlayer(),
+        spotter: FakeSpotter(),
+        gate: WakeGate(),
+        deviceId: DeviceId(store: _FixedDeviceIdStore('tab-2')),
+      );
+      addTearDown(vc.dispose);
+      addTearDown(conn.dispose);
+      await vc.deviceIdReady;
+      await conn.connect();
+      await settle();
+
+      vc.setDeviceRole(kiosk: true);
+      await conn.rejoin();
+      await settle();
+
+      expect(sockets, hasLength(2));
+      expect(sockets.last.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'tab-2'});
+    });
   });
 
   test('the bound push closes the sink', () async {

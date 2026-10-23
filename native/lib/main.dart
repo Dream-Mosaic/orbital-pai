@@ -191,6 +191,7 @@ class _HenryHomeState extends State<HenryHome> {
     _ownsDevice = widget.device == null;
     _device = widget.device ??
         DeviceController.fixed(const DeviceSettings(role: DeviceRole.personal));
+    _device.addListener(_onDeviceChanged);
     final injected = widget.connection;
     if (injected != null) {
       _buildShell(injected);
@@ -219,6 +220,11 @@ class _HenryHomeState extends State<HenryHome> {
         token ?? '',
         _auth?.handleSocketRejected,
       );
+
+  /// A role change from Settings ▸ This device: the server's Presence hears
+  /// it now (`device_role`), and every later rejoin carries it. The window
+  /// side is [WallModeHost]'s, which listens for itself.
+  void _onDeviceChanged() => _vc?.setDeviceRole(kiosk: _device.isWall);
 
   void _onAuthChanged() {
     final auth = _auth;
@@ -284,7 +290,14 @@ class _HenryHomeState extends State<HenryHome> {
     // construction to build()'s first read, which runs AFTER connect() below
     // — so the controller would adopt an already-joined connection instead of
     // joining alongside it.
-    final vc = VoiceController(connection: conn, notices: notices);
+    // `isWall` is read synchronously in the constructor, so the very first
+    // join already says whether this is a wall: the role was loaded in main()
+    // before runApp, not fetched after the shell connected.
+    final vc = VoiceController(
+      connection: conn,
+      notices: notices,
+      isWall: () => _device.isWall,
+    );
     _vc = vc;
     // Asked once the voice screen is up (and at most once per install — the
     // platform side remembers); a "no" only means no notifications.
@@ -379,6 +392,7 @@ class _HenryHomeState extends State<HenryHome> {
   @override
   void dispose() {
     _teardownShell();
+    _device.removeListener(_onDeviceChanged);
     if (_ownsDevice) _device.dispose();
     if (_ownsAuth) {
       _auth?.dispose();

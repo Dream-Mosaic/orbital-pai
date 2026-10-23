@@ -167,6 +167,24 @@ defmodule AppWeb.VoiceChannel do
     {:reply, :ok, socket}
   end
 
+  # The device's role changed mid-session (native Settings ▸ This device ▸ Wall display): update
+  # this socket's Presence meta, so wall-first reminder delivery and the dashboard's "Active
+  # now" see it without a reconnect. The join payload's `kiosk` covers every later (re)join.
+  # Tracking was queued from join/3 (`{:track_presence, _}`) ahead of any client push, so the
+  # meta exists by the time this runs; a failed update is logged, never a crash.
+  def handle_in("device_role", %{"kiosk" => kiosk?}, socket) when is_boolean(kiosk?) do
+    key = to_string(socket.assigns.user_id)
+
+    case AppWeb.Presence.update(self(), "presence:voice", key, &Map.put(&1, :kiosk, kiosk?)) do
+      {:ok, _ref} -> Logger.info("[voice] device_role kiosk=#{kiosk?}")
+      {:error, reason} -> Logger.warning("[voice] device_role not applied: #{inspect(reason)}")
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_in("device_role", _payload, socket), do: {:noreply, socket}
+
   def handle_in("wake_detected", _payload, socket) do
     Conversation.wake_detected(socket.assigns.conversation)
     {:noreply, socket}

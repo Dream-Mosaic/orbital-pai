@@ -124,6 +124,43 @@ defmodule AppWeb.VoiceChannelTest do
     assert [%{name: _, kiosk: true, online_at: _}] = presences[bob_id][:metas]
   end
 
+  test "device_role updates this socket's presence kiosk flag without a rejoin", %{bob: bob} do
+    {:ok, _reply, socket} = join_voice(bob)
+    bob_id = to_string(bob.id)
+    assert wait_until(fn -> Map.has_key?(AppWeb.Presence.list("presence:voice"), bob_id) end)
+    assert [%{kiosk: false}] = AppWeb.Presence.list("presence:voice")[bob_id][:metas]
+
+    push(socket, "device_role", %{"kiosk" => true})
+
+    assert wait_until(fn ->
+             match?([%{kiosk: true}], AppWeb.Presence.list("presence:voice")[bob_id][:metas])
+           end)
+
+    assert [%{name: _, kiosk: true, online_at: _}] =
+             AppWeb.Presence.list("presence:voice")[bob_id][:metas]
+
+    push(socket, "device_role", %{"kiosk" => false})
+
+    assert wait_until(fn ->
+             match?([%{kiosk: false}], AppWeb.Presence.list("presence:voice")[bob_id][:metas])
+           end)
+  end
+
+  test "a non-boolean device_role is ignored", %{bob: bob} do
+    {:ok, _reply, socket} = join_voice(bob, %{"kiosk" => true})
+    bob_id = to_string(bob.id)
+    assert wait_until(fn -> Map.has_key?(AppWeb.Presence.list("presence:voice"), bob_id) end)
+
+    push(socket, "device_role", %{"kiosk" => "false"})
+    push(socket, "device_role", %{})
+    # A round trip on the same channel orders after both pushes above.
+    ref = push(socket, "ack_reminder", %{"id" => "nope"})
+    assert_reply ref, :error, %{reason: "bad_request"}
+
+    assert Process.alive?(socket.channel_pid)
+    assert [%{kiosk: true}] = AppWeb.Presence.list("presence:voice")[bob_id][:metas]
+  end
+
   test "joining with a live session REBINDS instead of restarting it", %{sid: sid, alice: alice} do
     {:ok, pid} = Sessions.lookup(sid)
 

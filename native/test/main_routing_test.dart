@@ -10,6 +10,7 @@ import 'package:http/testing.dart';
 import 'package:orbital_pai/auth/auth_controller.dart';
 import 'package:orbital_pai/auth/token_store.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/device/device_role.dart';
 import 'package:orbital_pai/main.dart';
 import 'package:orbital_pai/meridian/books_panel.dart';
 import 'package:orbital_pai/meridian/connectors_panel.dart';
@@ -29,6 +30,7 @@ import 'package:orbital_pai/panels/voice_lock_client.dart';
 
 import 'support/fake_browser_session.dart';
 import 'support/fake_socket.dart';
+import 'support/fake_window.dart';
 
 /// The PRODUCTION station wiring — `main.dart`'s `_openPanel` — driven through
 /// a real [HenryHome] on a fake socket.
@@ -596,6 +598,72 @@ void main() {
       expect(find.byType(LoginScreen), findsOneWidget);
       expect(find.byType(MeridianDrawer), findsNothing,
           reason: 'a drawer left on the navigator would cover the login screen');
+    });
+  });
+
+  group('wall mode', () {
+    // Pins the production wiring: the role reaches the FIRST join (main()
+    // loads it before runApp, and _buildShell hands VoiceController a live
+    // reader), and a later change reaches the server as device_role.
+    testWidgets('a wall\'s first join says kiosk: true; a role change is pushed',
+        (tester) async {
+      phone(tester);
+      FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
+      final fake = FakeSocket();
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      final window = FakeWindow();
+
+      await tester.pumpWidget(
+          MaterialApp(home: HenryHome(connection: conn, device: device, window: window)));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      final join = fake.textFrames.firstWhere(
+          (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
+          orElse: () => fail('voice:henry never joined'));
+      expect((join[4] as Map)['kiosk'], isTrue);
+      expect(window.calls, ['keepOn(true)', 'immersive(true)'],
+          reason: 'the voice screen is wrapped in WallModeHost');
+
+      await device.setWall(false);
+      await tester.pump();
+
+      final pushes = fake.textFrames.where((p) => p[3] == 'device_role').toList();
+      expect(pushes.map((p) => p[4]), [
+        {'kiosk': false},
+      ]);
+      expect(window.calls.skip(2), ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('without a device controller the home is a personal device', (tester) async {
+      phone(tester);
+      FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
+      final fake = FakeSocket();
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final window = FakeWindow();
+
+      await tester.pumpWidget(MaterialApp(home: HenryHome(connection: conn, window: window)));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      final join = fake.textFrames.firstWhere(
+          (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
+          orElse: () => fail('voice:henry never joined'));
+      expect((join[4] as Map)['kiosk'], isFalse);
+      expect(window.calls, isEmpty);
+
+      await conn.disconnect();
     });
   });
 

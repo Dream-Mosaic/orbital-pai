@@ -5,26 +5,12 @@ import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/device/device_role.dart';
 import 'package:orbital_pai/device/night_dim.dart';
 import 'package:orbital_pai/device/wall_mode_host.dart';
-import 'package:orbital_pai/device/window_control.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
 
 import '../support/fake_alarm.dart';
+import '../support/fake_window.dart';
 import '../support/fakes.dart';
-
-/// Records every knob turned, in order, as a short string.
-class FakeWindow implements WindowControl {
-  final List<String> calls = [];
-
-  @override
-  Future<void> setKeepScreenOn(bool on) async => calls.add('keepOn($on)');
-
-  @override
-  Future<void> setBrightness(double? level) async => calls.add('brightness($level)');
-
-  @override
-  Future<void> setImmersive(bool on) async => calls.add('immersive($on)');
-}
 
 class _FixedIds implements DeviceIdStore {
   @override
