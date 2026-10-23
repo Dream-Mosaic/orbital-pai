@@ -764,6 +764,28 @@ defmodule App.Conversations.ConversationTest do
     assert line =~ "can't reach my brain"
   end
 
+  test "a batch fallback that comes back BLANK speaks the graceful line, not silence (#32)" do
+    # Prod, 2026-10-22: the stream timed out with no bytes, the batch brain answered 200 with no
+    # text, and the turn ended on the reflex alone. A blank fallback is a failed one.
+    Application.put_env(:app, :fake_brain_error, true)
+    on_exit(fn -> Application.delete_env(:app, :fake_brain_error) end)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, opts ->
+      case Keyword.fetch!(opts, :tier) do
+        :reflex -> {:ok, "huh"}
+        :brain -> {:ok, "  "}
+        _ -> {:ok, ""}
+      end
+    end)
+
+    pid = start_conv()
+    Conversation.endpoint(pid, "q")
+
+    assert_receive {:to_client, {:speak_start, :brain, line}}, 2000
+    assert line =~ "can't reach my brain"
+    assert_receive {:to_client, {:audio, :brain, _}}, 2000
+  end
+
   test "streams brain text deltas to the client mid-turn, never ahead of the reflex" do
     # The caption is gated on reflex_sent exactly like the audio is. Before the
     # gate existed, a slow reflex put the brain's ANSWER on screen before Henry

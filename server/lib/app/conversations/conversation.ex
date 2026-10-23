@@ -794,11 +794,19 @@ defmodule App.Conversations.Conversation do
     end
   end
 
+  # brain_fallback is set, so this is the batch fallback's answer or a canned line. A BLANK one
+  # with nothing heard is a fallback that failed quietly — prod #32: the stream timed out, the
+  # batch brain answered 200 with no text, and the turn ended on the reflex. Say so instead.
   def handle_event(:info, {:brain_done, text}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
-    Logger.info("[turn] brain: #{App.LogText.said(text)}")
-    data = push_or_hold_answer(text, data)
-    feed(:brain_done, clear_brain(%{data | brain_text: text}))
+    if blank?(text) and is_nil(data.ttb) do
+      Logger.warning("[turn] batch fallback produced no answer text — speaking a graceful line")
+      {:keep_state, spawn_canned_brain(@brain_unreachable, clear_brain(data))}
+    else
+      Logger.info("[turn] brain: #{App.LogText.said(text)}")
+      data = push_or_hold_answer(text, data)
+      feed(:brain_done, clear_brain(%{data | brain_text: text}))
+    end
   end
 
   def handle_event(:info, {:brain_error, reason}, _s, %{policy: %{phase: phase}} = data)
@@ -1161,8 +1169,8 @@ defmodule App.Conversations.Conversation do
       case text_model().generate(transcript, ctx, opts) do
         {:ok, text} ->
           # TTS down too — still send the text so the UI shows the answer. A quiet (typed)
-          # turn is text only by design.
-          unless quiet?, do: speak_brain_audio(me, text, cfg)
+          # turn is text only by design. A blank answer has nothing to say (see :brain_done).
+          unless quiet? or blank?(text), do: speak_brain_audio(me, text, cfg)
           send(me, {:brain_done, text})
 
         {:error, _} ->
