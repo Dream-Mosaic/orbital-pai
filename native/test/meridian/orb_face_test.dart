@@ -175,4 +175,44 @@ void main() {
     )));
     await expectLater(find.byKey(const ValueKey('shot')), matchesGoldenFile('goldens/orb_face.png'));
   });
+
+  // On a lit orb (amber listening, Henry speaking or thinking) the glass
+  // glows behind the face, and the weather word and the green next-event line
+  // all but vanished into it. A lit face gives its text a dark halo.
+  group('a lit orb', () {
+    List<Shadow>? shadowsOf(WidgetTester tester, String text) {
+      final rich = tester.widget<RichText>(
+          find.descendant(of: find.text(text), matching: find.byType(RichText)).first);
+      return rich.text.style?.shadows;
+    }
+
+    Widget face({required bool lit}) => host(OrbFace(
+          width: 220,
+          height: 180,
+          lit: lit,
+          clock: () => DateTime(2026, 10, 9, 21, 4),
+          glance: const Glance(
+            weather: GlanceWeather(temp: '64°', condition: 'Clear', icon: ''),
+            next: GlanceEvent(title: 'Dentist', time: '9:00 AM', day: 'Tomorrow'),
+          ),
+        ));
+
+    // The halo's wide, dark shadow; the face's own engraved shadows are not it.
+    bool haloed(List<Shadow>? s) =>
+        (s ?? const []).any((x) => x.blurRadius >= 10 && x.color.a > 0.6);
+
+    testWidgets('haloes the face text', (tester) async {
+      await tester.pumpWidget(face(lit: true));
+      for (final t in ['Clear', '64°', 'Dentist']) {
+        expect(haloed(shadowsOf(tester, t)), isTrue, reason: '"$t" needs a halo');
+      }
+    });
+
+    testWidgets('at rest the face is unchanged', (tester) async {
+      await tester.pumpWidget(face(lit: false));
+      for (final t in ['Clear', '64°', '9:04', 'Dentist']) {
+        expect(haloed(shadowsOf(tester, t)), isFalse);
+      }
+    });
+  });
 }

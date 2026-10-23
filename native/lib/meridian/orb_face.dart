@@ -25,6 +25,7 @@ class OrbFace extends StatefulWidget {
     this.hint = '',
     this.glyph,
     this.dimmed = false,
+    this.lit = false,
     this.clock = DateTime.now,
   });
 
@@ -40,6 +41,11 @@ class OrbFace extends StatefulWidget {
 
   /// Powered off: the face stays, but recedes.
   final bool dimmed;
+
+  /// The orb is glowing behind the face (listening, speaking, thinking).
+  /// The weather word and the green next-event line all but vanished into
+  /// the amber, so a lit face gives its text a dark halo.
+  final bool lit;
 
   /// Injectable for tests.
   final DateTime Function() clock;
@@ -89,8 +95,21 @@ class _OrbFaceState extends State<OrbFace> {
     'DEC' //
   ];
 
+  /// Every face text that doesn't set its own shadows inherits these.
+  static const List<Shadow> _halo = [
+    Shadow(color: Color(0xB3000000), blurRadius: 10),
+    Shadow(color: Color(0x80000000), blurRadius: 2),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    final face = _face(context);
+    return widget.lit
+        ? DefaultTextStyle.merge(style: const TextStyle(shadows: _halo), child: face)
+        : face;
+  }
+
+  Widget _face(BuildContext context) {
     final now = widget.clock();
     final use24 = MediaQuery.maybeAlwaysUse24HourFormatOf(context) ?? false;
     final h = use24 ? now.hour : (now.hour % 12 == 0 ? 12 : now.hour % 12);

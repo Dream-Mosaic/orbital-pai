@@ -13,6 +13,7 @@ import 'nav.dart';
 import 'orb_bezel.dart';
 import 'cards/weather_glyph.dart';
 import 'orb_face.dart';
+import 'orb_state.dart';
 import 'palette.dart';
 import 'thread.dart';
 import 'timer_strip.dart';
@@ -482,6 +483,8 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                     glance: vc.glance,
                     hint: vc.restingHint,
                     dimmed: !vc.micOn,
+                    lit: const {OrbState.listening, OrbState.speaking, OrbState.thinking}
+                        .contains(vc.orbState),
                     glyph: (icon, size, _) => WeatherGlyph(icon, size: size),
                     clock: widget.clock ?? DateTime.now,
                   )
