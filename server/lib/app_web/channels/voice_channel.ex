@@ -66,8 +66,25 @@ defmodule AppWeb.VoiceChannel do
     end
   end
 
-  # The persisted transcript tail, oldest-first, for the client to backfill the log.
-  defp history(session_id) do
+  # The thread to backfill, oldest-first: the persisted tail, then whatever the session holds
+  # that the DB doesn't yet (the turn in flight, a request an interruption carried forward).
+  # Without the second half, an app reopened while the brain was stuck showed nothing of what
+  # was said after the hang (#32). Read in this order, a turn that lands in between is missed
+  # (the accepted persist race below) rather than shown twice.
+  defp history(socket) do
+    saved_history(socket.assigns.session_id) ++ unsaved_history(socket.assigns.conversation)
+  end
+
+  defp unsaved_history(conversation) do
+    at = DateTime.to_iso8601(DateTime.utc_now())
+    for turn <- Conversation.unsaved_turns(conversation), do: Map.put(turn, :at, at)
+  catch
+    # a busy or exiting session must not take the channel's backfill down with it
+    :exit, _reason -> []
+  end
+
+  # The persisted transcript tail, oldest-first.
+  defp saved_history(session_id) do
     case App.Users.id_from_session(session_id) do
       nil ->
         []
@@ -210,7 +227,7 @@ defmodule AppWeb.VoiceChannel do
   # ---- outbound: session -> browser ----
   @impl true
   def handle_info(:after_join, socket) do
-    push(socket, "history", %{turns: history(socket.assigns.session_id)})
+    push(socket, "history", %{turns: history(socket)})
     # Timers are per USER, not per conversation: every device of the user watches them
     # directly (no Conversation involvement). Subscribe BEFORE reading, so a change landing
     # in between still re-pushes.
@@ -337,7 +354,7 @@ defmodule AppWeb.VoiceChannel do
   # previous turn's end can miss that last turn.)
   def handle_info({:to_client, {:bound, true}}, socket) do
     push(socket, "bound", %{bound: true})
-    push(socket, "history", %{turns: history(socket.assigns.session_id), replace: true})
+    push(socket, "history", %{turns: history(socket), replace: true})
     {:noreply, socket}
   end
 

@@ -194,6 +194,12 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   effect). Tunables: `@interrupt_window_ms`, `interrupt_words?` (in `Conversation`). An interrupted
   turn is **persisted if already answered, else carried forward** (`pending_request`) so the brain
   answers both — don't regress that. The `eager_end` reflex head-start is gated `App.Config :eager_reflex`.
+- **The `history` push is the DB tail PLUS the session's unsaved turns** (`Conversation.unsaved_turns/1`:
+  the turn in flight, a carried-forward request, an interrupted answer awaiting its `played`
+  report). A turn persists only when it ends, so a DB-only history given to an app reopened
+  during a stuck brain showed nothing said after the hang (#32). DB first, then the call: a turn
+  landing in between is missed, never doubled. A **blank batch-fallback answer** speaks
+  `@brain_unreachable` like a failed one; it used to end the turn silently on the reflex.
 - **Calendar fan-out:** refresh tokens **sequentially** (`ensure_fresh`) before the parallel fetch —
   concurrent refresh contends for SQLite's single writer (busy_timeout waits up to 5s) and blows the
   7s fan-out timeout, so "one of N accounts always errors, rotating". Account names match
