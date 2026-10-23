@@ -119,6 +119,16 @@ class SettingsPanelView extends StatelessWidget {
           ),
           if (device.isWall) ...[
             const SizedBox(height: 8),
+            // Phase 4: on by default for a wall; a personal device never
+            // shows it, because it is never shared.
+            _toggle(
+              key: const ValueKey('toggle-shared'),
+              label: 'Shared household device',
+              subtitle: 'Reminders said here go to the household; email stays off',
+              value: device.isShared,
+              onChanged: device.setShared,
+            ),
+            const SizedBox(height: 8),
             _toggle(
               key: const ValueKey('toggle-dim_at_night'),
               label: 'Dim at night (10 PM \u2013 7 AM)',

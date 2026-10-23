@@ -31,7 +31,8 @@ DeviceRole defaultRoleFor(Size logicalSize) =>
 /// This device's settings, as stored in `device.json`.
 @immutable
 class DeviceSettings {
-  const DeviceSettings({required this.role, this.dimAtNight = true});
+  const DeviceSettings({required this.role, this.dimAtNight = true, bool shared = true})
+      : _shared = shared;
 
   final DeviceRole role;
 
@@ -40,17 +41,32 @@ class DeviceSettings {
   /// restores the last choice.
   final bool dimAtNight;
 
-  DeviceSettings copyWith({DeviceRole? role, bool? dimAtNight}) => DeviceSettings(
+  /// The "Shared household device" switch as last set, whatever the role:
+  /// stored on a personal device for the same reason [dimAtNight] is. Read
+  /// [shared], never this, for what the device IS.
+  final bool _shared;
+
+  /// Whether this device speaks for the household (spec 2026-10-23, wall
+  /// tablet, phase 4): while the conversation is bound to it, "remind me"
+  /// lands on the household, email is off, and the header says HOUSEHOLD.
+  /// On by default for a wall. ALWAYS false on a personal device, whatever
+  /// was stored — someone's own phone must never report itself shared.
+  bool get shared => role == DeviceRole.wall && _shared;
+
+  DeviceSettings copyWith({DeviceRole? role, bool? dimAtNight, bool? shared}) => DeviceSettings(
         role: role ?? this.role,
         dimAtNight: dimAtNight ?? this.dimAtNight,
+        shared: shared ?? _shared,
       );
 
-  Map<String, Object?> toJson() => {'role': role.name, 'dim_at_night': dimAtNight};
+  Map<String, Object?> toJson() =>
+      {'role': role.name, 'dim_at_night': dimAtNight, 'shared': _shared};
 
   /// Tolerant by design: a missing or unknown `role` falls back to
-  /// [fallbackRole] and a missing or non-bool `dim_at_night` to true, so a
-  /// file written by an older or newer build never costs the device its
-  /// defaults.
+  /// [fallbackRole], and a missing or non-bool `dim_at_night` or `shared` to
+  /// true, so a file written by an older or newer build never costs the
+  /// device its defaults — a phase-1 wall, whose file has no `shared`, comes
+  /// up shared.
   factory DeviceSettings.fromJson(Map<String, Object?> json, {required DeviceRole fallbackRole}) {
     final rawRole = json['role'];
     final role = DeviceRole.values.firstWhere(
@@ -58,18 +74,27 @@ class DeviceSettings {
       orElse: () => fallbackRole,
     );
     final dim = json['dim_at_night'];
-    return DeviceSettings(role: role, dimAtNight: dim is bool ? dim : true);
+    final shared = json['shared'];
+    return DeviceSettings(
+      role: role,
+      dimAtNight: dim is bool ? dim : true,
+      shared: shared is bool ? shared : true,
+    );
   }
 
   @override
   bool operator ==(Object other) =>
-      other is DeviceSettings && other.role == role && other.dimAtNight == dimAtNight;
+      other is DeviceSettings &&
+      other.role == role &&
+      other.dimAtNight == dimAtNight &&
+      other._shared == _shared;
 
   @override
-  int get hashCode => Object.hash(role, dimAtNight);
+  int get hashCode => Object.hash(role, dimAtNight, _shared);
 
   @override
-  String toString() => 'DeviceSettings(role: ${role.name}, dimAtNight: $dimAtNight)';
+  String toString() =>
+      'DeviceSettings(role: ${role.name}, dimAtNight: $dimAtNight, shared: $_shared)';
 }
 
 /// Where [DeviceSettings] persist. A seam so the controller is testable
@@ -176,10 +201,16 @@ class DeviceController extends ChangeNotifier {
   DeviceSettings get settings => _settings;
   bool get isWall => _settings.role == DeviceRole.wall;
 
+  /// A wall marked "Shared household device" — see [DeviceSettings.shared].
+  /// False on every personal device.
+  bool get isShared => _settings.shared;
+
   Future<void> setWall(bool wall) =>
       _update(_settings.copyWith(role: wall ? DeviceRole.wall : DeviceRole.personal));
 
   Future<void> setDimAtNight(bool on) => _update(_settings.copyWith(dimAtNight: on));
+
+  Future<void> setShared(bool on) => _update(_settings.copyWith(shared: on));
 
   /// Applies first and persists second, so the screen answers the switch at
   /// once; a failed write is logged and costs only the next launch's memory

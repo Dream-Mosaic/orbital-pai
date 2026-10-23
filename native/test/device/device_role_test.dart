@@ -44,6 +44,48 @@ void main() {
       expect(DeviceSettings.fromJson(s.toJson(), fallbackRole: DeviceRole.personal), s);
     });
 
+    test('round-trips the shared choice', () {
+      const s = DeviceSettings(role: DeviceRole.wall, shared: false);
+      final back = DeviceSettings.fromJson(s.toJson(), fallbackRole: DeviceRole.personal);
+      expect(back, s);
+      expect(back.shared, isFalse);
+    });
+
+    test('a device.json from before shared existed: a wall is shared', () {
+      // Phase 1 wrote only role and dim_at_night.
+      final wall = DeviceSettings.fromJson(const {'role': 'wall', 'dim_at_night': false},
+          fallbackRole: DeviceRole.personal);
+      expect(wall.shared, isTrue, reason: 'shared is on by default for a wall');
+      expect(wall.dimAtNight, isFalse);
+
+      final phone = DeviceSettings.fromJson(const {'role': 'personal'},
+          fallbackRole: DeviceRole.wall);
+      expect(phone.shared, isFalse);
+    });
+
+    test('a personal device is never shared, whatever was stored', () {
+      final s = DeviceSettings.fromJson(const {'role': 'personal', 'shared': true},
+          fallbackRole: DeviceRole.wall);
+      expect(s.shared, isFalse);
+      expect(const DeviceSettings(role: DeviceRole.personal, shared: true).shared, isFalse);
+    });
+
+    test('a personal device keeps the stored choice, so going back to wall restores it', () {
+      const wall = DeviceSettings(role: DeviceRole.wall, shared: false);
+      final personal = wall.copyWith(role: DeviceRole.personal);
+      expect(personal.toJson()['shared'], isFalse, reason: 'stored as chosen');
+      expect(personal.copyWith(role: DeviceRole.wall).shared, isFalse);
+
+      final reread = DeviceSettings.fromJson(personal.toJson(), fallbackRole: DeviceRole.wall);
+      expect(reread.copyWith(role: DeviceRole.wall).shared, isFalse);
+    });
+
+    test('a non-bool shared falls back to on', () {
+      final s = DeviceSettings.fromJson(const {'role': 'wall', 'shared': 'yes'},
+          fallbackRole: DeviceRole.personal);
+      expect(s.shared, isTrue);
+    });
+
     test('unknown or missing keys fall back to defaults', () {
       final s = DeviceSettings.fromJson(const {'role': 'toaster', 'dim_at_night': 'yes'},
           fallbackRole: DeviceRole.wall);
@@ -51,7 +93,8 @@ void main() {
       expect(s.dimAtNight, isTrue);
 
       final empty = DeviceSettings.fromJson(const {}, fallbackRole: DeviceRole.personal);
-      expect(empty, const DeviceSettings(role: DeviceRole.personal, dimAtNight: true));
+      expect(empty,
+          const DeviceSettings(role: DeviceRole.personal, dimAtNight: true, shared: true));
     });
   });
 
@@ -107,7 +150,7 @@ void main() {
 
       expect(c.isWall, isTrue);
       expect(notified, 1);
-      expect(store.stored, {'role': 'wall', 'dim_at_night': true});
+      expect(store.stored, {'role': 'wall', 'dim_at_night': true, 'shared': true});
 
       // And a reload reads it back.
       final again = await DeviceController.load(store: store, logicalSize: _phone);
@@ -124,7 +167,50 @@ void main() {
 
       expect(c.settings.dimAtNight, isFalse);
       expect(notified, 1);
-      expect(store.stored, {'role': 'wall', 'dim_at_night': false});
+      expect(store.stored, {'role': 'wall', 'dim_at_night': false, 'shared': true});
+    });
+
+    test('a wall is shared by default; a phone never is', () async {
+      final wall =
+          await DeviceController.load(store: MemoryDeviceStore(), logicalSize: _lenovoPortrait);
+      expect(wall.isShared, isTrue);
+
+      final phone = await DeviceController.load(store: MemoryDeviceStore(), logicalSize: _phone);
+      expect(phone.isShared, isFalse);
+
+      final old = await DeviceController.load(
+          store: MemoryDeviceStore({'role': 'wall', 'dim_at_night': true}), logicalSize: _phone);
+      expect(old.isShared, isTrue, reason: 'a phase-1 device.json, without the key');
+    });
+
+    test('setShared persists and notifies', () async {
+      final store = MemoryDeviceStore();
+      final c = await DeviceController.load(store: store, logicalSize: _lenovoPortrait);
+      var notified = 0;
+      c.addListener(() => notified++);
+
+      await c.setShared(false);
+
+      expect(c.isShared, isFalse);
+      expect(notified, 1);
+      expect(store.stored, {'role': 'wall', 'dim_at_night': true, 'shared': false});
+
+      final again = await DeviceController.load(store: store, logicalSize: _phone);
+      expect(again.isShared, isFalse);
+    });
+
+    test('a personal device never reports shared, even when told to be', () async {
+      final store = MemoryDeviceStore({'role': 'personal', 'shared': true});
+      final c = await DeviceController.load(store: store, logicalSize: _lenovoPortrait);
+      expect(c.isShared, isFalse, reason: 'the stored value says shared; the role says no');
+
+      await c.setShared(true);
+      expect(c.isShared, isFalse);
+
+      await c.setWall(true);
+      expect(c.isShared, isTrue, reason: 'a wall again: the stored choice comes back');
+      await c.setWall(false);
+      expect(c.isShared, isFalse);
     });
 
     test('a no-op change neither notifies nor writes', () async {
@@ -135,6 +221,7 @@ void main() {
 
       await c.setWall(true);
       await c.setDimAtNight(true);
+      await c.setShared(true);
 
       expect(notified, 0);
       expect(store.writes, 0);

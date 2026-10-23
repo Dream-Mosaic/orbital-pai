@@ -288,6 +288,54 @@ void main() {
     expect(find.text('HENRY'), findsOneWidget);
   });
 
+  group('the header on a shared household device', () {
+    Future<VoiceController> mount(WidgetTester tester,
+        {required bool wall, required bool shared}) async {
+      phone(tester);
+      final vc = VoiceController(
+        connection: conn,
+        mic: FakeMic(),
+        player: FakePlayer(),
+        isWall: () => wall,
+        isShared: () => shared,
+      );
+      addTearDown(vc.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: MeridianVoiceScreen(controller: vc, connection: conn, userName: 'David'),
+      ));
+      return vc;
+    }
+
+    testWidgets('a shared wall says HOUSEHOLD in place of the user', (tester) async {
+      await mount(tester, wall: true, shared: true);
+      expect(find.text('HOUSEHOLD'), findsOneWidget);
+      expect(find.text('DAVID'), findsNothing);
+    });
+
+    testWidgets('a wall that is not shared still names the user', (tester) async {
+      await mount(tester, wall: true, shared: false);
+      expect(find.text('DAVID'), findsOneWidget);
+      expect(find.text('HOUSEHOLD'), findsNothing);
+    });
+
+    testWidgets('a personal device is never the household', (tester) async {
+      await mount(tester, wall: false, shared: true);
+      expect(find.text('DAVID'), findsOneWidget);
+      expect(find.text('HOUSEHOLD'), findsNothing);
+    });
+
+    testWidgets('a role change re-labels the header at once', (tester) async {
+      final vc = await mount(tester, wall: true, shared: true);
+      vc.setDeviceRole(kiosk: true, shared: false);
+      await tester.pump();
+      expect(find.text('DAVID'), findsOneWidget);
+
+      vc.setDeviceRole(kiosk: true, shared: true);
+      await tester.pump();
+      expect(find.text('HOUSEHOLD'), findsOneWidget);
+    });
+  });
+
   testWidgets('the header dot reflects the CONNECTION, not the conversation',
       (tester) async {
     phone(tester);

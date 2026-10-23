@@ -627,6 +627,7 @@ void main() {
           (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
           orElse: () => fail('voice:henry never joined'));
       expect((join[4] as Map)['kiosk'], isTrue);
+      expect((join[4] as Map)['shared'], isTrue, reason: 'a wall is shared by default');
       expect(window.calls, ['keepOn(true)', 'immersive(true)'],
           reason: 'the voice screen is wrapped in WallModeHost');
 
@@ -635,12 +636,60 @@ void main() {
 
       final pushes = fake.textFrames.where((p) => p[3] == 'device_role').toList();
       expect(pushes.map((p) => p[4]), [
-        {'kiosk': false},
+        {'kiosk': false, 'shared': false},
       ]);
       expect(window.calls.skip(2), ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
 
       // A wall powers its mic on after joining; there is no recorder plugin
       // here, so let the real MicCapture's bounded permission check run out.
+      await tester.pump(const Duration(minutes: 1, seconds: 1));
+      await conn.disconnect();
+    });
+
+    // Phase 4: the shared switch reaches the first join, the server
+    // (device_role) and the header, all from the one DeviceController.
+    testWidgets('a shared wall joins shared and says HOUSEHOLD; unsharing is pushed',
+        (tester) async {
+      phone(tester);
+      FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
+      final fake = FakeSocket();
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+
+      await tester.pumpWidget(MaterialApp(
+          home: HenryHome(connection: conn, device: device, window: FakeWindow())));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      final join = fake.textFrames.firstWhere(
+          (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
+          orElse: () => fail('voice:henry never joined'));
+      expect(join[4], containsPair('shared', true));
+      expect(find.text('HOUSEHOLD'), findsOneWidget);
+      expect(find.text('DAVID'), findsNothing);
+
+      await device.setShared(false);
+      await tester.pump();
+
+      expect(fake.textFrames.where((p) => p[3] == 'device_role').map((p) => p[4]), [
+        {'kiosk': true, 'shared': false},
+      ]);
+      expect(find.text('DAVID'), findsOneWidget);
+      expect(find.text('HOUSEHOLD'), findsNothing);
+
+      await device.setShared(true);
+      await tester.pump();
+
+      expect(fake.textFrames.where((p) => p[3] == 'device_role').map((p) => p[4]), [
+        {'kiosk': true, 'shared': false},
+        {'kiosk': true, 'shared': true},
+      ]);
+      expect(find.text('HOUSEHOLD'), findsOneWidget);
+
       await tester.pump(const Duration(minutes: 1, seconds: 1));
       await conn.disconnect();
     });
@@ -676,6 +725,7 @@ void main() {
           (p) => p[3] == 'phx_join' && p[2] == 'voice:henry',
           orElse: () => fail('voice:henry never joined'));
       expect((join[4] as Map)['kiosk'], isFalse);
+      expect((join[4] as Map)['shared'], isFalse);
       expect(window.calls, isEmpty);
 
       await conn.disconnect();

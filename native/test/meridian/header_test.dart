@@ -4,7 +4,8 @@ import 'package:orbital_pai/meridian/header.dart';
 import 'package:orbital_pai/meridian/tokens.dart';
 
 void main() {
-  Widget host(ConnStatus status, {bool reduceMotion = false}) => MaterialApp(
+  Widget host(ConnStatus status, {bool reduceMotion = false, bool household = false}) =>
+      MaterialApp(
         home: MediaQuery(
           data: MediaQueryData(disableAnimations: reduceMotion),
           child: Scaffold(
@@ -13,6 +14,7 @@ void main() {
               status: status,
               version: '0.1.0',
               userName: 'David',
+              household: household,
             ),
           ),
         ),
@@ -23,6 +25,19 @@ void main() {
     expect(find.text('HENRY'), findsOneWidget);
     expect(find.text('P.A.I V0.1.0'), findsOneWidget);
     expect(find.text('DAVID'), findsOneWidget);
+    expect(find.text('HOUSEHOLD'), findsNothing);
+  });
+
+  testWidgets('a shared household device names the household, not the user',
+      (tester) async {
+    await tester.pumpWidget(host(ConnStatus.connected, household: true));
+    expect(find.text('HOUSEHOLD'), findsOneWidget);
+    expect(find.text('DAVID'), findsNothing);
+    expect(find.text('P.A.I V0.1.0'), findsOneWidget, reason: 'the rest is unchanged');
+
+    final style = tester.widget<Text>(find.text('HOUSEHOLD')).style!;
+    expect(style, tester.widget<Text>(find.text('P.A.I V0.1.0')).style,
+        reason: 'the same meta line, only the words differ');
   });
 
   testWidgets('the wordmark carries the 0.42em tracking', (tester) async {

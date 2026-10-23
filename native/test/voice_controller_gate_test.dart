@@ -146,6 +146,7 @@ class FakeSocket {
   WakeGate? gate,
   DeviceId? deviceId,
   bool wall = false,
+  bool shared = false,
 }) {
   final fake = FakeSocket();
   final mic = FakeMic();
@@ -158,6 +159,7 @@ class FakeSocket {
     gate: gate ?? WakeGate(),
     deviceId: deviceId,
     isWall: () => wall,
+    isShared: () => shared,
   );
   return (conn: conn, vc: vc, fake: fake, mic: mic);
 }
@@ -702,7 +704,8 @@ void main() {
       await b.conn.connect();
       await settle();
 
-      expect(b.fake.joinPayload('voice:henry'), {'kiosk': false, 'device_id': 'phone-1'});
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': false, 'shared': false, 'device_id': 'phone-1'});
     });
 
     test('a wall joins kiosk: true, with the device id', () async {
@@ -713,7 +716,8 @@ void main() {
       await b.conn.connect();
       await settle();
 
-      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'wall-1'});
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': true, 'shared': false, 'device_id': 'wall-1'});
     });
 
     test('a wall says kiosk: true on its very first join, even before the device id', () async {
@@ -723,7 +727,7 @@ void main() {
       await b.conn.connect();
       await settle();
 
-      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true});
+      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true, 'shared': false});
     });
 
     test('setDeviceRole pushes device_role on the live channel', () async {
@@ -734,16 +738,16 @@ void main() {
       await b.conn.connect();
       await settle();
 
-      b.vc.setDeviceRole(kiosk: true);
+      b.vc.setDeviceRole(kiosk: true, shared: false);
       await settle();
-      b.vc.setDeviceRole(kiosk: true); // no change: nothing to say
+      b.vc.setDeviceRole(kiosk: true, shared: false); // no change: nothing to say
       await settle();
-      b.vc.setDeviceRole(kiosk: false);
+      b.vc.setDeviceRole(kiosk: false, shared: false);
       await settle();
 
       expect(b.fake.pushes('device_role'), [
-        {'kiosk': true},
-        {'kiosk': false},
+        {'kiosk': true, 'shared': false},
+        {'kiosk': false, 'shared': false},
       ]);
     });
 
@@ -753,11 +757,12 @@ void main() {
       addTearDown(b.conn.dispose);
       await b.vc.deviceIdReady;
 
-      b.vc.setDeviceRole(kiosk: true);
+      b.vc.setDeviceRole(kiosk: true, shared: true);
       await b.conn.connect();
       await settle();
 
-      expect(b.fake.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'tab-1'});
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': true, 'shared': true, 'device_id': 'tab-1'});
       expect(b.fake.pushes('device_role'), isEmpty);
     });
 
@@ -779,10 +784,11 @@ void main() {
 
       final connecting = conn.connect();
       await settle();
-      expect(fake.joinPayload('voice:henry'), {'kiosk': false, 'device_id': 'tab-3'},
+      expect(fake.joinPayload('voice:henry'),
+          {'kiosk': false, 'shared': false, 'device_id': 'tab-3'},
           reason: 'sanity: the join went out before the role changed');
 
-      vc.setDeviceRole(kiosk: true);
+      vc.setDeviceRole(kiosk: true, shared: true);
       await settle();
       expect(fake.pushes('device_role'), isEmpty, reason: 'not joined yet: nowhere to push');
 
@@ -791,7 +797,7 @@ void main() {
       await settle();
 
       expect(fake.pushes('device_role'), [
-        {'kiosk': true},
+        {'kiosk': true, 'shared': true},
       ]);
     });
 
@@ -820,12 +826,95 @@ void main() {
       await conn.connect();
       await settle();
 
-      vc.setDeviceRole(kiosk: true);
+      vc.setDeviceRole(kiosk: true, shared: true);
       await conn.rejoin();
       await settle();
 
       expect(sockets, hasLength(2));
-      expect(sockets.last.joinPayload('voice:henry'), {'kiosk': true, 'device_id': 'tab-2'});
+      expect(sockets.last.joinPayload('voice:henry'),
+          {'kiosk': true, 'shared': true, 'device_id': 'tab-2'});
+    });
+
+    test('a shared wall joins shared: true', () async {
+      final b = build(
+          wall: true, shared: true, deviceId: DeviceId(store: _FixedDeviceIdStore('wall-2')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': true, 'shared': true, 'device_id': 'wall-2'});
+      expect(b.vc.household, isTrue);
+    });
+
+    test('a personal device never joins shared, even if asked to', () async {
+      // DeviceSettings already answers false off a wall; this is the wire's
+      // own guarantee, for a caller that reads the stored switch directly.
+      final b = build(shared: true, deviceId: DeviceId(store: _FixedDeviceIdStore('phone-2')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': false, 'shared': false, 'device_id': 'phone-2'});
+      expect(b.vc.household, isFalse);
+
+      b.vc.setDeviceRole(kiosk: false, shared: true);
+      await settle();
+      expect(b.fake.pushes('device_role'), isEmpty,
+          reason: 'still personal, still not shared: nothing changed for the server');
+    });
+
+    test('toggling shared on a wall pushes device_role with both keys, and notifies',
+        () async {
+      final b = build(
+          wall: true, shared: true, deviceId: DeviceId(store: _FixedDeviceIdStore('wall-3')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+      var notified = 0;
+      b.vc.addListener(() => notified++);
+
+      b.vc.setDeviceRole(kiosk: true, shared: false);
+      await settle();
+      expect(b.vc.household, isFalse);
+      expect(notified, greaterThan(0), reason: 'the header reads household');
+
+      b.vc.setDeviceRole(kiosk: true, shared: true);
+      await settle();
+      expect(b.vc.household, isTrue);
+
+      expect(b.fake.pushes('device_role'), [
+        {'kiosk': true, 'shared': false},
+        {'kiosk': true, 'shared': true},
+      ]);
+      expect(b.fake.joinPayload('voice:henry'),
+          {'kiosk': true, 'shared': true, 'device_id': 'wall-3'},
+          reason: 'sanity: the join itself said shared');
+    });
+
+    test('a shared wall becoming personal says shared: false with it', () async {
+      final b = build(
+          wall: true, shared: true, deviceId: DeviceId(store: _FixedDeviceIdStore('wall-4')));
+      addTearDown(b.vc.dispose);
+      addTearDown(b.conn.dispose);
+      await b.vc.deviceIdReady;
+      await b.conn.connect();
+      await settle();
+
+      // What main.dart sends: DeviceController.isShared is false off a wall.
+      b.vc.setDeviceRole(kiosk: false, shared: false);
+      await settle();
+
+      expect(b.fake.pushes('device_role'), [
+        {'kiosk': false, 'shared': false},
+      ]);
     });
   });
 

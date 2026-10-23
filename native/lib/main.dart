@@ -225,10 +225,12 @@ class _HenryHomeState extends State<HenryHome> {
         _auth?.handleSocketRejected,
       );
 
-  /// A role change from Settings ▸ This device: the server's Presence hears
-  /// it now (`device_role`), and every later rejoin carries it. The window
-  /// side is [WallModeHost]'s, which listens for itself.
-  void _onDeviceChanged() => _vc?.setDeviceRole(kiosk: _device.isWall);
+  /// A role change from Settings ▸ This device (the wall switch or the shared
+  /// one): the server hears it now (`device_role`), and every later rejoin
+  /// carries it. The window side is [WallModeHost]'s, which listens for
+  /// itself.
+  void _onDeviceChanged() =>
+      _vc?.setDeviceRole(kiosk: _device.isWall, shared: _device.isShared);
 
   void _onAuthChanged() {
     final auth = _auth;
@@ -294,13 +296,15 @@ class _HenryHomeState extends State<HenryHome> {
     // construction to build()'s first read, which runs AFTER connect() below
     // — so the controller would adopt an already-joined connection instead of
     // joining alongside it.
-    // `isWall` is read synchronously in the constructor, so the very first
-    // join already says whether this is a wall: the role was loaded in main()
-    // before runApp, not fetched after the shell connected.
+    // `isWall` and `isShared` are read synchronously in the constructor, so
+    // the very first join already says whether this is a (shared) wall: the
+    // role was loaded in main() before runApp, not fetched after the shell
+    // connected.
     final vc = VoiceController(
       connection: conn,
       notices: notices,
       isWall: () => _device.isWall,
+      isShared: () => _device.isShared,
     );
     _vc = vc;
     // Asked once the voice screen is up (and at most once per install — the

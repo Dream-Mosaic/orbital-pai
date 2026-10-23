@@ -138,6 +138,8 @@ void main() {
       expect(tester.widget<Switch>(find.byKey(const ValueKey('toggle-wall'))).value, isFalse);
       expect(find.byKey(const ValueKey('toggle-dim_at_night')), findsNothing,
           reason: 'dim at night only means something on a wall');
+      expect(find.byKey(const ValueKey('toggle-shared')), findsNothing,
+          reason: 'a personal device is never shared');
 
       await conn.disconnect();
     });
@@ -174,6 +176,63 @@ void main() {
       expect(
           tester.widget<Switch>(find.byKey(const ValueKey('toggle-dim_at_night'))).value,
           isFalse);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('a wall shows the shared switch, on by default, with its copy',
+        (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      await pumpPanel(tester, client, device: device);
+
+      expect(find.text('Shared household device'), findsOneWidget);
+      expect(find.text('Reminders said here go to the household; email stays off'),
+          findsOneWidget);
+      expect(tester.widget<Switch>(find.byKey(const ValueKey('toggle-shared'))).value, isTrue);
+      expect(tester.getTopLeft(find.text('Shared household device')).dy,
+          greaterThan(tester.getTopLeft(find.text('Wall display')).dy),
+          reason: 'under Wall display');
+
+      await conn.disconnect();
+    });
+
+    testWidgets('the shared switch calls setShared, and stays device-local', (tester) async {
+      final (client, conn, fake) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      await pumpPanel(tester, client, device: device);
+      final sentBefore = fake.sent.length;
+
+      await tester.tap(find.byKey(const ValueKey('toggle-shared')));
+      await tester.pump();
+
+      expect(device.isShared, isFalse);
+      expect(tester.widget<Switch>(find.byKey(const ValueKey('toggle-shared'))).value, isFalse);
+      expect(fake.sent.length, sentBefore,
+          reason: 'a device setting: nothing goes to panel:settings');
+
+      await tester.tap(find.byKey(const ValueKey('toggle-shared')));
+      await tester.pump();
+      expect(device.isShared, isTrue);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('the shared switch comes and goes with the wall switch', (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.personal));
+      await pumpPanel(tester, client, device: device);
+      expect(find.byKey(const ValueKey('toggle-shared')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('toggle-wall')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('toggle-shared')), findsOneWidget);
+      expect(tester.widget<Switch>(find.byKey(const ValueKey('toggle-shared'))).value, isTrue,
+          reason: 'shared is on by default for a wall');
+
+      await tester.tap(find.byKey(const ValueKey('toggle-wall')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('toggle-shared')), findsNothing);
 
       await conn.disconnect();
     });

@@ -1142,12 +1142,34 @@ void main() {
     await settle();
     expect(b.vc.pttEnabled, isTrue);
 
-    b.vc.setDeviceRole(kiosk: true);
+    b.vc.setDeviceRole(kiosk: true, shared: true);
     await settle();
 
     expect(b.vc.pttEnabled, isFalse);
     expect(pushesOf(fake, 'ptt').last['enabled'], isFalse,
         reason: 'through the real mode switch, so the STT socket leaves manual');
+  });
+
+  test('switching a wall to or from shared leaves push-to-talk alone', () async {
+    // Only BECOMING a wall leaves PTT. A wall someone put in PTT by hand
+    // (the detent) keeps it when the shared switch flips.
+    final fake = FakeSocket(joinPushes: const [defaultsOff]);
+    final b = build(connector: () async => fake.socket, wall: true);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    b.vc.setPtt(true);
+    await settle();
+    expect(b.vc.pttEnabled, isTrue, reason: 'sanity: PTT by hand');
+
+    b.vc.setDeviceRole(kiosk: true, shared: true);
+    await settle();
+    b.vc.setDeviceRole(kiosk: true, shared: false);
+    await settle();
+
+    expect(b.vc.pttEnabled, isTrue);
   });
 
   test('applying a stored PTT default does not start the microphone', () async {
@@ -1229,7 +1251,7 @@ void main() {
     await settle();
     expect(mic.startCalls, 0);
 
-    b.vc.setDeviceRole(kiosk: true);
+    b.vc.setDeviceRole(kiosk: true, shared: true);
     await settle();
 
     expect(b.vc.micOn, isTrue);

@@ -35,9 +35,11 @@ class VoiceController extends ChangeNotifier {
     MonoClock? timerClock,
     BackgroundNotices? notices,
     bool Function() isWall = _notWall,
+    bool Function() isShared = _notShared,
   })  : _connection = connection,
         _notices = notices,
         _kiosk = isWall(),
+        _shared = isShared(),
         _mic = mic ?? MicCapture(),
         _player = player ?? AudioTrackPlayer(),
         _spotter = spotter ?? SherpaWakeSpotter(),
@@ -89,6 +91,7 @@ class VoiceController extends ChangeNotifier {
   static const String _topic = 'voice:henry';
 
   static bool _notWall() => false;
+  static bool _notShared() => false;
 
   /// Whether this device joins as a wall (`kiosk: true`), which is what the
   /// server's wall-first delivery of household reminders and the dashboard's
@@ -98,11 +101,28 @@ class VoiceController extends ChangeNotifier {
   /// only by [setDeviceRole].
   bool _kiosk;
 
-  /// What the server was last told [_kiosk] is: the payload the adopted
+  /// The "Shared household device" switch, read like [_kiosk] (the
+  /// constructor's `isShared`, then [setDeviceRole]). Only ever means
+  /// anything on a wall: read [household], never this.
+  bool _shared;
+
+  /// Whether this device speaks for the household (spec 2026-10-23, wall
+  /// tablet, phase 4): a wall marked shared. It is what the join and every
+  /// `device_role` push say as `shared` — while the conversation is bound
+  /// here the server puts "remind me" on the household and withholds email —
+  /// and what the header shows in place of the user's name. False on any
+  /// device that is not a wall, whatever it was told: a personal device must
+  /// never report itself shared.
+  bool get household => _kiosk && _shared;
+
+  /// The role as the server sees it, both keys together.
+  ({bool kiosk, bool shared}) get _role => (kiosk: _kiosk, shared: household);
+
+  /// What the server was last told [_role] is: the payload the adopted
   /// channel joined with, or the last `device_role` push. Lets a join that was
   /// already on the wire when the role changed be corrected once it lands —
   /// see [_onJoined].
-  bool? _serverKiosk;
+  ({bool kiosk, bool shared})? _serverRole;
 
   /// The device id once [_enrichJoinWithDeviceId] has it, so a later payload
   /// rebuild (a role change) keeps it rather than narrowing the join back to
@@ -113,19 +133,27 @@ class VoiceController extends ChangeNotifier {
   /// registered non-empty payload, so every registration must carry all of it.
   Map<String, dynamic> _joinPayload() => {
         'kiosk': _kiosk,
+        'shared': household,
         if (_resolvedDeviceId != null) 'device_id': _resolvedDeviceId,
       };
 
-  /// The device's role changed (Settings ▸ This device). Re-registers the join
-  /// payload so every later (re)join carries it, and tells the live channel
-  /// now, so the server's Presence updates without a reconnect. A channel
-  /// still joining is reconciled when its join lands ([_onJoined]).
-  void setDeviceRole({required bool kiosk}) {
-    if (_disposed || kiosk == _kiosk) return;
+  /// The device's role changed (Settings ▸ This device): the wall switch, the
+  /// shared switch, or both. Re-registers the join payload so every later
+  /// (re)join carries it, and tells the live channel now, so the server's
+  /// Presence and the conversation's scope update without a reconnect. A
+  /// channel still joining is reconciled when its join lands ([_onJoined]).
+  void setDeviceRole({required bool kiosk, required bool shared}) {
+    if (_disposed) return;
+    final was = _role;
+    final becameWall = kiosk && !_kiosk;
     _kiosk = kiosk;
+    _shared = shared;
+    if (_role == was) return;
     // Becoming a wall leaves push-to-talk, for the reason in
-    // [_applyStoredDefaults]: a wall in PTT cannot hear its wake word.
-    if (kiosk && _pttEnabled) _applyPtt(false, startMicIfOff: false);
+    // [_applyStoredDefaults]: a wall in PTT cannot hear its wake word. Only
+    // becoming one: a wall someone put in PTT by hand keeps it when the
+    // shared switch flips.
+    if (becameWall && _pttEnabled) _applyPtt(false, startMicIfOff: false);
     _startWallMic();
     _connection.openChannel(
       _topic,
@@ -134,13 +162,16 @@ class VoiceController extends ChangeNotifier {
       onChannel: _adoptChannel,
     );
     _pushDeviceRole();
+    // The header reads [household].
+    _safeNotify();
   }
 
   void _pushDeviceRole() {
     final ch = _live;
     if (ch == null) return;
-    ch.push('device_role', {'kiosk': _kiosk});
-    _serverKiosk = _kiosk;
+    final role = _role;
+    ch.push('device_role', {'kiosk': role.kiosk, 'shared': role.shared});
+    _serverRole = role;
   }
 
   /// Local notifications while the app is backgrounded: every JSON push is
@@ -877,8 +908,8 @@ class VoiceController extends ChangeNotifier {
     if (_disposed || identical(ch, _channel)) return;
     _channel = ch;
     // A fresh channel is created with the registered payload, which always
-    // carries the current [_kiosk] (every registration builds it).
-    _serverKiosk = _kiosk;
+    // carries the current [_role] (every registration builds it).
+    _serverRole = _role;
     _wireChannel(ch);
     unawaited(ch.onJoin.then(
       (_) => _onJoined(ch),
@@ -898,7 +929,7 @@ class VoiceController extends ChangeNotifier {
     if (_disposed || !identical(ch, _channel)) return;
     _announceToggles();
     // The role changed while this join was on the wire: its payload is stale.
-    if (_serverKiosk != _kiosk) _pushDeviceRole();
+    if (_serverRole != _role) _pushDeviceRole();
     unawaited(_initPlayer());
     _reArmMic();
     _startWallMic();

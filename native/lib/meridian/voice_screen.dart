@@ -366,6 +366,10 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         status: widget.connection.connStatus,
         version: widget.appVersion,
         userName: widget.userName,
+        // From the controller, not the device settings: the header names the
+        // household exactly when the join says `shared`, so the two can never
+        // disagree.
+        household: widget.controller.household,
       );
 
   Widget _timers(VoiceController vc, Color glow, {bool railed = true}) =>

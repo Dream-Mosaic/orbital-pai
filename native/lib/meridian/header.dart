@@ -11,12 +11,21 @@ class MeridianHeader extends StatelessWidget {
     required this.status,
     required this.version,
     required this.userName,
+    this.household = false,
   });
 
   final String assistantName;
   final ConnStatus status;
   final String version;
   final String userName;
+
+  /// A shared household wall (spec 2026-10-23, wall tablet, phase 4): the
+  /// meta block names [householdLabel] instead of [userName], because anyone
+  /// in the house may be the one talking, and what they ask for lands on the
+  /// household.
+  final bool household;
+
+  static const String householdLabel = 'Household';
 
   static const double _wordmarkSize = 15.2; // 0.95rem
   static const double _metaSize = 8.32; // 0.52rem
@@ -53,7 +62,7 @@ class MeridianHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text('P.A.I V${version.toUpperCase()}', style: meta),
-              Text(userName.toUpperCase(), style: meta),
+              Text((household ? householdLabel : userName).toUpperCase(), style: meta),
             ],
           ),
         ],
