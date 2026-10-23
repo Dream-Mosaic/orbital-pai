@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../meridian/orb_state.dart';
@@ -16,6 +17,13 @@ import 'window_control.dart';
 /// [kDimAfterRest], the window brightness drops to [kDimBrightness] and a
 /// black overlay fades the UI. A touch, a wake, a turn, a ringing timer or
 /// anything Henry says brings it back at once.
+///
+/// Touches are seen through a GLOBAL pointer route, not a `Listener` around
+/// [child]: the drawers (Settings, Books, …) are routes on the app's
+/// navigator, outside this subtree, and a `Listener` here never hears a tap
+/// in them — so a wall would dim under someone using Settings at night. A
+/// global route observes every pointer event without taking part in hit
+/// testing, so it can never swallow one either.
 ///
 /// Leaving wall mode (or this widget leaving the tree, e.g. a sign-out)
 /// restores all of it: the screen-on flag cleared, the bars back, the
@@ -72,6 +80,7 @@ class _WallModeHostState extends State<WallModeHost> {
     _lastOrb = widget.vc.orbState;
     widget.device.addListener(_onDevice);
     widget.vc.addListener(_onVc);
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onPointer);
     _applyRole();
     _syncTicker();
   }
@@ -95,6 +104,7 @@ class _WallModeHostState extends State<WallModeHost> {
   void dispose() {
     _ticker?.cancel();
     _ticker = null;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
     widget.device.removeListener(_onDevice);
     widget.vc.removeListener(_onVc);
     // Hand the window back: nothing outside this widget owns it, and a login
@@ -160,6 +170,10 @@ class _WallModeHostState extends State<WallModeHost> {
     _evaluate();
   }
 
+  void _onPointer(PointerEvent event) {
+    if (event is PointerDownEvent) _activity();
+  }
+
   void _activity() {
     _lastActivity = _now();
     if (_dimmed) _setDimmed(false);
@@ -181,29 +195,26 @@ class _WallModeHostState extends State<WallModeHost> {
     unawaited(widget.window.setBrightness(dimmed ? kDimBrightness : null));
   }
 
+  /// The overlay covers the voice screen; an open drawer sits above it (its
+  /// own route) and is dimmed by the window brightness alone. IgnorePointer,
+  /// so the touch that wakes a dimmed wall still reaches the UI.
   @override
-  Widget build(BuildContext context) => Listener(
-        // Translucent: the touch that wakes a dimmed wall still reaches the
-        // UI, and an undimmed one is never swallowed.
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (_) => _activity(),
-        child: Stack(
-          // Passthrough, so the voice screen lays out against exactly the
-          // constraints it had before this widget wrapped it.
-          fit: StackFit.passthrough,
-          children: [
-            widget.child,
-            Positioned.fill(
-              child: IgnorePointer(
-                child: AnimatedOpacity(
-                  key: WallModeHost.overlayKey,
-                  opacity: _dimmed ? 1 : 0,
-                  duration: _dimmed ? WallModeHost.dimFade : WallModeHost.wakeFade,
-                  child: ColoredBox(color: Colors.black.withValues(alpha: kDimOverlayAlpha)),
-                ),
+  Widget build(BuildContext context) => Stack(
+        // Passthrough, so the voice screen lays out against exactly the
+        // constraints it had before this widget wrapped it.
+        fit: StackFit.passthrough,
+        children: [
+          widget.child,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                key: WallModeHost.overlayKey,
+                opacity: _dimmed ? 1 : 0,
+                duration: _dimmed ? WallModeHost.dimFade : WallModeHost.wakeFade,
+                child: ColoredBox(color: Colors.black.withValues(alpha: kDimOverlayAlpha)),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       );
 }

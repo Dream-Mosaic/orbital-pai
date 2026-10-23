@@ -185,6 +185,31 @@ void main() {
     expect(overlayOpacity(tester), 0);
   });
 
+  testWidgets('a touch in a drawer (a route above the host) undims too', (tester) async {
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(
+      navigatorKey: navKey,
+      home: WallModeHost(
+        device: DeviceController.fixed(_wall),
+        vc: buildVc(),
+        window: window,
+        clock: () => now,
+        child: const Scaffold(body: SizedBox.expand()),
+      ),
+    ));
+    navKey.currentState!.push(MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Center(child: Text('settings'))),
+    ));
+    await tester.pumpAndSettle();
+    await advance(tester, const Duration(seconds: 60));
+    expect(window.calls.last, 'brightness($kDimBrightness)', reason: 'sanity: dimmed');
+
+    await tester.tap(find.text('settings'));
+    await tester.pump();
+
+    expect(window.calls.last, 'brightness(null)');
+  });
+
   testWidgets('a touch on an undimmed wall still reaches the UI', (tester) async {
     var taps = 0;
     await tester.pumpWidget(MaterialApp(
