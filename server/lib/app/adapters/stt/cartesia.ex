@@ -17,14 +17,22 @@ defmodule App.Adapters.Stt.Cartesia do
   No keepalive: unlike Deepgram, Ink has no KeepAlive message. An idle socket clean-closes
   (Ink's ~3-min idle timeout); that stops this process `:normal` and the Conversation
   reconnects on the next mic frame — so an idle PTT gap is recovered, not fatal.
+
+  Frames pushed before the upgrade completes are HELD and sent in order once the socket is
+  up (bounded by `:pending_max_bytes`, oldest dropped first). The reconnect after an idle
+  close is started by the very frame that carries the wake pre-roll and the user's first
+  words; dropping frames until ready clipped the front of every utterance spoken after
+  ~3 minutes of quiet ("Henry, what do I have…" heard as "have…").
   """
 
   @behaviour App.Adapters.Stt
   use GenServer
   require Logger
 
-  @host "api.cartesia.ai"
-  @port 443
+  @url "https://api.cartesia.ai"
+
+  # 8 s of 16 kHz PCM16: far past a cold connect, small enough to never matter.
+  @pending_seconds 8
 
   @typedoc "Router accumulator: {committed final segments (manual), latest interim}."
   @type acc :: {[String.t()], String.t()}
@@ -42,10 +50,14 @@ defmodule App.Adapters.Stt.Cartesia do
   # ---- GenServer ----
   @impl GenServer
   def init(opts) do
+    sample_rate = Keyword.get(opts, :sample_rate, 16_000)
+
     state = %{
       owner: Keyword.fetch!(opts, :owner),
       mode: Keyword.get(opts, :mode, :auto),
-      sample_rate: Keyword.get(opts, :sample_rate, 16_000),
+      # the test seam: a local fake Ink speaks plain http/ws
+      url: Keyword.get(opts, :url, @url),
+      sample_rate: sample_rate,
       model: Keyword.get(opts, :model, "ink-2"),
       version: Keyword.get(opts, :version, "2026-06-24"),
       conn: nil,
@@ -54,7 +66,11 @@ defmodule App.Adapters.Stt.Cartesia do
       status: nil,
       resp_headers: nil,
       # router accumulator: {committed segments, latest interim}
-      acc: {[], ""}
+      acc: {[], ""},
+      # frames pushed before the upgrade completed, oldest first
+      pending: :queue.new(),
+      pending_bytes: 0,
+      pending_max_bytes: Keyword.get(opts, :pending_max_bytes, sample_rate * 2 * @pending_seconds)
     }
 
     {:ok, state, {:continue, :connect}}
@@ -76,14 +92,18 @@ defmodule App.Adapters.Stt.Cartesia do
       {"Cartesia-Version", state.version}
     ]
 
-    with {:ok, conn} <- Mint.HTTP.connect(:https, @host, @port, protocols: [:http1]),
-         {:ok, conn, ref} <- Mint.WebSocket.upgrade(:wss, conn, path, headers) do
+    uri = URI.parse(state.url)
+    {http, ws} = if uri.scheme == "http", do: {:http, :ws}, else: {:https, :wss}
+
+    with {:ok, conn} <- Mint.HTTP.connect(http, uri.host, uri.port, protocols: [:http1]),
+         {:ok, conn, ref} <- Mint.WebSocket.upgrade(ws, conn, path, headers) do
       {:ok, %{state | conn: conn, request_ref: ref}}
     end
   end
 
   @impl GenServer
-  def handle_cast({:push, _pcm}, %{websocket: nil} = state), do: {:noreply, state}
+  def handle_cast({:push, pcm}, %{websocket: nil} = state),
+    do: {:noreply, hold(state, {:binary, pcm})}
 
   def handle_cast({:push, pcm}, state) do
     case send_frame(state, {:binary, pcm}) do
@@ -93,6 +113,10 @@ defmodule App.Adapters.Stt.Cartesia do
   end
 
   # PTT release: only the manual socket honors a finalize (bare-text command). No-op on auto.
+  # A release during the connect is held behind the audio it ends.
+  def handle_cast(:finalize, %{websocket: nil, mode: :manual} = state),
+    do: {:noreply, hold(state, {:text, "finalize"})}
+
   def handle_cast(:finalize, %{websocket: nil} = state), do: {:noreply, state}
 
   def handle_cast(:finalize, %{mode: :manual} = state) do
@@ -108,7 +132,9 @@ defmodule App.Adapters.Stt.Cartesia do
   def handle_info(message, state) do
     case Mint.WebSocket.stream(state.conn, message) do
       {:ok, conn, responses} ->
-        {:noreply, Enum.reduce(responses, %{state | conn: conn}, &handle_response/2)}
+        responses
+        |> Enum.reduce(%{state | conn: conn}, &handle_response/2)
+        |> flush_pending()
 
       # a clean close (session teardown / idle) is expected — stop normally so it doesn't
       # log a crash report or (being linked) take the Conversation down.
@@ -168,6 +194,52 @@ defmodule App.Adapters.Stt.Cartesia do
   end
 
   defp handle_frame(_frame, state), do: state
+
+  # ---- frames held during the connect ----
+  defp hold(state, frame) do
+    trim(%{
+      state
+      | pending: :queue.in(frame, state.pending),
+        pending_bytes: state.pending_bytes + frame_bytes(frame)
+    })
+  end
+
+  defp trim(%{pending_bytes: bytes, pending_max_bytes: max} = state) when bytes <= max,
+    do: state
+
+  defp trim(state) do
+    {{:value, frame}, rest} = :queue.out(state.pending)
+    trim(%{state | pending: rest, pending_bytes: state.pending_bytes - frame_bytes(frame)})
+  end
+
+  defp frame_bytes({:binary, pcm}), do: byte_size(pcm)
+  defp frame_bytes(_text), do: 0
+
+  defp flush_pending(%{websocket: nil} = state), do: {:noreply, state}
+
+  defp flush_pending(state) do
+    case :queue.len(state.pending) do
+      0 ->
+        {:noreply, state}
+
+      n ->
+        Logger.info("[stt] socket up; sending #{n} frames held during the connect")
+        send_pending(state)
+    end
+  end
+
+  defp send_pending(state) do
+    case :queue.out(state.pending) do
+      {:empty, _} ->
+        {:noreply, %{state | pending_bytes: 0}}
+
+      {{:value, frame}, rest} ->
+        case send_frame(%{state | pending: rest}, frame) do
+          {:ok, state} -> send_pending(state)
+          {:error, state, reason} -> {:stop, {:send_failed, reason}, state}
+        end
+    end
+  end
 
   defp send_frame(state, frame) do
     with {:ok, websocket, data} <- Mint.WebSocket.encode(state.websocket, frame),

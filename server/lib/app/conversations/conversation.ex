@@ -350,7 +350,7 @@ defmodule App.Conversations.Conversation do
   defp stop_stt(data), do: data
 
   # Forward a mic frame to the STT, lazily (re)connecting if it has dropped. No-op without
-  # a session. Frames during the brief reconnect are dropped by the adapter until ready.
+  # a session. Frames during the brief reconnect are held by the adapter and sent once ready.
   defp push_to_stt(_pcm, %{session_id: nil} = data), do: data
 
   defp push_to_stt(pcm, %{stt_pid: nil} = data) do
