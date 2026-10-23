@@ -161,6 +161,64 @@ defmodule AppWeb.VoiceChannelTest do
     assert [%{kiosk: true}] = AppWeb.Presence.list("presence:voice")[bob_id][:metas]
   end
 
+  # Phase 4 (shared household device): the join payload and the device_role push both carry an
+  # optional `shared`, forwarded to the Conversation, which publishes the BOUND device's scope.
+  describe "shared household device" do
+    alias App.Conversations.{Conversation, Scope}
+
+    test "a join with shared: true makes the session household", %{bob: bob} do
+      {:ok, _reply, _socket} =
+        join_voice(bob, %{"device_id" => "wall", "kiosk" => true, "shared" => true})
+
+      assert wait_until(fn -> Scope.current(to_string(bob.id)) == :household end)
+    end
+
+    test "an older client that never sends shared is personal", %{bob: bob} do
+      {:ok, _reply, socket} = join_voice(bob, %{"device_id" => "wall", "kiosk" => true})
+      sid = to_string(bob.id)
+
+      # a round trip through the session orders after the join's casts
+      {:ok, pid} = Sessions.lookup(sid)
+      Conversation.snapshot(pid)
+      assert Scope.current(sid) == :personal
+
+      # and a role push without `shared` keeps it personal
+      push(socket, "device_role", %{"kiosk" => true})
+      ref = push(socket, "ack_reminder", %{"id" => "nope"})
+      assert_reply ref, :error, %{reason: "bad_request"}
+      Conversation.snapshot(pid)
+      assert Scope.current(sid) == :personal
+    end
+
+    test "device_role carries shared to the session without a rejoin", %{bob: bob} do
+      {:ok, _reply, socket} = join_voice(bob, %{"device_id" => "wall", "kiosk" => true})
+      sid = to_string(bob.id)
+
+      push(socket, "device_role", %{"kiosk" => true, "shared" => true})
+      assert wait_until(fn -> Scope.current(sid) == :household end)
+
+      push(socket, "device_role", %{"kiosk" => true, "shared" => false})
+      assert wait_until(fn -> Scope.current(sid) == :personal end)
+    end
+
+    test "the user's phone claiming from the shared wall is personal", %{bob: bob} do
+      {:ok, _reply, _wall} =
+        join_voice(bob, %{"device_id" => "wall", "kiosk" => true, "shared" => true})
+
+      sid = to_string(bob.id)
+      assert wait_until(fn -> Scope.current(sid) == :household end)
+
+      {:ok, _reply, phone} = join_voice(bob, %{"device_id" => "phone"})
+      # standby: the wall still holds the conversation
+      assert_push "state", %{bound: false}, 500
+      assert Scope.current(sid) == :household
+
+      push(phone, "wake_detected", %{})
+      assert_push "bound", %{bound: true}, 500
+      assert wait_until(fn -> Scope.current(sid) == :personal end)
+    end
+  end
+
   test "joining with a live session REBINDS instead of restarting it", %{sid: sid, alice: alice} do
     {:ok, pid} = Sessions.lookup(sid)
 

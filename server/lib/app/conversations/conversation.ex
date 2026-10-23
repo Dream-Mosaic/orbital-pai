@@ -14,7 +14,7 @@ defmodule App.Conversations.Conversation do
   """
   @behaviour :gen_statem
 
-  alias App.Conversations.{Backchannel, Policy, WakeWord}
+  alias App.Conversations.{Backchannel, Policy, Scope, WakeWord}
   alias App.Agenda.Item
   alias App.Config
   require Logger
@@ -70,6 +70,16 @@ defmodule App.Conversations.Conversation do
 
   @doc "The bound channel died. Arms the linger stop ONLY if `from` is still the bound client."
   def client_disconnected(pid, from), do: :gen_statem.cast(pid, {:client_disconnected, from})
+
+  @doc """
+  The calling channel's device role: `%{kiosk: boolean, shared: boolean}` (a missing `shared`
+  is false, so an older client is personal). Sent on join and whenever the device's settings
+  change. Whenever the BOUND channel or its role changes, the Conversation publishes the bound
+  device's scope (`App.Conversations.Scope`): `:household` iff that device is shared.
+  """
+  def device_role(pid, role) when is_map(role),
+    do: :gen_statem.cast(pid, {:device_role, self(), role})
+
   def ptt_press(pid), do: :gen_statem.cast(pid, {:ptt_press, self()})
 
   @doc """
@@ -168,6 +178,12 @@ defmodule App.Conversations.Conversation do
       # device's id would stay bound and that device would steal the conversation back on its
       # next reconnect. Pruned of dead channels on every join, the only thing that grows it.
       device_ids: %{},
+      # every channel pid that declared a device role -> %{kiosk, shared} (monitored, so a
+      # channel that dies without a clean disconnect is dropped). Only the BOUND channel's role
+      # counts: see publish_scope/1.
+      device_roles: %{},
+      # the scope last published to the Registry (App.Conversations.Scope); logged on change.
+      scope: :personal,
       session_id: session_id,
       stt_mod: stt_mod,
       stt_pid: stt_pid,
@@ -527,16 +543,25 @@ defmodule App.Conversations.Conversation do
   def handle_event({:call, from}, :unsaved_turns, _s, data),
     do: {:keep_state_and_data, [{:reply, from, unsaved_turns_of(data)}]}
 
+  # A channel declared (or changed) its device role. It counts only while that channel is the
+  # bound one; a standby device's role waits for its claim (rebind/3 publishes).
+  def handle_event(:cast, {:device_role, from, role}, _s, data) when is_map(role) do
+    {:keep_state, data |> remember_role(from, role) |> publish_scope()}
+  end
+
   # Only the CURRENTLY bound channel arms the linger — a stale channel (another device took
   # over via a join or a claim) terminating must not schedule the death of a session in use.
+  # Its role goes with it either way, so a lingering session is never left household.
   def handle_event(:cast, {:client_disconnected, from}, _s, %{client: from} = data) do
     Logger.info("[conn] client gone — lingering #{linger_ms()}ms for a rebind")
+    data = data |> forget_role(from) |> publish_scope()
     # Nobody holds the conversation while it lingers; a watcher should see that.
     mirror(data, {:bound_device, nil})
     {:keep_state, data, [{{:timeout, :client_linger}, linger_ms(), :expire}]}
   end
 
-  def handle_event(:cast, {:client_disconnected, _from}, _s, data), do: {:keep_state, data}
+  def handle_event(:cast, {:client_disconnected, from}, _s, data),
+    do: {:keep_state, forget_role(data, from)}
 
   # Another device of this user is still JOINED (standby): stopping now would take its channel
   # down with us (it monitors this process) and leave it offline until its backoff reconnects.
@@ -971,6 +996,18 @@ defmodule App.Conversations.Conversation do
 
   def handle_event(:info, {:DOWN, ref, :process, _pid, _reason}, _s, %{updater_ref: ref} = data),
     do: {:keep_state, %{data | updater_ref: nil}}
+
+  # A channel that declared a role died — normally its terminate already sent
+  # client_disconnected, but a killed channel never runs terminate. Without this a bound shared
+  # wall killed outright would leave the session household until something rebinds.
+  def handle_event(
+        :info,
+        {:DOWN, _ref, :process, pid, _reason},
+        _s,
+        %{device_roles: roles} = data
+      )
+      when is_map_key(roles, pid),
+      do: {:keep_state, data |> forget_role(pid) |> publish_scope()}
 
   # ---- stale / unknown ----
   def handle_event(:info, {ref, _result}, _s, data) when is_reference(ref),
@@ -1970,7 +2007,8 @@ defmodule App.Conversations.Conversation do
     if live?(client) and client != from, do: send(client, {:to_client, {:bound, false}})
     data = %{data | client: from, device_id: device_id || data.device_id}
     mirror(data, {:bound_device, data.device_id})
-    data
+    # every join-bind and every claim lands here: the scope follows the device now holding it
+    publish_scope(data)
   end
 
   # A claim is at least as strong a signal of a live client as a join is, so it cancels the
@@ -2003,6 +2041,46 @@ defmodule App.Conversations.Conversation do
       |> Map.put(from, device_id)
 
     %{data | device_ids: ids}
+  end
+
+  # A role is kept per channel pid (monitored once, on its first role) so a standby device's
+  # role is already known when it claims. Anything but a literal `true` is false.
+  defp remember_role(data, from, role) do
+    unless is_map_key(data.device_roles, from), do: Process.monitor(from)
+    role = %{kiosk: Map.get(role, :kiosk) == true, shared: Map.get(role, :shared) == true}
+    %{data | device_roles: Map.put(data.device_roles, from, role)}
+  end
+
+  defp forget_role(data, from), do: %{data | device_roles: Map.delete(data.device_roles, from)}
+
+  # ---- scope (spec 2026-10-23-wall-tablet-design, phase 4) ----
+
+  # Publish the BOUND device's scope as this process's Registry value, where
+  # App.Conversations.Scope.current/1 reads it — never "any joined device", or a shared wall
+  # would make the same user's phone household too (review finding C1). Written and logged
+  # only on a change; the Registry lets only its owner write, which is this process.
+  defp publish_scope(data) do
+    case scope_of(data) do
+      same when same == data.scope ->
+        data
+
+      scope ->
+        Scope.publish(data.session_id, scope)
+
+        Logger.info(
+          if scope == :household,
+            do: "[scope] household (bound device is shared)",
+            else: "[scope] personal"
+        )
+
+        %{data | scope: scope}
+    end
+  end
+
+  defp scope_of(%{client: client, device_roles: roles}) do
+    if live?(client) and match?(%{shared: true}, Map.get(roles, client)),
+      do: :household,
+      else: :personal
   end
 
   defp live?(pid), do: is_pid(pid) and Process.alive?(pid)

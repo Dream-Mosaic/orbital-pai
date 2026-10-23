@@ -4,10 +4,12 @@ defmodule AppWeb.VoiceChannel do
 
   - **Join** resolves the user's *live* session (the linger keeps it alive across a reload/
     reconnect — conversation state is preserved), or starts a fresh one if none exists; a
-    start/lookup race resolves to the winner. It then always casts `Conversation.join/2`
-    with this channel's `device_id`, and the FSM decides whether this channel becomes the
-    bound one or joins **standby** (connected and fed state, but not the audio owner, until
-    it claims by speaking). Either way the channel gets a `state` snapshot carrying `bound`.
+    start/lookup race resolves to the winner. It then casts the device's role
+    (`Conversation.device_role/2`: `kiosk`, and `shared` for a shared household device) and
+    always `Conversation.join/2` with this channel's `device_id`, and the FSM decides whether
+    this channel becomes the bound one or joins **standby** (connected and fed state, but not
+    the audio owner, until it claims by speaking). Either way the channel gets a `state`
+    snapshot carrying `bound`.
   - **Inbound:** binary mic frames (`"audio"`) → `Conversation.push_audio`.
   - **Outbound:** the Conversation sends `{:to_client, msg}` to this channel; each is
     relayed to the browser as a JSON event (`speak_start` / `metrics` / `transcript` /
@@ -31,6 +33,10 @@ defmodule AppWeb.VoiceChannel do
 
     case resolve_session(session_id) do
       {:ok, pid} ->
+        # The role goes FIRST: if this join binds, the Conversation already knows the device is
+        # shared, so a wall's reconnect lands straight in household scope instead of flipping
+        # through personal for the instant between the two casts.
+        Conversation.device_role(pid, device_role(payload))
         Conversation.join(pid, payload["device_id"])
         Process.monitor(pid)
         send(self(), :after_join)
@@ -167,16 +173,20 @@ defmodule AppWeb.VoiceChannel do
     {:reply, :ok, socket}
   end
 
-  # The device's role changed mid-session (native Settings ▸ This device ▸ Wall display): update
-  # this socket's Presence meta, so wall-first reminder delivery and the dashboard's "Active
-  # now" see it without a reconnect. The join payload's `kiosk` covers every later (re)join.
-  # Tracking was queued from join/3 (`{:track_presence, _}`) ahead of any client push, so the
-  # meta exists by the time this runs; a failed update is logged, never a crash.
-  def handle_in("device_role", %{"kiosk" => kiosk?}, socket) when is_boolean(kiosk?) do
+  # The device's role changed mid-session (native Settings ▸ This device ▸ Wall display / Shared
+  # household device): update this socket's Presence meta, so wall-first reminder delivery and
+  # the dashboard's "Active now" see it without a reconnect, and hand the role to the
+  # Conversation, which re-publishes the scope if this is the bound device. The join payload's
+  # `kiosk`/`shared` cover every later (re)join. Tracking was queued from join/3
+  # (`{:track_presence, _}`) ahead of any client push, so the meta exists by the time this
+  # runs; a failed update is logged, never a crash.
+  def handle_in("device_role", %{"kiosk" => kiosk?} = payload, socket) when is_boolean(kiosk?) do
     key = to_string(socket.assigns.user_id)
+    role = device_role(payload)
+    Conversation.device_role(socket.assigns.conversation, role)
 
     case AppWeb.Presence.update(self(), "presence:voice", key, &Map.put(&1, :kiosk, kiosk?)) do
-      {:ok, _ref} -> Logger.info("[voice] device_role kiosk=#{kiosk?}")
+      {:ok, _ref} -> Logger.info("[voice] device_role kiosk=#{kiosk?} shared=#{role.shared}")
       {:error, reason} -> Logger.warning("[voice] device_role not applied: #{inspect(reason)}")
     end
 
@@ -472,6 +482,11 @@ defmodule AppWeb.VoiceChannel do
       user -> %{default_abi: user.default_abi, default_ptt: user.default_ptt}
     end
   end
+
+  # The device's role from a join payload or a device_role push. `shared` is optional: a client
+  # too old to send it (or anything but a literal true) is a personal device.
+  defp device_role(payload),
+    do: %{kiosk: payload["kiosk"] == true, shared: payload["shared"] == true}
 
   # remaining_ms is computed at push time, so each device anchors its countdown to its own
   # clock (no server/device skew).
