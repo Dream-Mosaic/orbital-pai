@@ -29,10 +29,44 @@ Size? firstViewLogicalSize() {
   return view.physicalSize / view.devicePixelRatio;
 }
 
-/// Applies [allowedOrientations] to the first view. Call once, after the
-/// binding is initialized. Desktop platforms ignore the request.
-Future<void> applyOrientationLock() {
-  final size = firstViewLogicalSize();
-  if (size == null) return Future.value();
-  return SystemChrome.setPreferredOrientations(allowedOrientations(size));
+/// The display the first view is on, in logical pixels, or null.
+Size? firstDisplayLogicalSize() {
+  final views = PlatformDispatcher.instance.views;
+  if (views.isEmpty) return null;
+  final display = views.first.display;
+  return display.size / display.devicePixelRatio;
+}
+
+/// The first view's size once the platform has actually reported one.
+///
+/// On Android the view has no metrics yet when `main()` runs: its size reads
+/// 0x0, which [allowedOrientations] and the device role's default both take
+/// for a phone. The Lenovo came up portrait-locked and `personal` because of
+/// it. So: a real view reading if there is one, else poll for [timeout], else
+/// the display's size (the whole screen, which draws the same phone/tablet
+/// line), else null.
+Future<Size?> settledLogicalSize({
+  Size? Function() read = firstViewLogicalSize,
+  Size? Function() display = firstDisplayLogicalSize,
+  Duration poll = const Duration(milliseconds: 16),
+  Duration timeout = const Duration(seconds: 1),
+}) async {
+  bool real(Size? s) => s != null && !s.isEmpty;
+
+  final deadline = DateTime.now().add(timeout);
+  var size = read();
+  while (!real(size) && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(poll);
+    size = read();
+  }
+  if (real(size)) return size;
+  final fallback = display();
+  return real(fallback) ? fallback : null;
+}
+
+/// Applies [allowedOrientations] for [logicalSize] (see [settledLogicalSize]).
+/// Desktop platforms ignore the request. No size, no lock.
+Future<void> applyOrientationLock(Size? logicalSize) {
+  if (logicalSize == null) return Future.value();
+  return SystemChrome.setPreferredOrientations(allowedOrientations(logicalSize));
 }

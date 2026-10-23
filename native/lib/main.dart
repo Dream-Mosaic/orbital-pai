@@ -48,14 +48,18 @@ Future<void> main() async {
   // on an asset decode to avoid that trade would be the worse bargain.
   WidgetsFlutterBinding.ensureInitialized();
   unawaited(OrbShaderProgram.load());
-  unawaited(applyOrientationLock());
-  // Awaited, unlike the two above: the role decides the very first
+  // The size both the orientation lock and the role default read. Awaited:
+  // on Android the view has no metrics yet at this point, and a 0x0 reading
+  // is "a phone" — the Lenovo came up portrait-locked and personal.
+  final size = await settledLogicalSize();
+  unawaited(applyOrientationLock(size));
+  // Awaited, unlike the shader: the role decides the very first
   // `voice:henry` join's `kiosk` flag, and that join is dialed as soon as the
   // shell builds. `load` never throws and bounds its own read, so the worst
   // a broken store costs is the size default for this launch.
   final device = await DeviceController.load(
     store: const FileDeviceStore(),
-    logicalSize: firstViewLogicalSize() ?? Size.zero,
+    logicalSize: size ?? Size.zero,
   );
   runApp(HenryApp(device: device));
 }
