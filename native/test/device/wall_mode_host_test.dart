@@ -211,6 +211,37 @@ void main() {
     expect(window.calls.last, 'brightness(null)');
   });
 
+  testWidgets('the first tap on a dimmed wall only wakes it', (tester) async {
+    // David: a tap at night should wake the screen, not also press whatever
+    // happened to be under the finger.
+    var taps = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: WallModeHost(
+        device: DeviceController.fixed(_wall),
+        vc: buildVc(),
+        window: window,
+        clock: () => now,
+        child: Scaffold(
+          body: Center(
+            child: TextButton(onPressed: () => taps++, child: const Text('press')),
+          ),
+        ),
+      ),
+    ));
+    await advance(tester, const Duration(seconds: 60));
+    expect(overlayOpacity(tester), 1, reason: 'dimmed');
+
+    await tester.tap(find.text('press'), warnIfMissed: false);
+    await tester.pump();
+    expect(taps, 0, reason: 'the waking tap is swallowed');
+    expect(overlayOpacity(tester), 0, reason: 'but it does wake the wall');
+    expect(window.calls.last, 'brightness(null)');
+
+    await tester.tap(find.text('press'));
+    await tester.pump();
+    expect(taps, 1, reason: 'awake, the next tap reaches the UI');
+  });
+
   testWidgets('a touch on an undimmed wall still reaches the UI', (tester) async {
     var taps = 0;
     await tester.pumpWidget(MaterialApp(

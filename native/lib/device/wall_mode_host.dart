@@ -210,8 +210,10 @@ class _WallModeHostState extends State<WallModeHost> {
   }
 
   /// The overlay covers the voice screen; an open drawer sits above it (its
-  /// own route) and is dimmed by the window brightness alone. IgnorePointer,
-  /// so the touch that wakes a dimmed wall still reaches the UI.
+  /// own route) and is dimmed by the window brightness alone. While dimmed it
+  /// takes the touch (the global pointer route still sees it and wakes the
+  /// wall), so the first tap at night only wakes the screen rather than also
+  /// pressing whatever was under the finger; awake, it lets every touch by.
   @override
   Widget build(BuildContext context) => Stack(
         // Passthrough, so the voice screen lays out against exactly the
@@ -221,6 +223,7 @@ class _WallModeHostState extends State<WallModeHost> {
           WallActivityScope(activity: _rest, child: widget.child),
           Positioned.fill(
             child: IgnorePointer(
+              ignoring: !_dimmed,
               child: AnimatedOpacity(
                 key: WallModeHost.overlayKey,
                 opacity: _dimmed ? 1 : 0,
