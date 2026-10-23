@@ -19,12 +19,20 @@ List<DeviceOrientation> allowedOrientations(Size logicalSize) =>
         ? const [DeviceOrientation.portraitUp]
         : const [];
 
+/// The first view's size in logical pixels, or null when there is no view
+/// yet. Shared with the device role's size default (`device_role.dart`), so
+/// both draw the phone/tablet line from the same measurement.
+Size? firstViewLogicalSize() {
+  final views = PlatformDispatcher.instance.views;
+  if (views.isEmpty) return null;
+  final view = views.first;
+  return view.physicalSize / view.devicePixelRatio;
+}
+
 /// Applies [allowedOrientations] to the first view. Call once, after the
 /// binding is initialized. Desktop platforms ignore the request.
 Future<void> applyOrientationLock() {
-  final views = PlatformDispatcher.instance.views;
-  if (views.isEmpty) return Future.value();
-  final view = views.first;
-  return SystemChrome.setPreferredOrientations(
-      allowedOrientations(view.physicalSize / view.devicePixelRatio));
+  final size = firstViewLogicalSize();
+  if (size == null) return Future.value();
+  return SystemChrome.setPreferredOrientations(allowedOrientations(size));
 }

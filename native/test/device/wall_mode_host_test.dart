@@ -1,0 +1,232 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:orbital_pai/auth/device_id.dart';
+import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/device/device_role.dart';
+import 'package:orbital_pai/device/night_dim.dart';
+import 'package:orbital_pai/device/wall_mode_host.dart';
+import 'package:orbital_pai/device/window_control.dart';
+import 'package:orbital_pai/phoenix/decoded_message.dart';
+import 'package:orbital_pai/voice/voice_controller.dart';
+
+import '../support/fake_alarm.dart';
+import '../support/fakes.dart';
+
+/// Records every knob turned, in order, as a short string.
+class FakeWindow implements WindowControl {
+  final List<String> calls = [];
+
+  @override
+  Future<void> setKeepScreenOn(bool on) async => calls.add('keepOn($on)');
+
+  @override
+  Future<void> setBrightness(double? level) async => calls.add('brightness($level)');
+
+  @override
+  Future<void> setImmersive(bool on) async => calls.add('immersive($on)');
+}
+
+class _FixedIds implements DeviceIdStore {
+  @override
+  Future<String?> read() async => 'wall-1';
+  @override
+  Future<void> write(String value) async {}
+}
+
+const _wall = DeviceSettings(role: DeviceRole.wall);
+const _personal = DeviceSettings(role: DeviceRole.personal);
+
+void main() {
+  late DateTime now;
+  late FakeWindow window;
+
+  /// Builds an unconnected controller (no socket, no mic) — enough to drive
+  /// turn events through [VoiceController.debugHandleMessage].
+  VoiceController buildVc() {
+    final conn = AppConnection(connector: () async => throw StateError('never dialed'));
+    final vc = VoiceController(
+      connection: conn,
+      mic: FakeMic(),
+      player: FakePlayer(),
+      spotter: FakeSpotter(),
+      alarm: FakeAlarm(),
+      deviceId: DeviceId(store: _FixedIds()),
+    );
+    addTearDown(() {
+      vc.dispose();
+      conn.dispose();
+    });
+    return vc;
+  }
+
+  Future<void> pumpHost(WidgetTester tester, DeviceController device, VoiceController vc) =>
+      tester.pumpWidget(MaterialApp(
+        home: WallModeHost(
+          device: device,
+          vc: vc,
+          window: window,
+          clock: () => now,
+          child: const Scaffold(body: SizedBox.expand()),
+        ),
+      ));
+
+  double overlayOpacity(WidgetTester tester) =>
+      tester.widget<AnimatedOpacity>(find.byKey(WallModeHost.overlayKey)).opacity;
+
+  /// Moves the fake wall clock and lets one dim tick run.
+  Future<void> advance(WidgetTester tester, Duration d) async {
+    now = now.add(d);
+    await tester.pump(WallModeHost.tick);
+    await tester.pump(WallModeHost.dimFade);
+  }
+
+  setUp(() {
+    now = DateTime(2026, 10, 23, 23, 0);
+    window = FakeWindow();
+  });
+
+  testWidgets('a wall holds the screen on and hides the bars', (tester) async {
+    await pumpHost(tester, DeviceController.fixed(_wall), buildVc());
+
+    expect(window.calls, ['keepOn(true)', 'immersive(true)']);
+  });
+
+  testWidgets('a personal device is never touched', (tester) async {
+    now = DateTime(2026, 10, 23, 13, 0);
+    await pumpHost(tester, DeviceController.fixed(_personal), buildVc());
+    await advance(tester, const Duration(minutes: 5));
+
+    expect(window.calls, isEmpty);
+    // And leaving the tree hands nothing back, because nothing was taken.
+    await tester.pumpWidget(const SizedBox());
+    expect(window.calls, isEmpty);
+  });
+
+  testWidgets('switching to personal restores everything', (tester) async {
+    final device = DeviceController.fixed(_wall);
+    await pumpHost(tester, device, buildVc());
+    window.calls.clear();
+
+    await device.setWall(false);
+    await tester.pump();
+
+    expect(window.calls, ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
+  });
+
+  testWidgets('switching a phone to wall applies it at once', (tester) async {
+    final device = DeviceController.fixed(_personal);
+    await pumpHost(tester, device, buildVc());
+
+    await device.setWall(true);
+    await tester.pump();
+
+    expect(window.calls, ['keepOn(true)', 'immersive(true)']);
+  });
+
+  testWidgets('at 23:00, 60 s at rest dims; a touch undims', (tester) async {
+    await pumpHost(tester, DeviceController.fixed(_wall), buildVc());
+    window.calls.clear();
+
+    await advance(tester, const Duration(seconds: 55));
+    expect(window.calls, isEmpty, reason: 'not yet a minute at rest');
+    expect(overlayOpacity(tester), 0);
+
+    await advance(tester, const Duration(seconds: 5));
+    expect(window.calls, ['brightness($kDimBrightness)']);
+    expect(overlayOpacity(tester), 1);
+
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump();
+    expect(window.calls.last, 'brightness(null)');
+    expect(overlayOpacity(tester), 0);
+
+    // And it dims again after another minute at rest.
+    window.calls.clear();
+    await advance(tester, const Duration(seconds: 60));
+    expect(window.calls, ['brightness($kDimBrightness)']);
+  });
+
+  testWidgets('the daytime never dims', (tester) async {
+    now = DateTime(2026, 10, 23, 14, 0);
+    await pumpHost(tester, DeviceController.fixed(_wall), buildVc());
+    window.calls.clear();
+
+    await advance(tester, const Duration(minutes: 10));
+
+    expect(window.calls, isEmpty);
+    expect(overlayOpacity(tester), 0);
+  });
+
+  testWidgets('a turn undims and holds it awake while Henry is busy', (tester) async {
+    final vc = buildVc();
+    await pumpHost(tester, DeviceController.fixed(_wall), vc);
+    await advance(tester, const Duration(seconds: 60));
+    expect(overlayOpacity(tester), 1, reason: 'sanity: dimmed');
+    window.calls.clear();
+
+    vc.debugHandleMessage(
+        const DecodedMessage(topic: 'voice:henry', event: 'thinking', json: {}));
+    await tester.pump();
+    expect(window.calls, ['brightness(null)']);
+    expect(overlayOpacity(tester), 0);
+
+    // A long think sends nothing new, but it is still not rest.
+    await advance(tester, const Duration(seconds: 90));
+    expect(overlayOpacity(tester), 0);
+
+    // Back to listening: a minute later it dims again.
+    vc.debugHandleMessage(
+        const DecodedMessage(topic: 'voice:henry', event: 'listening', json: {}));
+    await tester.pump();
+    await advance(tester, const Duration(seconds: 30));
+    expect(overlayOpacity(tester), 0);
+    await advance(tester, const Duration(seconds: 30));
+    expect(overlayOpacity(tester), 1);
+  });
+
+  testWidgets('turning dim-at-night off while dimmed undims', (tester) async {
+    final device = DeviceController.fixed(_wall);
+    await pumpHost(tester, device, buildVc());
+    await advance(tester, const Duration(seconds: 60));
+    window.calls.clear();
+
+    await device.setDimAtNight(false);
+    await tester.pump();
+
+    expect(window.calls, ['brightness(null)']);
+    expect(overlayOpacity(tester), 0);
+    await advance(tester, const Duration(minutes: 5));
+    expect(overlayOpacity(tester), 0);
+  });
+
+  testWidgets('a touch on an undimmed wall still reaches the UI', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: WallModeHost(
+        device: DeviceController.fixed(_wall),
+        vc: buildVc(),
+        window: window,
+        clock: () => now,
+        child: Scaffold(
+          body: Center(
+            child: TextButton(onPressed: () => taps++, child: const Text('press')),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('press'));
+    await tester.pump();
+    expect(taps, 1);
+  });
+
+  testWidgets('leaving the tree hands the window back', (tester) async {
+    await pumpHost(tester, DeviceController.fixed(_wall), buildVc());
+    await advance(tester, const Duration(seconds: 60));
+    window.calls.clear();
+
+    await tester.pumpWidget(const SizedBox());
+
+    expect(window.calls, ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
+  });
+}

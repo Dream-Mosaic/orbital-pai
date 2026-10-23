@@ -8,6 +8,9 @@ import 'auth/auth_controller.dart';
 import 'auth/browser_session.dart';
 import 'auth/token_store.dart';
 import 'connection/app_connection.dart';
+import 'device/device_role.dart';
+import 'device/wall_mode_host.dart';
+import 'device/window_control.dart';
 import 'meridian/books_drawer_host.dart';
 import 'meridian/connectors_panel.dart';
 import 'meridian/drawer.dart';
@@ -30,7 +33,7 @@ import 'panels/settings_client.dart';
 import 'panels/voice_lock_client.dart';
 import 'voice/voice_controller.dart';
 
-void main() {
+Future<void> main() async {
   // The bundled Space Grotesk / Inter are SIL OFL; surface their attribution in
   // the standard licence page rather than burying it in the asset folder.
   LicenseRegistry.addLicense(() async* {
@@ -46,11 +49,22 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   unawaited(OrbShaderProgram.load());
   unawaited(applyOrientationLock());
-  runApp(const HenryApp());
+  // Awaited, unlike the two above: the role decides the very first
+  // `voice:henry` join's `kiosk` flag, and that join is dialed as soon as the
+  // shell builds. `load` never throws and bounds its own read, so the worst
+  // a broken store costs is the size default for this launch.
+  final device = await DeviceController.load(
+    store: const FileDeviceStore(),
+    logicalSize: firstViewLogicalSize() ?? Size.zero,
+  );
+  runApp(HenryApp(device: device));
 }
 
 class HenryApp extends StatelessWidget {
-  const HenryApp({super.key});
+  const HenryApp({super.key, this.device});
+
+  /// This device's role, loaded in [main]. See [HenryHome.device].
+  final DeviceController? device;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -59,7 +73,7 @@ class HenryApp extends StatelessWidget {
         theme: ThemeData.dark(useMaterial3: true).copyWith(
           scaffoldBackgroundColor: M.bg,
         ),
-        home: const HenryHome(),
+        home: HenryHome(device: device),
       );
 }
 
@@ -71,6 +85,8 @@ class HenryHome extends StatefulWidget {
     this.session,
     this.buildConnection,
     this.notifier,
+    this.device,
+    this.window,
   });
 
   /// The one connection, injectable so a test can build the REAL home — and
@@ -118,6 +134,15 @@ class HenryHome extends StatefulWidget {
   /// actually posts.
   final Notifier? notifier;
 
+  /// This device's role (wall / personal), loaded in [main] before `runApp`.
+  /// Null (every test that predates wall mode) is a personal device that
+  /// never persists anything: exactly the app before wall mode existed.
+  final DeviceController? device;
+
+  /// The window knobs wall mode turns. Null is the platform's
+  /// ([PlatformWindowControl]); a test hands in a fake.
+  final WindowControl? window;
+
   @override
   State<HenryHome> createState() => _HenryHomeState();
 }
@@ -150,9 +175,22 @@ class _HenryHomeState extends State<HenryHome> {
 
   late final BrowserSession _session = widget.session ?? const WebAuthBrowserSession();
 
+  /// Outlives the shell: the role is the hardware's, so a sign-out keeps it.
+  late final DeviceController _device;
+
+  /// Whether THIS state built [_device] (the personal default) and so owns
+  /// disposing it. Same reasoning as [_ownsAuth].
+  late final bool _ownsDevice;
+
+  late final WindowControl _window = widget.window ?? const PlatformWindowControl();
+
   @override
   void initState() {
     super.initState();
+    // Before the shell, which reads the role for its first join.
+    _ownsDevice = widget.device == null;
+    _device = widget.device ??
+        DeviceController.fixed(const DeviceSettings(role: DeviceRole.personal));
     final injected = widget.connection;
     if (injected != null) {
       _buildShell(injected);
@@ -341,6 +379,7 @@ class _HenryHomeState extends State<HenryHome> {
   @override
   void dispose() {
     _teardownShell();
+    if (_ownsDevice) _device.dispose();
     if (_ownsAuth) {
       _auth?.dispose();
     } else {
@@ -457,13 +496,19 @@ class _HenryHomeState extends State<HenryHome> {
       }
       return const ColoredBox(color: M.bg);
     }
-    return MeridianVoiceScreen(
-      controller: _vc!,
-      connection: conn,
-      badges: _badges,
-      userName: 'David',
-      appVersion: kAppVersion,
-      onOpenPanel: _openPanel,
+    final vc = _vc!;
+    return WallModeHost(
+      device: _device,
+      vc: vc,
+      window: _window,
+      child: MeridianVoiceScreen(
+        controller: vc,
+        connection: conn,
+        badges: _badges,
+        userName: 'David',
+        appVersion: kAppVersion,
+        onOpenPanel: _openPanel,
+      ),
     );
   }
 }
