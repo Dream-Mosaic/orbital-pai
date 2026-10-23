@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/app_version.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/device/device_role.dart';
 import 'package:orbital_pai/meridian/settings_panel.dart';
 import 'package:orbital_pai/panels/settings_client.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
@@ -53,13 +54,15 @@ void main() {
     return (client, conn, fake);
   }
 
-  Future<void> pumpPanel(WidgetTester tester, SettingsClient client) async {
+  Future<void> pumpPanel(WidgetTester tester, SettingsClient client,
+      {DeviceController? device}) async {
     await tester.pumpWidget(MaterialApp(
       // Scrolls because production does (MeridianDrawer, drawer.dart) — a bare
       // body left the harness a few px short of overflowing at 600px, so any new
       // row tripped a layout error that no real device would ever show.
       home: Scaffold(
-          body: SingleChildScrollView(child: SettingsPanelView(client: client))),
+          body: SingleChildScrollView(
+              child: SettingsPanelView(client: client, device: device))),
     ));
     await tester.pumpAndSettle();
   }
@@ -104,6 +107,116 @@ void main() {
     );
 
     await conn.disconnect();
+  });
+
+  group('This device', () {
+    testWidgets('is absent without a device controller', (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      await pumpPanel(tester, client);
+
+      expect(find.text('This device'), findsNothing);
+      expect(find.byKey(const ValueKey('toggle-wall')), findsNothing);
+      expect(find.byKey(const ValueKey('toggle-dim_at_night')), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('is the first section, with the wall switch and its copy', (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.personal));
+      await pumpPanel(tester, client, device: device);
+
+      expect(find.text('This device'), findsOneWidget);
+      expect(find.text('Wall display'), findsOneWidget);
+      expect(
+          find.text("Keeps the screen on, hides Android's bars, and gets household "
+              'reminders first'),
+          findsOneWidget);
+      expect(tester.getTopLeft(find.text('This device')).dy,
+          lessThan(tester.getTopLeft(find.text('Voice')).dy),
+          reason: 'a new FIRST section');
+      expect(tester.widget<Switch>(find.byKey(const ValueKey('toggle-wall'))).value, isFalse);
+      expect(find.byKey(const ValueKey('toggle-dim_at_night')), findsNothing,
+          reason: 'dim at night only means something on a wall');
+
+      await conn.disconnect();
+    });
+
+    testWidgets('the wall switch calls setWall, and the dim switch appears', (tester) async {
+      final (client, conn, fake) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.personal));
+      await pumpPanel(tester, client, device: device);
+      final sentBefore = fake.sent.length;
+
+      await tester.tap(find.byKey(const ValueKey('toggle-wall')));
+      await tester.pump();
+
+      expect(device.isWall, isTrue);
+      expect(find.text('Dim at night (10 PM \u2013 7 AM)'), findsOneWidget);
+      expect(
+          tester.widget<Switch>(find.byKey(const ValueKey('toggle-dim_at_night'))).value,
+          isTrue);
+      expect(fake.sent.length, sentBefore,
+          reason: 'the role is device-local: nothing goes to panel:settings');
+
+      await conn.disconnect();
+    });
+
+    testWidgets('the dim switch calls setDimAtNight', (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      await pumpPanel(tester, client, device: device);
+
+      await tester.tap(find.byKey(const ValueKey('toggle-dim_at_night')));
+      await tester.pump();
+
+      expect(device.settings.dimAtNight, isFalse);
+      expect(
+          tester.widget<Switch>(find.byKey(const ValueKey('toggle-dim_at_night'))).value,
+          isFalse);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('turning the wall off hides the dim switch', (tester) async {
+      final (client, conn, _) = await openedClient(tester, _stateFrame);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      await pumpPanel(tester, client, device: device);
+      expect(find.byKey(const ValueKey('toggle-dim_at_night')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('toggle-wall')));
+      await tester.pump();
+
+      expect(device.isWall, isFalse);
+      expect(find.byKey(const ValueKey('toggle-dim_at_night')), findsNothing);
+
+      await conn.disconnect();
+    });
+
+    testWidgets('renders before the server state lands', (tester) async {
+      // No join pushes: the panel topic joins but no `state` ever arrives.
+      final fake = FakeSocket();
+      final conn = AppConnection(
+        connector: () async => fake.socket,
+        rejoinBackoff: const [Duration(days: 1)],
+      );
+      final client = SettingsClient(connection: conn);
+      addTearDown(() {
+        client.dispose();
+        conn.dispose();
+      });
+      await conn.connect();
+      client.open();
+      await tester.pump(Duration.zero);
+      final device = DeviceController.fixed(const DeviceSettings(role: DeviceRole.wall));
+      await pumpPanel(tester, client, device: device);
+
+      expect(client.state, isNull, reason: 'sanity: no server state');
+      expect(find.byKey(const ValueKey('toggle-wall')), findsOneWidget);
+      expect(find.text('Voice'), findsNothing);
+
+      await conn.disconnect();
+    });
   });
 
   testWidgets('the toggles reflect state: ABI on, PTT off', (tester) async {

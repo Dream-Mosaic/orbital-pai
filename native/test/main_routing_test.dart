@@ -642,6 +642,18 @@ void main() {
       await conn.disconnect();
     });
 
+    testWidgets('Settings shows This device, wired to the home\'s controller', (tester) async {
+      final (conn, _) = await pumpHome(tester);
+      await tapStation(tester, MeridianTab.settings);
+
+      final wall = find.byKey(const ValueKey('toggle-wall'));
+      expect(wall, findsOneWidget, reason: '_openPanel must hand the drawer the device');
+      expect(tester.widget<Switch>(wall).value, isFalse,
+          reason: 'no controller passed: the personal default');
+
+      await conn.disconnect();
+    });
+
     testWidgets('without a device controller the home is a personal device', (tester) async {
       phone(tester);
       FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});

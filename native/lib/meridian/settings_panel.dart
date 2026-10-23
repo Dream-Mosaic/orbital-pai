@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../device/device_role.dart';
 import '../panels/settings_client.dart';
 import '../voice/voice_controller.dart';
 import '../app_version.dart';
@@ -14,7 +15,8 @@ import 'tokens.dart';
 /// comment in tokens.dart.
 const Color _dangerRed = Color(0xFFEA003E);
 
-/// The Settings drawer's Voice / Danger-zone / About sections, plus the
+/// The Settings drawer's This device / Voice / Danger-zone / About sections
+/// (This device is the device-local wall-mode switch, not a server pref), plus the
 /// Memory and Voice Lock nav rows — the port of `settings_panel/1` in
 /// `lib/app_web/components/voice_modals.ex` (the function itself runs
 /// ~541-682), plus an Account section with Sign out, which the web never
@@ -38,9 +40,15 @@ class SettingsPanelView extends StatelessWidget {
       required this.client,
       this.onOpenMemory,
       this.onOpenVoiceLock,
-      this.onSignOut});
+      this.onSignOut,
+      this.device});
 
   final SettingsClient client;
+
+  /// This device's role (Settings ▸ This device). Null hides the section.
+  /// Device-local, so the section renders before the server's `state` lands
+  /// (and when it never does): a wall can always be told to stop being one.
+  final DeviceController? device;
 
   /// Null hides the Memory row entirely (e.g. a caller with nowhere to send
   /// the tap). settings_drawer_host.dart is the only caller that supplies it.
@@ -55,35 +63,70 @@ class SettingsPanelView extends StatelessWidget {
   final VoidCallback? onSignOut;
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: client,
-        builder: (context, _) {
-          final state = client.state;
-          // The drawer can open before the panel's first `state` push lands.
-          if (state == null) return const SizedBox.shrink();
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _voice(context, state),
-              const SizedBox(height: 24), // space-y-6 = 1.5rem = 24px
-              _dangerZone(context),
+  Widget build(BuildContext context) {
+    final device = this.device;
+    return AnimatedBuilder(
+      animation: Listenable.merge([client, if (device != null) device]),
+      builder: (context, _) {
+        final state = client.state;
+        final deviceSection = device == null ? null : _thisDevice(device);
+        // The drawer can open before the panel's first `state` push lands.
+        if (state == null) return deviceSection ?? const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (deviceSection != null) ...[
+              deviceSection,
               const SizedBox(height: 24),
-              _about(state),
-              if (onOpenMemory != null || onOpenVoiceLock != null) ...[
-                const SizedBox(height: 24),
-                if (onOpenMemory != null) _navRow('Memory', onOpenMemory!),
-                if (onOpenMemory != null && onOpenVoiceLock != null)
-                  const SizedBox(height: 4), // space-y-1 = 0.25rem
-                if (onOpenVoiceLock != null)
-                  _navRow('Voice Lock', onOpenVoiceLock!),
-              ],
-              if (onSignOut != null) ...[
-                const SizedBox(height: 24),
-                _account(context, onSignOut!),
-              ],
             ],
-          );
-        },
+            _voice(context, state),
+            const SizedBox(height: 24), // space-y-6 = 1.5rem = 24px
+            _dangerZone(context),
+            const SizedBox(height: 24),
+            _about(state),
+            if (onOpenMemory != null || onOpenVoiceLock != null) ...[
+              const SizedBox(height: 24),
+              if (onOpenMemory != null) _navRow('Memory', onOpenMemory!),
+              if (onOpenMemory != null && onOpenVoiceLock != null)
+                const SizedBox(height: 4), // space-y-1 = 0.25rem
+              if (onOpenVoiceLock != null)
+                _navRow('Voice Lock', onOpenVoiceLock!),
+            ],
+            if (onSignOut != null) ...[
+              const SizedBox(height: 24),
+              _account(context, onSignOut!),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  /// The hardware's own settings (spec 2026-10-23, wall tablet): stored on
+  /// the device by [DeviceController], never sent as a pref.
+  Widget _thisDevice(DeviceController device) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _SectionLabel('This device'),
+          const SizedBox(height: 8),
+          _toggle(
+            key: const ValueKey('toggle-wall'),
+            label: 'Wall display',
+            subtitle: "Keeps the screen on, hides Android's bars, and gets "
+                'household reminders first',
+            value: device.isWall,
+            onChanged: device.setWall,
+          ),
+          if (device.isWall) ...[
+            const SizedBox(height: 8),
+            _toggle(
+              key: const ValueKey('toggle-dim_at_night'),
+              label: 'Dim at night (10 PM \u2013 7 AM)',
+              value: device.settings.dimAtNight,
+              onChanged: device.setDimAtNight,
+            ),
+          ],
+        ],
       );
 
   /// `voice_modals.ex:662-679` — full-width ghost row, label left, a
@@ -181,14 +224,25 @@ class SettingsPanelView extends StatelessWidget {
   Widget _toggle({
     Key? key,
     required String label,
+    String? subtitle,
     required bool value,
     required ValueChanged<bool> onChanged,
   }) =>
       Row(
         children: [
           Expanded(
-            child:
-                Text(label, style: const TextStyle(fontSize: 14, color: M.ink)),
+            child: subtitle == null
+                ? Text(label, style: const TextStyle(fontSize: 14, color: M.ink))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: const TextStyle(fontSize: 14, color: M.ink)),
+                      // The lockdown row's description recipe.
+                      Text(subtitle,
+                          style: TextStyle(
+                              fontSize: 12, color: M.ink.withValues(alpha: 0.6))),
+                    ],
+                  ),
           ),
           Switch(
             key: key,

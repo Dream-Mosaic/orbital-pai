@@ -453,6 +453,7 @@ class _HenryHomeState extends State<HenryHome> {
                 settings: settings,
                 memory: memory,
                 voiceLock: voiceLock,
+                device: _device,
                 onSignOut: _auth == null
                     ? null
                     : () {

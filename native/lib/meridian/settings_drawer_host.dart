@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../device/device_role.dart';
 import '../panels/memory_client.dart';
 import '../panels/settings_client.dart';
 import '../panels/voice_lock_client.dart';
@@ -29,6 +30,7 @@ class SettingsDrawerHost extends StatefulWidget {
     required this.memory,
     required this.voiceLock,
     this.onSignOut,
+    this.device,
   });
 
   final Animation<double> animation;
@@ -39,6 +41,9 @@ class SettingsDrawerHost extends StatefulWidget {
 
   /// Passed through to [SettingsPanelView.onSignOut].
   final VoidCallback? onSignOut;
+
+  /// Passed through to [SettingsPanelView.device] (Settings ▸ This device).
+  final DeviceController? device;
 
   @override
   State<SettingsDrawerHost> createState() => _SettingsDrawerHostState();
@@ -99,6 +104,7 @@ class _SettingsDrawerHostState extends State<SettingsDrawerHost> {
                 onOpenMemory: () => _openOnly(_Layer.memory),
                 onOpenVoiceLock: () => _openOnly(_Layer.voiceLock),
                 onSignOut: widget.onSignOut,
+                device: widget.device,
               ),
             _Layer.memory => MemoryPanelView(client: widget.memory),
             _Layer.voiceLock => VoiceLockPanelView(client: widget.voiceLock),
