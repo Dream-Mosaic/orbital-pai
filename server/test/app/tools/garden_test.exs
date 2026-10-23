@@ -348,4 +348,19 @@ defmodule App.Tools.GardenTest do
     update = Enum.find(decls, &(&1.name == "update_plant"))
     assert update.parameters.required == ["plant"]
   end
+
+  describe "on a shared household device" do
+    # Stand in for the session's Conversation: this process registers under the session id with
+    # the household scope, which is exactly what the Conversation publishes while it is bound to
+    # a shared household device (App.Conversations.Scope).
+    setup %{user: user} do
+      {:ok, _} = Registry.register(App.Conversations.Registry, to_string(user.id), :household)
+      :ok
+    end
+
+    test "\"my\" plant is the household's", %{user: user} do
+      assert {:ok, %{household: true, assigned: "the household"}} =
+               Tool.execute("add_plant", %{"name" => "basil", "for" => "my"}, ctx(user))
+    end
+  end
 end

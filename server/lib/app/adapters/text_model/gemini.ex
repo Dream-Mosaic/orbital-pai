@@ -64,13 +64,25 @@ defmodule App.Adapters.TextModel.Gemini do
     thinking = Keyword.fetch!(opts, :thinking)
     sid = Keyword.get(opts, :session_id)
 
+    # Read once, at the start of the turn: :household while the conversation is bound to a
+    # shared household device (App.Conversations.Scope). Tools read it again when they run.
+    scope = App.Conversations.Scope.current(sid)
+
     # The system prompt is built from the BASE config: it carries only the static toolkit catalog,
     # so a kit opened this turn never changes it (Gemini's implicit prefix cache, see time_note/1).
+    # Same for the scope: the household withholds Gmail's declarations (for_scope/2, after this)
+    # and says so in shared_note/1 on the user message — never by editing the system prompt.
     system = system_for(:brain, cfg, ctx)
     {cfg, note} = brain_setup(transcript, ctx, cfg, DateTime.utc_now())
+    cfg = App.Tools.for_scope(cfg, scope)
     tool_ctx = %{session_id: sid, user_id: App.Users.id_from_session(sid), config: cfg}
 
-    contents = build_contents(ctx, time_note(cfg) <> note <> quiet_note(opts) <> transcript)
+    contents =
+      build_contents(
+        ctx,
+        time_note(cfg) <> note <> quiet_note(opts) <> shared_note(scope) <> transcript
+      )
+
     round_fun = Keyword.get(opts, :round_fun, &stream_round/6)
     run_rounds(contents, system, cfg, thinking, tool_ctx, target, 0, round_fun)
   end
@@ -421,6 +433,18 @@ defmodule App.Adapters.TextModel.Gemini do
           "light markdown is fine.)\n",
       else: ""
   end
+
+  @doc false
+  # The shared household device (spec 2026-10-23-wall-tablet-design, phase 4): whoever is
+  # speaking may not be the signed-in user. Rides the final user message beside time_note for
+  # the same prefix-cache reason; a personal device gets nothing.
+  def shared_note(:household),
+    do:
+      "(You are on the shared household wall. Whoever is speaking may be anyone in the " <>
+        "household; \"me\"/\"my\" reminders and lists go to the household, which everyone " <>
+        "sees. Email is not available here.)\n"
+
+  def shared_note(_scope), do: ""
 
   defp error_string(reason) when is_binary(reason), do: reason
   defp error_string(reason), do: inspect(reason)

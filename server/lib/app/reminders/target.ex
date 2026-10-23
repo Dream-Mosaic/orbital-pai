@@ -3,6 +3,12 @@ defmodule App.Reminders.Target do
   Pure resolution of a reminder's owner from the brain's `for` arg + the session's active scope +
   the master gate. Returns `%{user_id, household, assigned}` — `assigned` is a human label the brain
   reads back so it never silently mis-assigns (see the spec's Fable I6). Injected `opts` keep it pure.
+
+  `active_scope` is `App.Conversations.Scope.current/1`: `:household` while the conversation is
+  bound to a shared household device (spec 2026-10-23-wall-tablet-design, phase 4). That device
+  is itself the opt-in, so household scope needs no gate: a bare "remind me" and "remind us"
+  both land on the household. On a personal device "remind us" still needs the gate. A named
+  person resolves the same in either scope.
   """
 
   @household_label "the household"
@@ -16,10 +22,10 @@ defmodule App.Reminders.Target do
   def resolve(for_arg, %{session_user_id: sid, active_scope: scope, gate_on: gate, users: users}) do
     case normalize(for_arg) do
       :self ->
-        if gate and scope == :household, do: household(sid), else: personal(sid, @self_label)
+        if scope == :household, do: household(sid), else: personal(sid, @self_label)
 
       :household ->
-        if gate, do: household(sid), else: personal(sid, @self_label)
+        if gate or scope == :household, do: household(sid), else: personal(sid, @self_label)
 
       {:name, name} ->
         by_name(name, users, sid)

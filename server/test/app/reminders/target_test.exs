@@ -25,9 +25,34 @@ defmodule App.Reminders.TargetTest do
     assert %{household: true, assigned: "the household"} = Target.resolve("household", opts())
   end
 
-  test "for: household with the gate OFF -> personal fallback to the session user" do
-    got = Target.resolve("household", opts(%{gate_on: false, active_scope: :household}))
+  test "for: household with the gate OFF on a personal device -> personal fallback" do
+    got = Target.resolve("household", opts(%{gate_on: false}))
     assert %{user_id: 1, household: false, assigned: "you"} = got
+  end
+
+  # Phase 4 (spec 2026-10-23-wall-tablet-design): a shared household device is itself the
+  # opt-in for household scope, so household scope needs no gate for self or household words.
+  describe "household scope (the bound device is a shared household device)" do
+    test "self/me/unspecified -> household, even with the gate OFF" do
+      for word <- [nil, "", "self", "me", "myself"] do
+        got = Target.resolve(word, opts(%{gate_on: false, active_scope: :household}))
+        assert %{user_id: 1, household: true, assigned: "the household"} = got
+      end
+    end
+
+    test "household words -> household, even with the gate OFF" do
+      for word <- ["household", "us", "we", "both", "the house", "the household"] do
+        got = Target.resolve(word, opts(%{gate_on: false, active_scope: :household}))
+        assert %{household: true, assigned: "the household"} = got
+      end
+    end
+
+    test "a named person is resolved exactly as on a personal device" do
+      for gate <- [true, false] do
+        assert Target.resolve("tanya", opts(%{gate_on: gate, active_scope: :household})) ==
+                 Target.resolve("tanya", opts(%{gate_on: gate}))
+      end
+    end
   end
 
   test "for a known name (case-insensitive) -> that person, personal" do

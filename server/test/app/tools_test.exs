@@ -137,4 +137,49 @@ defmodule App.ToolsTest do
     assert App.Tools.bridge("list_reminders", cfg) == []
     assert App.Tools.bridge("nope", cfg) == []
   end
+
+  # Phase 4 (spec 2026-10-23-wall-tablet-design): on a shared household device the brain is not
+  # offered Gmail, and because dispatch is permissive (a known tool runs even when it wasn't
+  # declared) a call it guesses anyway is refused here, too.
+  describe "on a shared household device" do
+    @refusal "Email isn't available on the shared household device."
+
+    setup do
+      %{sid: "household-#{System.unique_integer([:positive])}"}
+    end
+
+    # What the session's Conversation publishes while bound to a shared device.
+    defp household!(sid),
+      do: {:ok, _} = Registry.register(App.Conversations.Registry, sid, :household)
+
+    defp gmail_ctx(sid),
+      do: %{session_id: sid, user_id: nil, config: %Config{tools: [App.Tools.Gmail]}}
+
+    test "execute/3 refuses every Gmail tool with a reason the brain can say", %{sid: sid} do
+      household!(sid)
+
+      for name <- ~w(search_email read_email send_email),
+          do: assert({:error, @refusal} == App.Tools.execute(name, %{}, gmail_ctx(sid)), name)
+    end
+
+    test "the refusal comes before the tool cache", %{sid: sid} do
+      # a personal-scope search caches its result under this session...
+      assert {:ok, %{messages: []}} = App.Tools.execute("search_email", %{}, gmail_ctx(sid))
+      # ...which must not be served once the session is on the shared device
+      household!(sid)
+      assert {:error, @refusal} = App.Tools.execute("search_email", %{}, gmail_ctx(sid))
+    end
+
+    test "every other tool still runs", %{sid: sid} do
+      household!(sid)
+      ctx = %{session_id: sid, config: %Config{tools: [FakeTool]}}
+      assert {:ok, %{echoed: "hi"}} = App.Tools.execute("echo", %{"msg" => "hi"}, ctx)
+    end
+
+    test "for_scope/2 withholds Gmail from the household and leaves a personal config alone" do
+      cfg = %Config{tools: [FakeTool, App.Tools.Gmail]}
+      assert App.Tools.for_scope(cfg, :personal) == cfg
+      assert App.Tools.for_scope(cfg, :household).tools == [FakeTool]
+    end
+  end
 end

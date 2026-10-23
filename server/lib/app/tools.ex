@@ -6,6 +6,8 @@ defmodule App.Tools do
   """
   require Logger
 
+  alias App.Conversations.Scope
+
   @default_timeout_ms 8_000
 
   @doc "Enabled tool modules for this config."
@@ -51,10 +53,25 @@ defmodule App.Tools do
     [%{functionDeclarations: Enum.flat_map(enabled(config), & &1.declarations())}]
   end
 
+  # What a shared household device never offers or runs (spec 2026-10-23-wall-tablet-design,
+  # phase 4): an inbox read aloud on the kitchen wall is the wrong default.
+  @household_off [App.Tools.Gmail]
+  @household_refusal "Email isn't available on the shared household device."
+
+  @doc """
+  The turn's config narrowed to a scope (`App.Conversations.Scope`): the household withholds
+  the `@household_off` tools, so their declarations never reach the brain. Applied AFTER the
+  system instruction is built, which therefore stays the same in both scopes (prefix cache).
+  """
+  def for_scope(config, :household), do: %{config | tools: config.tools -- @household_off}
+  def for_scope(config, _scope), do: config
+
   @doc """
   Dispatch a function call by name. `ctx` is `%{session_id, config}`. Unknown name →
   `{:error, :unknown_tool}`. A timeout/crash becomes `{:error, :timeout}` /
   `{:error, {:tool_crash, reason}}` — fed back to the model as a tool error, never raised.
+  While the session is on a shared household device (`App.Conversations.Scope`), a withheld
+  tool (`for_scope/2`) is refused with a reason the brain can say.
   """
   # 3-arity: the brain's normal call path — resolve the per-tool cap (a slow tool like Gmail search
   # can override the default). 4-arity: an explicit cap (tests / special callers).
@@ -62,11 +79,22 @@ defmodule App.Tools do
   def execute(name, args, ctx, timeout), do: do_execute(name, args, ctx, timeout)
 
   defp do_execute(name, args, ctx, timeout) do
-    case find_module(name, ctx.config) do
-      nil -> {:error, :unknown_tool}
-      mod -> dispatch(mod, name, args, ctx, timeout || tool_timeout(mod, name))
+    if Scope.current(Map.get(ctx, :session_id)) == :household and household_off?(name) do
+      # Dispatch is permissive (a known tool runs even when it wasn't declared), so withholding
+      # the declarations isn't enough: a call the brain guesses anyway stops here, before the
+      # cache could hand it a result fetched on a personal device.
+      Logger.info("[scope] #{name} refused on the shared household device")
+      {:error, @household_refusal}
+    else
+      case find_module(name, ctx.config) do
+        nil -> {:error, :unknown_tool}
+        mod -> dispatch(mod, name, args, ctx, timeout || tool_timeout(mod, name))
+      end
     end
   end
+
+  defp household_off?(name),
+    do: Enum.any?(@household_off, fn mod -> Enum.any?(mod.declarations(), &(&1.name == name)) end)
 
   defp tool_timeout(mod, name) do
     if function_exported?(mod, :timeout, 1), do: mod.timeout(name), else: @default_timeout_ms

@@ -381,4 +381,29 @@ defmodule App.Tools.RemindersTest do
     reloaded = App.Repo.reload!(r)
     assert reloaded.acknowledged_at == nil
   end
+
+  describe "on a shared household device" do
+    # Stand in for the session's Conversation: this process registers under the session id with
+    # the household scope, which is exactly what the Conversation publishes while it is bound to
+    # a shared household device (App.Conversations.Scope).
+    setup %{user: user} do
+      {:ok, _} = Registry.register(App.Conversations.Registry, to_string(user.id), :household)
+      :ok
+    end
+
+    test "a bare \"remind me\" lands on the household, with the gate off", %{user: user} do
+      refute App.Config.default().household_named_targets
+      due = "2030-01-01T17:00:00Z"
+
+      assert {:ok, %{household: true, assigned_to: "the household"}} =
+               Tool.execute(
+                 "create_reminder",
+                 %{"body" => "take the bins out", "due_at" => due},
+                 ctx(user)
+               )
+
+      assert [%{body: "take the bins out", household: true}] =
+               App.Reminders.list_upcoming(user.id)
+    end
+  end
 end

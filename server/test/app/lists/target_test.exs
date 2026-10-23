@@ -44,4 +44,30 @@ defmodule App.Lists.TargetTest do
     assert got.household == false
     assert got.assigned == "you"
   end
+
+  # Phase 4 (spec 2026-10-23-wall-tablet-design): on a shared household device "my"/"me" can't
+  # name whoever is speaking, so personal words land on the household too. A named person is
+  # still gated by household_named_targets.
+  describe "household scope (the bound device is a shared household device)" do
+    test "personal words -> household" do
+      for word <- ["self", "my", "me", "mine", "myself", "personal"] do
+        got = Target.resolve(word, opts(%{active_scope: :household}))
+        assert %{user_id: 1, household: true, assigned: "the household"} = got
+      end
+    end
+
+    test "unspecified and household words stay household" do
+      for word <- [nil, "", "household", "us"] do
+        assert %{household: true} = Target.resolve(word, opts(%{active_scope: :household}))
+      end
+    end
+
+    test "a named person is still gated" do
+      assert %{user_id: 2, household: false, assigned: "Tanya"} =
+               Target.resolve("tanya", opts(%{active_scope: :household}))
+
+      assert %{user_id: 1, household: false, assigned: "you"} =
+               Target.resolve("tanya", opts(%{gate_on: false, active_scope: :household}))
+    end
+  end
 end

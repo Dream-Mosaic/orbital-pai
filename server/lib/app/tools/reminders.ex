@@ -12,6 +12,7 @@ defmodule App.Tools.Reminders do
   """
   @behaviour App.Tools.Tool
 
+  alias App.Conversations.Scope
   alias App.Reminders
   alias App.Reminders.Target
   alias App.Users
@@ -175,7 +176,7 @@ defmodule App.Tools.Reminders do
     target =
       Target.resolve(args["for"], %{
         session_user_id: uid(ctx),
-        active_scope: Map.get(ctx, :active_scope, :personal),
+        active_scope: Scope.current(Map.get(ctx, :session_id)),
         gate_on: App.Config.default().household_named_targets,
         users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
       })
@@ -269,7 +270,7 @@ defmodule App.Tools.Reminders do
     target =
       Target.resolve(args["for"], %{
         session_user_id: uid(ctx),
-        active_scope: Map.get(ctx, :active_scope, :personal),
+        active_scope: Scope.current(Map.get(ctx, :session_id)),
         gate_on: App.Config.default().household_named_targets,
         users: Enum.filter(Users.list(), &Users.allowed?(&1.email))
       })

@@ -4,9 +4,10 @@ defmodule App.Lists.Target do
   `App.Reminders.Target` with the default FLIPPED TO HOUSEHOLD: unspecified/household-words
   always resolve to the shared household list (unconditional — "shared by default" is the
   headline decision, unlike reminders' personal default). Personal words resolve to the session
-  user. A NAMED person is gated by `household_named_targets` (like reminders' named targeting)
-  since attributing something to someone else by voice needs that explicit opt-in; gate off (or
-  an unrecognized name) falls back to the session user, personal — never silently household to a
+  user — or to the household on a shared household device (`active_scope: :household`). A NAMED
+  person is gated by `household_named_targets` (like reminders' named targeting) since
+  attributing something to someone else by voice needs that explicit opt-in; gate off (or an
+  unrecognized name) falls back to the session user, personal — never silently household to a
   stranger. Returns `%{user_id, household, assigned}` — `assigned` is a human label the brain
   reads back so it never silently mis-scopes.
   """
@@ -19,13 +20,19 @@ defmodule App.Lists.Target do
           household: boolean(),
           assigned: String.t()
         }
-  def resolve(for_arg, %{session_user_id: sid, gate_on: gate, users: users}) do
+  def resolve(for_arg, %{session_user_id: sid, gate_on: gate, users: users} = opts) do
     case normalize(for_arg) do
       :household -> household(sid)
-      :self -> personal(sid, @self_label)
+      :self -> if household_scope?(opts), do: household(sid), else: personal(sid, @self_label)
       {:name, name} -> if gate, do: by_name(name, users, sid), else: personal(sid, @self_label)
     end
   end
+
+  # `active_scope` (App.Conversations.Scope.current/1) is :household while the conversation is
+  # bound to a shared household device (spec 2026-10-23-wall-tablet-design, phase 4): there
+  # "my"/"me" can't name whoever is speaking, so personal words land on the household too.
+  # Absent = a personal device.
+  defp household_scope?(opts), do: Map.get(opts, :active_scope, :personal) == :household
 
   # nil/""/household-words -> :household (SHARED BY DEFAULT, unconditional); personal words ->
   # :self ; anything else -> {:name, it}

@@ -165,6 +165,28 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.tools_block(%Config{tools: [], web_search: true}) == [%{googleSearch: %{}}]
   end
 
+  test "tools_block omits the Gmail declarations for the household scope" do
+    names = fn cfg ->
+      for %{functionDeclarations: decls} <- Gemini.tools_block(cfg), %{name: n} <- decls, do: n
+    end
+
+    cfg = %Config{web_search: false}
+    assert "search_email" in names.(cfg)
+
+    household = names.(App.Tools.for_scope(cfg, :household))
+    for name <- ~w(search_email read_email send_email), do: refute(name in household, name)
+    assert "create_reminder" in household
+  end
+
+  test "shared_note/1 tells the brain where it is, only on the shared household device" do
+    note = Gemini.shared_note(:household)
+    assert note =~ "shared household wall"
+    assert note =~ "go to the household"
+    assert note =~ "Email is not available here."
+    assert String.starts_with?(note, "(") and String.ends_with?(note, ")\n")
+    assert Gemini.shared_note(:personal) == ""
+  end
+
   test "tools_block is nil when there are no tools and web_search is off" do
     assert Gemini.tools_block(%Config{tools: [], web_search: false}) == nil
   end
@@ -353,6 +375,42 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.function_response_parts([call("get_weather")], [%{result: %{temp_f: 70}}]) == [
              %{functionResponse: %{name: "get_weather", response: %{result: %{temp_f: 70}}}}
            ]
+  end
+
+  test "on a shared household device a guessed Gmail call is refused, and the brain hears why" do
+    sid = "household-#{System.unique_integer([:positive])}"
+    {:ok, _} = Registry.register(App.Conversations.Registry, sid, :household)
+    cfg = App.Tools.for_scope(%App.Config{web_search: false, tool_cache: false}, :household)
+    tool_ctx = %{session_id: sid, user_id: nil, config: cfg}
+    me = self()
+
+    round_fun = fn contents, _system, _cfg, _thinking, _target, tools? ->
+      if tools? and not Process.get(:sent_calls, false) do
+        Process.put(:sent_calls, true)
+        {:ok, [call("search_email")]}
+      else
+        send(me, {:continuation, contents})
+        {:ok, []}
+      end
+    end
+
+    Gemini.run_rounds([], "sys", cfg, "low", tool_ctx, me, 0, round_fun)
+
+    assert_receive {:continuation, [_model_turn, response_turn]}
+
+    assert %{
+             parts: [
+               %{
+                 functionResponse: %{
+                   name: "search_email",
+                   response: %{error: "Email isn't available on the shared household device."}
+                 }
+               }
+             ]
+           } = response_turn
+
+    # no bridge phrase ("Checking your email…") for a tool the household doesn't have
+    refute_received {:gemini_bridge, _}
   end
 
   test "a tool round's continuation echoes each call id on both the call and its response" do
@@ -1047,6 +1105,25 @@ defmodule App.Adapters.TextModel.GeminiToolkitsTest do
       {kit_at, _} = :binary.match(text, "(Toolkit open: home.")
       {quiet_at, _} = :binary.match(text, "(The user TYPED")
       assert time_at < kit_at and kit_at < quiet_at
+    end
+
+    test "on a shared household device: no Gmail declared, the shared note rides the user " <>
+           "message, and the system prompt is unchanged",
+         %{cfg: cfg} do
+      {personal_text, personal_system, personal_cfg} = first_round("what's the weather", cfg)
+
+      # what the session's Conversation publishes while bound to a shared household device
+      sid = "household-#{System.unique_integer([:positive])}"
+      {:ok, _} = Registry.register(App.Conversations.Registry, sid, :household)
+      {text, system, round_cfg} = first_round("what's the weather", cfg, session_id: sid)
+
+      assert App.Tools.Gmail in personal_cfg.tools
+      refute App.Tools.Gmail in round_cfg.tools
+      refute personal_text =~ "shared household wall"
+      assert text =~ Gemini.shared_note(:household)
+      assert String.ends_with?(text, "what's the weather")
+      # the note rides the user message, never the (prefix-cached) system instruction
+      assert system == personal_system
     end
 
     test "an unrelated request gets no note and no house tools", %{cfg: cfg} do
