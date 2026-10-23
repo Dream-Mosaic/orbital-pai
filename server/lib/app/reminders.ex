@@ -60,8 +60,12 @@ defmodule App.Reminders do
     end
   end
 
-  def list_upcoming(user_id) do
-    now = now()
+  @doc """
+  The user's own + household reminders not yet fired, due at or after `now`, soonest first.
+  `now` defaults to the clock (the glance passes its own, so a test can pin "today").
+  """
+  def list_upcoming(user_id, now \\ now()) do
+    now = DateTime.truncate(now, :second)
 
     Reminder
     |> where(
