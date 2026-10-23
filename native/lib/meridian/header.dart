@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'tokens.dart';
+import 'wall_type.dart';
 
 /// `main:has(#voice) > header` — wordmark + connection dot on the left, the quiet
 /// version/user meta block on the right (spec §3).
@@ -22,6 +23,7 @@ class MeridianHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final meta = _metaStyle(WallType.of(context));
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: M.headerMinHeight),
       child: Row(
@@ -50,8 +52,8 @@ class MeridianHeader extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('P.A.I V${version.toUpperCase()}', style: _metaStyle),
-              Text(userName.toUpperCase(), style: _metaStyle),
+              Text('P.A.I V${version.toUpperCase()}', style: meta),
+              Text(userName.toUpperCase(), style: meta),
             ],
           ),
         ],
@@ -59,14 +61,17 @@ class MeridianHeader extends StatelessWidget {
     );
   }
 
-  static final TextStyle _metaStyle = TextStyle(
-    fontFamily: kDisplayFamily,
-    fontSize: _metaSize,
-    height: 1.5, // .meta line-height
-    letterSpacing: MType.track(_metaSize, 0.3),
-    color: M.chromeDim.withValues(alpha: 0.34),
-    shadows: MType.engraved,
-  );
+  static TextStyle _metaStyle(WallType type) {
+    final size = type.chrome(_metaSize);
+    return TextStyle(
+      fontFamily: kDisplayFamily,
+      fontSize: size,
+      height: 1.5, // .meta line-height
+      letterSpacing: MType.track(size, 0.3),
+      color: M.chromeDim.withValues(alpha: type.ink(0.34)),
+      shadows: MType.engraved,
+    );
+  }
 }
 
 /// 7x7 status dot. Steady when connected or offline; breathes (opacity 1 -> 0.4

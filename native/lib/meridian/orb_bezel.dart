@@ -6,6 +6,7 @@ import 'live_caption.dart';
 import 'orb_painter.dart';
 import 'orb_view.dart';
 import 'tokens.dart';
+import 'wall_type.dart';
 
 /// The orb canvas is oversized and centred so the sphere (drawn at 60% of the
 /// canvas box by orb.js) fills the well and its halos spill onto the rim on
@@ -329,8 +330,13 @@ class OrbDetent extends StatelessWidget {
   /// bug, which is exactly what the pre-join power tap did.
   final bool enabled;
 
+  /// `0.46rem` — the engraved PTT/ABI under a detent.
+  static const double _labelSize = 7.36;
+
   @override
   Widget build(BuildContext context) {
+    final type = WallType.of(context);
+    final labelSize = type.chrome(_labelSize);
     final body = GestureDetector(
       onTap: enabled ? onTap : null,
       child: Stack(
@@ -385,13 +391,13 @@ class OrbDetent extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontFamily: kDisplayFamily,
-                  fontSize: 7.36, // 0.46rem
+                  fontSize: labelSize,
                   fontWeight: FontWeight.w600,
                   fontVariations: MType.wght(650), // CSS 650, exactly
-                  letterSpacing: MType.track(7.36, 0.3),
+                  letterSpacing: MType.track(labelSize, 0.3),
                   color: on
-                      ? M.you.withValues(alpha: 0.7)
-                      : M.chromeDim.withValues(alpha: 0.36),
+                      ? M.you.withValues(alpha: type.ink(0.7))
+                      : M.chromeDim.withValues(alpha: type.ink(0.36)),
                 ),
               ),
             ),

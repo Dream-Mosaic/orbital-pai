@@ -15,6 +15,7 @@ class MeridianSurface extends StatefulWidget {
     required this.state,
     required this.child,
     this.bleedCentre = defaultBleedCentre,
+    this.footShade = defaultFootShade,
   });
 
   final OrbState state;
@@ -26,6 +27,14 @@ class MeridianSurface extends StatefulWidget {
   final Alignment bleedCentre;
 
   static const Alignment defaultBleedCentre = Alignment(0.0, -0.46);
+
+  /// The inner bottom shadow's strength: black at this opacity at the very
+  /// foot of the glass. The hold-to-talk bar and the nav sit in it, which a
+  /// phone's engraved chrome is meant to; a wall's raised type passes its own
+  /// (WallType.footShade).
+  final double footShade;
+
+  static const double defaultFootShade = 0.85;
 
   @override
   State<MeridianSurface> createState() => _MeridianSurfaceState();
@@ -154,7 +163,7 @@ class _MeridianSurfaceState extends State<MeridianSurface>
                         Colors.white.withValues(alpha: 0.055),
                         Colors.white.withValues(alpha: 0.0),
                         Colors.black.withValues(alpha: 0.0),
-                        Colors.black.withValues(alpha: 0.85),
+                        Colors.black.withValues(alpha: widget.footShade),
                       ],
                       stops: const [0.0, 0.004, 0.86, 1.0],
                     ),

@@ -16,6 +16,7 @@ import 'thread.dart';
 import 'timer_strip.dart';
 import 'tokens.dart';
 import 'wall_layout.dart';
+import 'wall_type.dart';
 
 /// The Meridian voice screen — the port of `<main>` in conversation_live.ex:
 /// header / orb pane / thread / hold-to-talk / nav, on the lit MeridianSurface.
@@ -195,23 +196,31 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         return LayoutBuilder(builder: (context, screen) {
           final size = screen.biggest;
           final layout = WallLayout.forWidth(size.width);
-          return MeridianSurface(
-            state: orb,
-            bleedCentre: _bleedCentre(layout, size),
-            // Without a Material ancestor, WidgetsApp's fallback DefaultTextStyle
-            // applies — and our styles override its colour/size/family but NOT its
-            // `decoration`, so every Text on the screen inherits a yellow double
-            // underline. Transparent, so MeridianSurface still owns the backdrop.
-            child: Material(
-              type: MaterialType.transparency,
-              child: SafeArea(
-                child: switch (layout) {
-                  WallLayout.compact =>
-                    _singleColumn(_ColumnSpec.compact, vc, glow, keyboard),
-                  WallLayout.medium =>
-                    _singleColumn(_ColumnSpec.medium, vc, glow, keyboard),
-                  WallLayout.expanded => _twoPanes(vc, glow, keyboard),
-                },
+          // The same width that picks the arrangement picks the type: a wall
+          // is read from across the room, a phone from arm's length.
+          final type = WallType.forLayout(layout);
+          return WallTypeScope(
+            type: type,
+            child: MeridianSurface(
+              state: orb,
+              bleedCentre: _bleedCentre(layout, size),
+              footShade: type.footShade,
+              // Without a Material ancestor, WidgetsApp's fallback
+              // DefaultTextStyle applies — and our styles override its
+              // colour/size/family but NOT its `decoration`, so every Text on
+              // the screen inherits a yellow double underline. Transparent, so
+              // MeridianSurface still owns the backdrop.
+              child: Material(
+                type: MaterialType.transparency,
+                child: SafeArea(
+                  child: switch (layout) {
+                    WallLayout.compact =>
+                      _singleColumn(_ColumnSpec.compact, vc, glow, keyboard),
+                    WallLayout.medium =>
+                      _singleColumn(_ColumnSpec.medium, vc, glow, keyboard),
+                    WallLayout.expanded => _twoPanes(vc, glow, keyboard),
+                  },
+                ),
               ),
             ),
           );
@@ -457,31 +466,28 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
 
   /// What the column holds besides the orb while the keyboard is up: header,
   /// three gaps, the elbow, a one-line composer, and enough thread to read.
-  static const double _reservedWhileTyping =
-      M.headerMinHeight + 3 * M.columnGap + 24 + _composerHeight + 150;
+  static double _reservedWhileTyping(_ColumnSpec spec) =>
+      M.headerMinHeight + 3 * M.columnGap + 24 + spec.composerHeight + 150;
 
   /// Below this the bezel's detents crowd the glass.
   static const double _minOrbWhileTyping = 96;
 
   /// The same with the keyboard down and the nav back, for a medium screen
   /// that is short (a desktop window, say): it keeps a real thread.
-  static const double _reservedAtRest = M.headerMinHeight +
+  static double _reservedAtRest(_ColumnSpec spec) =>
+      M.headerMinHeight +
       4 * M.columnGap +
       24 +
-      _composerHeight +
-      _navHeight +
+      spec.composerHeight +
+      spec.navHeight +
       240;
   static const double _minOrbAtRest = 120;
 
   /// The engraved PTT/ABI labels hang under the lower detents; on a small
-  /// bezel they clear its square by up to this much.
-  static const double _detentLabelRoom = 16;
-
-  /// The composer tray, the nav, and a row of timer chips with its gap — near
-  /// enough, for the estimates above.
-  static const double _composerHeight = 44;
-  static const double _navHeight = 56;
-  static const double _timerStripHeight = 82;
+  /// bezel they clear its square by up to this much. Only the wall's two
+  /// panes ask, and a wall draws those labels larger (WallType): 16 was the
+  /// phone-sized label's overhang.
+  static const double _detentLabelRoom = 22;
 
   /// The largest orb that still leaves the conversation readable. Derived
   /// from the height the column actually gets, so while the keyboard is up it
@@ -499,11 +505,12 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         mq.padding.vertical -
         mq.viewInsets.bottom -
         2 * M.pagePad -
-        (spec.fitsHeight && timers ? _timerStripHeight : 0);
+        (spec.fitsHeight && timers ? spec.timerStripHeight : 0);
     return typing
-        ? (column - _reservedWhileTyping)
+        ? (column - _reservedWhileTyping(spec))
             .clamp(_minOrbWhileTyping, spec.bezelMaxWidth)
-        : (column - _reservedAtRest).clamp(_minOrbAtRest, spec.bezelMaxWidth);
+        : (column - _reservedAtRest(spec))
+            .clamp(_minOrbAtRest, spec.bezelMaxWidth);
   }
 
   /// The two panes' widths in [width]: the orb pane takes its share, within
@@ -536,8 +543,11 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         final (pane, thread) = _paneWidths(inner);
         final left = Wall.pagePad + (inner - (pane + Wall.gutter + thread)) / 2;
         const top = Wall.pagePad + M.headerMinHeight + M.columnGap;
-        final bottom =
-            size.height - Wall.pagePad - _composerHeight - M.columnGap;
+        // The wall's composer: as tall as the medium column's.
+        final bottom = size.height -
+            Wall.pagePad -
+            _ColumnSpec.medium.composerHeight -
+            M.columnGap;
         return at(left + pane / 2, (top + bottom) / 2);
     }
   }
@@ -555,6 +565,9 @@ class _ColumnSpec {
     required this.orbPaneMaxWidth,
     required this.bezelMaxWidth,
     required this.fitsHeight,
+    required this.composerHeight,
+    required this.navHeight,
+    required this.timerStripHeight,
   });
 
   final double maxWidth;
@@ -564,17 +577,31 @@ class _ColumnSpec {
   /// Whether the orb also gives way to a short screen with the keyboard down.
   final bool fitsHeight;
 
+  /// The composer tray, the nav, and a row of timer chips with its gap —
+  /// near enough, for the orb's estimates (see `_orbRoom`).
+  final double composerHeight;
+  final double navHeight;
+  final double timerStripHeight;
+
   static const compact = _ColumnSpec(
     maxWidth: M.maxWidth,
     orbPaneMaxWidth: M.orbPaneMaxWidth,
     bezelMaxWidth: M.bezelMaxWidth,
     fitsHeight: false,
+    composerHeight: 44,
+    navHeight: 56,
+    timerStripHeight: 82,
   );
 
+  /// The same parts, a little taller: a wall draws their labels larger
+  /// (WallType). Measured at the Lenovo's font scale, 1.08.
   static const medium = _ColumnSpec(
     maxWidth: Wall.mediumMaxWidth,
     orbPaneMaxWidth: Wall.mediumOrbPaneMaxWidth,
     bezelMaxWidth: Wall.mediumBezelMaxWidth,
     fitsHeight: true,
+    composerHeight: 48,
+    navHeight: 70,
+    timerStripHeight: 91,
   );
 }

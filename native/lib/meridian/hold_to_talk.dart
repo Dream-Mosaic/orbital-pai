@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'tokens.dart';
+import 'wall_type.dart';
 
 /// The PTT hold tray: an engraved slit and label. Ported from `#ptt-hold`,
 /// `.slit` and `.plabel` in app.css. `enabled` mirrors the web's `disabled` attr
@@ -23,12 +24,14 @@ class HoldToTalkBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final type = WallType.of(context);
+    final labelSize = type.chrome(_labelSize);
     final slitColour = !enabled
         ? const Color(0xFFFFFFFF).withValues(alpha: 0.14)
         : (held ? M.youSoft : M.you);
     final labelColour = !enabled
-        ? M.chromeDim.withValues(alpha: 0.2)
-        : (held ? M.youSoft : M.chromeDim.withValues(alpha: 0.38));
+        ? M.chromeDim.withValues(alpha: type.ink(0.2))
+        : (held ? M.youSoft : M.chromeDim.withValues(alpha: type.ink(0.38)));
 
     return Listener(
       onPointerDown: enabled ? (_) => onPress() : null,
@@ -90,9 +93,9 @@ class HoldToTalkBar extends StatelessWidget {
               'HOLD TO TALK',
               style: TextStyle(
                 fontFamily: kDisplayFamily,
-                fontSize: _labelSize,
+                fontSize: labelSize,
                 fontWeight: FontWeight.w600,
-                letterSpacing: MType.track(_labelSize, 0.4),
+                letterSpacing: MType.track(labelSize, 0.4),
                 color: labelColour,
                 shadows: MType.engraved,
               ),

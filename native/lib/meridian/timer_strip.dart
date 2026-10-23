@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../voice/timers_model.dart';
 import 'tokens.dart';
+import 'wall_type.dart';
 
 /// The live timers, between the orb pane and the thread: one chip per timer,
 /// hung off the meridian in Henry's field (right of the rail, where his lines
@@ -202,7 +203,14 @@ class _TimerStripState extends State<TimerStrip>
               ),
               Positioned(
                 left: spineX + 0.75 - 3.5,
-                top: _TimerChip._padTop + 2,
+                // Centred on the label's line, which a wall draws larger: it
+                // moves down by half the line's growth (a line is ~1.4 × the
+                // label's size).
+                top: _TimerChip._padTop +
+                    2 +
+                    (WallType.of(context).chrome(_TimerChip._labelSize) -
+                            _TimerChip._labelSize) *
+                        0.7,
                 child: const _Node(),
               ),
               Padding(
@@ -292,6 +300,8 @@ class _TimerChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A kitchen timer's name is read from across the kitchen; see WallType.
+    final type = WallType.of(context);
     final ringing = entry.ringing;
     final label = (entry.label ?? 'timer').toUpperCase();
     final time = formatCountdown(entry.remainingAt(now));
@@ -354,9 +364,11 @@ class _TimerChip extends StatelessWidget {
                         maxLines: 1,
                         softWrap: false,
                         overflow: TextOverflow.fade,
-                        style: _engraved(ringing
-                            ? M.timer.withValues(alpha: 0.9)
-                            : M.chromeDim.withValues(alpha: 0.42)),
+                        style: _engraved(
+                            ringing
+                                ? M.timer.withValues(alpha: type.ink(0.9))
+                                : M.chromeDim.withValues(alpha: type.ink(0.42)),
+                            size: type.chrome(_labelSize)),
                       ),
                     ),
                     const SizedBox(height: 3),

@@ -5,6 +5,7 @@ import 'cards/card_view.dart';
 import 'thread_model.dart';
 import 'tokens.dart';
 import 'voice_md.dart';
+import 'wall_type.dart';
 
 /// The transcript "meridian": a glowing spine on the left rail, your amber turns
 /// rail-aligned to its left, Henry's green answers in the field to its right, and
@@ -66,6 +67,8 @@ class Thread extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A wall raises the rail labels and the reading text; see WallType.
+    final type = WallType.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: _logPadX),
       child: LayoutBuilder(
@@ -113,7 +116,8 @@ class Thread extends StatelessWidget {
                     ),
                     child: KeyedSubtree(
                       key: ValueKey('item-$i'),
-                      child: _item(items[i], railLine, logContent - 2 * _scrollerPadX),
+                      child: _item(items[i], railLine,
+                          logContent - 2 * _scrollerPadX, type),
                     ),
                   ),
                 ),
@@ -126,33 +130,35 @@ class Thread extends StatelessWidget {
   }
 
   /// [row] is the width every item is laid out at (the scroller's content box).
-  Widget _item(ThreadItem item, double rail, double row) => switch (item) {
+  Widget _item(ThreadItem item, double rail, double row, WallType type) =>
+      switch (item) {
         ThreadDivider() => Center(
             child: Text(
               '— earlier —',
               style: TextStyle(
-                fontSize: 11.2, // 0.7rem
-                color: M.ink.withValues(alpha: 0.4),
+                fontSize: type.chrome(11.2), // 0.7rem
+                color: M.ink.withValues(alpha: type.ink(0.4)),
               ),
             ),
           ),
         ThreadMetrics() => Text(
             item.text,
             style: TextStyle(
-              fontSize: 10.4, // 0.65rem
-              color: M.ink.withValues(alpha: 0.45),
+              fontSize: type.chrome(10.4), // 0.65rem
+              color: M.ink.withValues(alpha: type.ink(0.45)),
             ),
           ),
         ThreadToolChip() => Text(
             item.text,
             style: TextStyle(
-              fontSize: 12, // 0.75rem
+              fontSize: type.chrome(12), // 0.75rem
               fontStyle: FontStyle.italic,
-              color: M.ink.withValues(alpha: 0.55),
+              color: M.ink.withValues(alpha: type.ink(0.55)),
             ),
           ),
-        ThreadLine() =>
-          item.kind == LineKind.you ? _youLine(item, rail) : _fieldLine(item, rail),
+        ThreadLine() => item.kind == LineKind.you
+            ? _youLine(item, rail, type)
+            : _fieldLine(item, rail, type),
         // A visual answer sits in Henry's column, its left edge on his text,
         // and stops at [maxCardWidth]. The cap is taken up as right padding so
         // the card is still handed a TIGHT width — below the cap it gets the
@@ -167,7 +173,7 @@ class Thread extends StatelessWidget {
       };
 
   // --- `you`: amber, right-aligned on the rail to the spine's left ---
-  Widget _youLine(ThreadLine line, double rail) {
+  Widget _youLine(ThreadLine line, double rail, WallType type) {
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -177,12 +183,12 @@ class Thread extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(line.label.toLowerCase(), style: _labelStyle(M.you)),
+              Text(line.label.toLowerCase(), style: _labelStyle(type, M.you)),
               const SizedBox(height: _bodyTop),
               Text(
                 line.text,
                 textAlign: TextAlign.right,
-                style: _bodyStyle(13.44, M.youBody), // 0.84rem
+                style: _bodyStyle(type.body(13.44), M.youBody), // 0.84rem
               ),
             ],
           ),
@@ -191,7 +197,7 @@ class Thread extends StatelessWidget {
         // block's right edge (rail - 18), so its left edge is at rail - 3.
         Positioned(
           left: rail - 3,
-          top: _labelSize * 0.32,
+          top: type.chrome(_labelSize) * 0.32,
           child: const _Dot(key: ValueKey('node'), fill: M.you),
         ),
       ],
@@ -199,13 +205,14 @@ class Thread extends StatelessWidget {
   }
 
   // --- Henry's answers, reflex asides, and the agenda leads: the field ---
-  Widget _fieldLine(ThreadLine line, double rail) {
-    final (labelColour, bodySize, bodyColour, italic, dot) = switch (line.kind) {
+  Widget _fieldLine(ThreadLine line, double rail, WallType type) {
+    final (labelColour, phoneBodySize, bodyColour, italic, dot) =
+        switch (line.kind) {
       LineKind.brain => (M.henry, 14.88, M.brainBody, false, const _Dot(key: ValueKey('node'), fill: M.henry)),
       LineKind.reflex => (
-          M.chromeDim.withValues(alpha: 0.34),
+          M.chromeDim.withValues(alpha: type.ink(0.34)),
           12.8, // .who-reflex .body 0.8rem
-          M.chromeDim.withValues(alpha: 0.42),
+          M.chromeDim.withValues(alpha: type.ink(0.42)),
           true,
           const _Dot(key: ValueKey('node'), border: true),
         ),
@@ -226,11 +233,13 @@ class Thread extends StatelessWidget {
     };
 
     final reflex = line.kind == LineKind.reflex;
+    final bodySize = type.body(phoneBodySize);
     final body = line.thinking
         ? Text(
             line.text,
-            style:
-                _bodyStyle(bodySize, M.chromeDim.withValues(alpha: 0.42), italic: true),
+            style: _bodyStyle(
+                bodySize, M.chromeDim.withValues(alpha: type.ink(0.42)),
+                italic: true),
           )
         : line.markdown
             ? VoiceMarkdown(text: line.text, baseStyle: _bodyStyle(bodySize, bodyColour))
@@ -245,25 +254,27 @@ class Thread extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(line.label.toLowerCase(), style: _labelStyle(labelColour)),
+              Text(line.label.toLowerCase(),
+                  style: _labelStyle(type, labelColour)),
               SizedBox(height: reflex ? 1.6 : _bodyTop), // .who-reflex .body 0.1rem
               body,
-              if (line.ack != AckState.none) _ackChip(line),
+              if (line.ack != AckState.none) _ackChip(line, type),
             ],
           ),
         ),
         // ::before left: -22px (reflex: -21.5px), relative to the rail+18 margin.
         Positioned(
           left: reflex ? rail - 3.5 : rail - 4,
-          top: _labelSize * (reflex ? 0.38 : 0.32),
+          top: type.chrome(_labelSize) * (reflex ? 0.38 : 0.32),
           child: dot,
         ),
       ],
     );
   }
 
-  Widget _ackChip(ThreadLine line) {
+  Widget _ackChip(ThreadLine line, WallType type) {
     final acked = line.ack == AckState.acked;
+    final size = type.chrome(9.92); // 0.62rem
     return Padding(
       padding: const EdgeInsets.only(top: 7.2), // .ack-chip margin-top 0.45rem
       child: GestureDetector(
@@ -284,10 +295,12 @@ class Thread extends StatelessWidget {
           child: Text(
             acked ? 'acked ✓' : 'ack',
             style: TextStyle(
-              fontSize: 9.92, // 0.62rem
+              fontSize: size,
               fontWeight: FontWeight.w600, // CSS 650; Flutter has no w650
-              letterSpacing: MType.track(9.92, 0.18),
-              color: acked ? M.chromeDim.withValues(alpha: 0.5) : M.you,
+              letterSpacing: MType.track(size, 0.18),
+              color: acked
+                  ? M.chromeDim.withValues(alpha: type.ink(0.5))
+                  : M.you,
             ),
           ),
         ),
@@ -295,13 +308,16 @@ class Thread extends StatelessWidget {
     );
   }
 
-  static TextStyle _labelStyle(Color colour) => TextStyle(
-        fontFamily: kDisplayFamily,
-        fontSize: _labelSize,
-        fontWeight: FontWeight.w600, // CSS 650
-        letterSpacing: MType.track(_labelSize, 0.24),
-        color: colour,
-      );
+  static TextStyle _labelStyle(WallType type, Color colour) {
+    final size = type.chrome(_labelSize);
+    return TextStyle(
+      fontFamily: kDisplayFamily,
+      fontSize: size,
+      fontWeight: FontWeight.w600, // CSS 650
+      letterSpacing: MType.track(size, 0.24),
+      color: colour,
+    );
+  }
 
   static TextStyle _bodyStyle(double size, Color colour, {bool italic = false}) =>
       TextStyle(

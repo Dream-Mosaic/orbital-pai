@@ -5,6 +5,8 @@ import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/meridian/cards/card_view.dart';
 import 'package:orbital_pai/meridian/composer.dart';
 import 'package:orbital_pai/meridian/header.dart';
+import 'package:orbital_pai/meridian/hero_icon.dart';
+import 'package:orbital_pai/meridian/meridian_surface.dart';
 import 'package:orbital_pai/meridian/nav.dart';
 import 'package:orbital_pai/meridian/orb_bezel.dart';
 import 'package:orbital_pai/meridian/orb_shader.dart';
@@ -15,6 +17,7 @@ import 'package:orbital_pai/meridian/timer_strip.dart';
 import 'package:orbital_pai/meridian/tokens.dart';
 import 'package:orbital_pai/meridian/voice_screen.dart';
 import 'package:orbital_pai/meridian/wall_layout.dart';
+import 'package:orbital_pai/meridian/wall_type.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
 
@@ -49,20 +52,18 @@ class _WallStage extends VoiceController {
 
 /// A realistic afternoon: the glance, two kitchen timers, a weather question
 /// answered with its card, and a live follow-up. [locked] is the wall
-/// tablet's usual rest — voice activation on, waiting for its name.
-void _furnish(VoiceController vc, {bool locked = false}) {
+/// tablet's usual rest — voice activation on, waiting for its name. [event]
+/// is the orb face's next event.
+void _furnish(VoiceController vc,
+    {bool locked = false, String event = 'Dinner with Mom'}) {
   if (locked) vc.debugHandleMessage(_msg('locked', const {'locked': true}));
-  vc.debugHandleMessage(_msg('glance', const {
-    'weather': {
+  vc.debugHandleMessage(_msg('glance', {
+    'weather': const {
       'temp': '64°',
       'condition': 'Partly cloudy',
       'icon': 'partly-day'
     },
-    'next_event': {
-      'title': 'Dinner with Mom',
-      'time': '7:30 PM',
-      'day': 'Today'
-    },
+    'next_event': {'title': event, 'time': '7:30 PM', 'day': 'Today'},
   }));
   vc.debugHandleMessage(_msg('timers', const {
     'timers': [
@@ -128,11 +129,26 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
+  /// The wall tablet as it reports itself: a Lenovo TB305FU, 800×1340 px at
+  /// devicePixelRatio 1.125 (711×1191 dp), system font scale 1.08.
+  void lenovo(WidgetTester tester, {required bool portrait}) {
+    tester.view.physicalSize =
+        portrait ? const Size(800, 1340) : const Size(1340, 800);
+    tester.view.devicePixelRatio = 1.125;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.08;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+  }
+
   Future<VoiceController> mount(WidgetTester tester,
-      {bool furnished = true, OrbState posed = OrbState.idle}) async {
+      {bool furnished = true,
+      OrbState posed = OrbState.idle,
+      String event = 'Dinner with Mom'}) async {
     final vc = _WallStage(connection: conn, posed: posed);
     addTearDown(vc.dispose);
-    if (furnished) _furnish(vc, locked: posed == OrbState.ambient);
+    if (furnished) {
+      _furnish(vc, locked: posed == OrbState.ambient, event: event);
+    }
     // The orb follows the posed state, not the (socketless) turn.
     vc.orbFrame.state = posed;
     await tester.pumpWidget(MaterialApp(
@@ -345,7 +361,10 @@ void main() {
     await mount(tester);
 
     expect(tester.takeException(), isNull);
-    expect(tester.getSize(find.byType(Thread)).height, greaterThan(100));
+    // Three of Henry's lines at the wall's size (line-height 1.5). The orb is
+    // already at its floor here; the wall's larger chrome is what is left.
+    expect(tester.getSize(find.byType(Thread)).height,
+        greaterThan(3 * WallType.wall.body(14.88) * 1.5));
   });
 
   testWidgets('rotating across the breakpoint keeps the draft and the focus',
@@ -386,14 +405,135 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  group('the wall type floor', () {
+    // The DECLARED sizes; the platform's font scale multiplies on top of them.
+    TextStyle styleOf(WidgetTester tester, String text) =>
+        tester.widget<Text>(find.text(text).first).style!;
+    double sizeOf(WidgetTester tester, String text) =>
+        styleOf(tester, text).fontSize!;
+    double alphaOf(WidgetTester tester, String text) =>
+        styleOf(tester, text).color!.a;
+    double navIcon(WidgetTester tester) => tester
+        .widget<HeroIconView>(find
+            .descendant(
+                of: find.byType(MeridianNav),
+                matching: find.byType(HeroIconView))
+            .first)
+        .size;
+    double footShade(WidgetTester tester) =>
+        tester.widget<MeridianSurface>(find.byType(MeridianSurface)).footShade;
+    const youSaid = 'Should I bring an umbrella tonight?';
+    const henrySaid = 'Not tonight — the rain holds off until tomorrow '
+        'afternoon. Dinner with Mom at 7:30 should stay dry.';
+
+    testWidgets("a phone (360x800) keeps the CSS port's sizes, untouched",
+        (tester) async {
+      screen(tester, const Size(360, 800), dpr: 3);
+      await mount(tester);
+
+      expect(sizeOf(tester, 'CONNECTORS'), 6.4);
+      expect(alphaOf(tester, 'CONNECTORS'), closeTo(0.3, 1e-6));
+      expect(navIcon(tester), 18);
+      expect(sizeOf(tester, 'P.A.I V0.9.0'), 8.32);
+      expect(alphaOf(tester, 'DAVID'), closeTo(0.34, 1e-6));
+      expect(sizeOf(tester, 'HOLD TO TALK'), 8.32);
+      expect(alphaOf(tester, 'HOLD TO TALK'), closeTo(0.2, 1e-6),
+          reason: 'disabled: PTT mode is off');
+      expect(sizeOf(tester, 'PTT'), 7.36);
+      expect(sizeOf(tester, 'PASTA'), 8.32);
+      expect(footShade(tester), MeridianSurface.defaultFootShade);
+      expect(sizeOf(tester, 'henry'), 8.64);
+      expect(sizeOf(tester, henrySaid), 14.88);
+      // A phone's thread shows only the newest line; bring your question in.
+      await tester.drag(find.byType(Thread), const Offset(0, 160));
+      await tester.pump();
+      expect(sizeOf(tester, 'you'), 8.64);
+      expect(sizeOf(tester, youSaid), 13.44);
+      expect(tester.takeException(), isNull);
+    });
+
+    for (final portrait in [true, false]) {
+      final name = portrait
+          ? 'the Lenovo in portrait (711x1191, medium)'
+          : 'the Lenovo in landscape (1191x711, expanded)';
+      testWidgets('$name reads from across the room', (tester) async {
+        lenovo(tester, portrait: portrait);
+        await mount(tester);
+        expect(find.byKey(wallOrbPaneKey),
+            portrait ? findsNothing : findsOneWidget);
+
+        // The nav: 6.4 -> the floor; its icons 18 -> 23.4.
+        expect(sizeOf(tester, 'CONNECTORS'), 11);
+        expect(alphaOf(tester, 'CONNECTORS'), closeTo(0.6, 1e-6));
+        expect(navIcon(tester), closeTo(23.4, 1e-6));
+        // CONNECTORS still fits its station on one line, unscaled.
+        final connectors = find.text('CONNECTORS');
+        expect(tester.getRect(connectors).width,
+            moreOrLessEquals(tester.getSize(connectors).width),
+            reason: 'FittedBox shrinking one label reads as a bug');
+        // The header's meta.
+        expect(sizeOf(tester, 'P.A.I V0.9.0'), 11);
+        expect(alphaOf(tester, 'DAVID'), closeTo(0.68, 1e-6));
+        // Hold to talk, still visibly disabled next to its enabled 0.76.
+        expect(sizeOf(tester, 'HOLD TO TALK'), 11);
+        expect(alphaOf(tester, 'HOLD TO TALK'), closeTo(0.4, 1e-6));
+        // The detents' engraving.
+        expect(sizeOf(tester, 'PTT'), 11);
+        expect(alphaOf(tester, 'PTT'), closeTo(0.72, 1e-6));
+        // The rail labels, and the conversation itself (x1.2).
+        expect(sizeOf(tester, 'henry'), closeTo(11.232, 1e-6));
+        expect(sizeOf(tester, 'you'), closeTo(11.232, 1e-6));
+        expect(sizeOf(tester, youSaid), closeTo(16.128, 1e-6));
+        expect(sizeOf(tester, henrySaid), closeTo(17.856, 1e-6));
+        // A kitchen timer's name.
+        expect(sizeOf(tester, 'PASTA'), 11);
+        // And the glass's foot no longer swallows the nav it just raised.
+        expect(footShade(tester), 0.35);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('the floor follows the width across a rotation',
+        (tester) async {
+      screen(tester, const Size(360, 800));
+      await mount(tester);
+      expect(sizeOf(tester, 'CONNECTORS'), 6.4);
+
+      tester.view.physicalSize = const Size(800, 1280);
+      await tester.pump();
+      expect(sizeOf(tester, 'CONNECTORS'), 11);
+
+      tester.view.physicalSize = const Size(599, 800);
+      await tester.pump();
+      expect(sizeOf(tester, 'CONNECTORS'), 6.4,
+          reason: 'back under the medium line: the phone again');
+    });
+
+    test('a phone is the identity; a wall never dims what is bright', () {
+      for (final v in [0.0, 6.4, 8.32, 14.88]) {
+        expect(WallType.hand.chrome(v), v);
+        expect(WallType.hand.body(v), v);
+      }
+      for (final a in [0.0, 0.2, 0.34, 0.9, 1.0]) {
+        expect(WallType.hand.ink(a), a);
+        expect(WallType.wall.ink(a), greaterThanOrEqualTo(a));
+      }
+      expect(WallType.wall.ink(0.9), 0.9, reason: 'above the ceiling: kept');
+      expect(WallType.forLayout(WallLayout.compact), WallType.hand);
+      expect(WallType.forLayout(WallLayout.medium), WallType.wall);
+      expect(WallType.forLayout(WallLayout.expanded), WallType.wall);
+    });
+  });
+
   group('goldens', () {
     // The real orb shader, loaded up front so the first frame already has it.
     setUp(() async => OrbShaderProgram.load());
 
-    Future<void> shoot(WidgetTester tester, Size size, String name,
-        {OrbState posed = OrbState.idle}) async {
-      screen(tester, size);
-      await mount(tester, posed: posed);
+    /// Mount on whatever screen the test has set, and shoot.
+    Future<void> capture(WidgetTester tester, String name,
+        {OrbState posed = OrbState.idle,
+        String event = 'Dinner with Mom'}) async {
+      await mount(tester, posed: posed, event: event);
       // The orb and the surface both animate; a fixed stretch of the fake
       // clock lands them on the same frame every run.
       for (var i = 0; i < 30; i++) {
@@ -401,6 +541,12 @@ void main() {
       }
       await expectLater(
           find.byType(MeridianVoiceScreen), matchesGoldenFile(name));
+    }
+
+    Future<void> shoot(WidgetTester tester, Size size, String name,
+        {OrbState posed = OrbState.idle}) async {
+      screen(tester, size);
+      await capture(tester, name, posed: posed);
     }
 
     // Regenerate deliberately, then LOOK at the PNGs:
@@ -415,6 +561,21 @@ void main() {
     testWidgets('expanded: the wall display at rest', (tester) async {
       await shoot(
           tester, const Size(1280, 800), 'goldens/voice_wall_expanded.png',
+          posed: OrbState.ambient);
+    });
+
+    // The Lenovo itself, at the size and font scale it reports. Portrait is
+    // awake with a next event too long for one line, so the face's second
+    // line is on record; landscape is the wall at rest.
+    testWidgets('the Lenovo in portrait (711x1191): awake', (tester) async {
+      lenovo(tester, portrait: true);
+      await capture(tester, 'goldens/voice_wall_lenovo_portrait.png',
+          event: 'Dinner with Mom and Dad at Trattoria Marcella');
+    });
+
+    testWidgets('the Lenovo in landscape (1191x711): at rest', (tester) async {
+      lenovo(tester, portrait: false);
+      await capture(tester, 'goldens/voice_wall_lenovo_landscape.png',
           posed: OrbState.ambient);
     });
   });

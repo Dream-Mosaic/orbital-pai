@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'hero_icon.dart';
 import 'tokens.dart';
+import 'wall_type.dart';
 
 /// The bottom-nav stations. Search is deliberately absent: the web's station
 /// only ever said "coming soon", and a station that opens onto nothing costs a
@@ -39,9 +40,13 @@ class MeridianNav extends StatelessWidget {
   /// widest label is what sets the size. Dropping it uniformly reads as chrome —
   /// letting FittedBox shrink only the two long ones read as a bug.
   static const double _labelSize = 6.4;
+  static const double _iconSize = 18;
 
   @override
   Widget build(BuildContext context) {
+    // Across the room these are the screen's smallest type; see WallType.
+    final type = WallType.of(context);
+    final labelSize = type.chrome(_labelSize);
     return Container(
       margin: const EdgeInsets.only(top: 2),
       padding: const EdgeInsets.fromLTRB(12, 9, 12, 4),
@@ -71,7 +76,9 @@ class MeridianNav extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           HeroIconView(tab.icon,
-                              size: 18, color: M.chromeDim.withValues(alpha: 0.42)),
+                              size: type.chrome(_iconSize),
+                              color: M.chromeDim
+                                  .withValues(alpha: type.ink(0.42))),
                           const SizedBox(height: 5), // .nbtn gap
                           // The CSS lets the label wrap; at 360px that splits
                           // "REMINDERS" across two lines, which reads as broken
@@ -85,11 +92,12 @@ class MeridianNav extends StatelessWidget {
                               softWrap: false,
                               style: TextStyle(
                                 fontFamily: kDisplayFamily,
-                                fontSize: _labelSize,
+                                fontSize: labelSize,
                                 fontWeight: FontWeight.w600,
                                 fontVariations: MType.wght(600),
-                                letterSpacing: MType.track(_labelSize, 0.34),
-                                color: M.chromeDim.withValues(alpha: 0.3),
+                                letterSpacing: MType.track(labelSize, 0.34),
+                                color: M.chromeDim
+                                    .withValues(alpha: type.ink(0.3)),
                                 shadows: MType.engraved,
                               ),
                             ),
