@@ -639,6 +639,9 @@ void main() {
       ]);
       expect(window.calls.skip(2), ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
 
+      // A wall powers its mic on after joining; there is no recorder plugin
+      // here, so let the real MicCapture's bounded permission check run out.
+      await tester.pump(const Duration(minutes: 1, seconds: 1));
       await conn.disconnect();
     });
 

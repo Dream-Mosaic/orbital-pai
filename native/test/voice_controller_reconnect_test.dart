@@ -1168,6 +1168,73 @@ void main() {
     expect(b.vc.micOn, isFalse);
   });
 
+  test('a wall powers its microphone on by itself once it has joined',
+      () async {
+    // A phone waits for the power button (no permission prompt at launch); a
+    // wall that did the same would be deaf after every restart until someone
+    // walked over and tapped it.
+    final mic = FakeMic();
+    final fake = FakeSocket(joinPushes: const [defaultsOff]);
+    final b = build(connector: () async => fake.socket, mic: mic, wall: true);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    expect(mic.startCalls, 1);
+    expect(b.vc.micOn, isTrue);
+  });
+
+  test('a wall switched off by hand stays off across a reconnect', () async {
+    final mic = FakeMic();
+    final sockets = <FakeSocket>[];
+    final b = build(
+      connector: () async {
+        final s = FakeSocket(joinPushes: const [defaultsOff]);
+        sockets.add(s);
+        return s.socket;
+      },
+      backoff: const [Duration(milliseconds: 10)],
+      mic: mic,
+      wall: true,
+    );
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    await b.vc.togglePower();
+    await settle();
+    expect(b.vc.micOn, isFalse);
+
+    await sockets.first.kill();
+    await settle();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await settle();
+
+    expect(sockets, hasLength(2), reason: 'the reconnect has to have happened');
+    expect(b.vc.micOn, isFalse, reason: 'the auto-start is once per launch');
+    expect(mic.startCalls, 1);
+  });
+
+  test('becoming a wall mid-session powers the microphone on', () async {
+    final mic = FakeMic();
+    final fake = FakeSocket(joinPushes: const [defaultsOff]);
+    final b = build(connector: () async => fake.socket, mic: mic);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(mic.startCalls, 0);
+
+    b.vc.setDeviceRole(kiosk: true);
+    await settle();
+
+    expect(b.vc.micOn, isTrue);
+  });
+
   test('a reconnect\'s snapshot does not stomp an in-session toggle', () async {
     // The snapshot is re-sent on EVERY (re)bind — a wifi blip, a redeploy,
     // another device claiming and handing back. Re-applying the stored default

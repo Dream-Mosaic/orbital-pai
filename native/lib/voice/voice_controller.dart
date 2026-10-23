@@ -126,6 +126,7 @@ class VoiceController extends ChangeNotifier {
     // Becoming a wall leaves push-to-talk, for the reason in
     // [_applyStoredDefaults]: a wall in PTT cannot hear its wake word.
     if (kiosk && _pttEnabled) _applyPtt(false, startMicIfOff: false);
+    _startWallMic();
     _connection.openChannel(
       _topic,
       joinPayload: _joinPayload(),
@@ -900,6 +901,22 @@ class VoiceController extends ChangeNotifier {
     if (_serverKiosk != _kiosk) _pushDeviceRole();
     unawaited(_initPlayer());
     _reArmMic();
+    _startWallMic();
+  }
+
+  /// Whether this launch's wall auto-start has run. Once per launch: a wall
+  /// someone switched off with the power button stays off across reconnects
+  /// (a mic that was ON when a channel died is [_reArmMic]'s to restore).
+  bool _wallMicStarted = false;
+
+  /// A wall powers its own microphone on once it has joined. A phone waits
+  /// for the power button so a launch never throws a permission prompt at
+  /// someone who touched nothing; a wall that waited would be deaf after
+  /// every restart until someone walked over and tapped it.
+  void _startWallMic() {
+    if (!_kiosk || _wallMicStarted || _live == null) return;
+    _wallMicStarted = true;
+    if (!_micState.on && !_micState.wanted) unawaited(startMic());
   }
 
   void _wireChannel(PhoenixChannel ch) {
