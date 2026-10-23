@@ -110,6 +110,7 @@ Future<PhoenixSocket> noSocket() async => throw StateError('no socket');
   Duration joinTimeout = const Duration(seconds: 15),
   MicCapture? mic,
   AudioTrackPlayer? player,
+  bool wall = false,
 }) {
   final fake = FakeSocket();
   final conn = AppConnection(
@@ -117,7 +118,10 @@ Future<PhoenixSocket> noSocket() async => throw StateError('no socket');
       rejoinBackoff: backoff,
       joinTimeout: joinTimeout);
   final vc = VoiceController(
-      connection: conn, mic: mic ?? FakeMic(), player: player ?? FakePlayer());
+      connection: conn,
+      mic: mic ?? FakeMic(),
+      player: player ?? FakePlayer(),
+      isWall: () => wall);
   return (conn: conn, vc: vc, fake: fake);
 }
 
@@ -1108,6 +1112,42 @@ void main() {
         reason: 'a bool set without this push leaves the STT socket in auto '
             'mode, and nothing says so until someone tries to talk');
     expect(pushesOf(fake, 'allow_interruptions').last['enabled'], isTrue);
+  });
+
+  test('a wall starts hands-free whatever the account\'s Default PTT says',
+      () async {
+    // PTT closes the mic to everything but the held button, so a wall that
+    // took the phone's PTT default could not hear "Henry" (the Lenovo, on its
+    // first day as a wall). ABI still follows the account.
+    final fake = FakeSocket(joinPushes: const [defaultsOn]);
+    final b = build(connector: () async => fake.socket, wall: true);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.pttEnabled, isFalse);
+    expect(b.vc.abiEnabled, isTrue);
+    expect(pushesOf(fake, 'ptt').where((p) => p['enabled'] == true), isEmpty);
+  });
+
+  test('becoming a wall mid-session leaves push-to-talk', () async {
+    final fake = FakeSocket(joinPushes: const [defaultsOn]);
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+
+    await b.conn.connect();
+    await settle();
+    expect(b.vc.pttEnabled, isTrue);
+
+    b.vc.setDeviceRole(kiosk: true);
+    await settle();
+
+    expect(b.vc.pttEnabled, isFalse);
+    expect(pushesOf(fake, 'ptt').last['enabled'], isFalse,
+        reason: 'through the real mode switch, so the STT socket leaves manual');
   });
 
   test('applying a stored PTT default does not start the microphone', () async {

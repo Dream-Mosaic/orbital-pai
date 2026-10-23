@@ -123,6 +123,9 @@ class VoiceController extends ChangeNotifier {
   void setDeviceRole({required bool kiosk}) {
     if (_disposed || kiosk == _kiosk) return;
     _kiosk = kiosk;
+    // Becoming a wall leaves push-to-talk, for the reason in
+    // [_applyStoredDefaults]: a wall in PTT cannot hear its wake word.
+    if (kiosk && _pttEnabled) _applyPtt(false, startMicIfOff: false);
     _connection.openChannel(
       _topic,
       joinPayload: _joinPayload(),
@@ -844,7 +847,11 @@ class VoiceController extends ChangeNotifier {
   void _applyStoredDefaults(Map<String, dynamic> p) {
     if (_prefsSettled) return;
     final abi = p['default_abi'] as bool?;
-    final ptt = p['default_ptt'] as bool?;
+    final storedPtt = p['default_ptt'] as bool?;
+    // A wall starts hands-free whatever the account says: PTT closes the mic
+    // to everything but the held button, so a wall that took the phone's PTT
+    // default could not hear "Henry". The detent still switches it by hand.
+    final ptt = (_kiosk && storedPtt != null) ? false : storedPtt;
     // An old server sends neither. Stay unsettled so the first snapshot from a
     // server that DOES carry them still lands.
     if (abi == null && ptt == null) return;
