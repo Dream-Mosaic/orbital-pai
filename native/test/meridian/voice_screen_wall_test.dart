@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/device/device_role.dart';
+import 'package:orbital_pai/device/wall_activity.dart';
+import 'package:orbital_pai/device/wall_mode_host.dart';
 import 'package:orbital_pai/meridian/cards/card_view.dart';
 import 'package:orbital_pai/meridian/composer.dart';
 import 'package:orbital_pai/meridian/header.dart';
@@ -14,6 +17,7 @@ import 'package:orbital_pai/meridian/orb_state.dart';
 import 'package:orbital_pai/meridian/thread.dart';
 import 'package:orbital_pai/meridian/thread_model.dart';
 import 'package:orbital_pai/meridian/timer_strip.dart';
+import 'package:orbital_pai/meridian/today_board.dart';
 import 'package:orbital_pai/meridian/tokens.dart';
 import 'package:orbital_pai/meridian/voice_screen.dart';
 import 'package:orbital_pai/meridian/wall_layout.dart';
@@ -22,6 +26,7 @@ import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
 
 import '../support/fake_alarm.dart';
+import '../support/fake_window.dart';
 import '../support/fakes.dart';
 import 'card_fixtures.dart';
 
@@ -50,12 +55,117 @@ class _WallStage extends VoiceController {
   OrbState get orbState => posed;
 }
 
+/// The rest of a Saturday evening's glance, for the Today board: what is on
+/// tonight and tomorrow (an all-day birthday among it, and one title too long
+/// for a line), the next six hours and three days, and two reminders — one of
+/// them the household's.
+const Map<String, dynamic> boardGlance = {
+  'agenda': [
+    {
+      'title': 'Dinner with Mom',
+      'time': '7:30 PM',
+      'day': 'Today',
+      'all_day': false,
+      'at': '2026-10-11T00:30:00Z',
+    },
+    {
+      'title': "Mom's birthday",
+      'time': 'All day',
+      'day': 'Tomorrow',
+      'all_day': true,
+      'at': null,
+    },
+    {
+      'title': 'Dentist',
+      'time': '9:00 AM',
+      'day': 'Tomorrow',
+      'all_day': false,
+      'at': '2026-10-11T14:00:00Z',
+    },
+    {
+      'title': 'Lunch with Sam and the whole design team at Trattoria Marcella',
+      'time': '12:30 PM',
+      'day': 'Tomorrow',
+      'all_day': false,
+      'at': '2026-10-11T17:30:00Z',
+    },
+  ],
+  'forecast': {
+    'hourly': [
+      {
+        'label': '6PM',
+        'temp': '63°',
+        'condition': 'Partly cloudy',
+        'icon': 'partly'
+      },
+      {
+        'label': '7PM',
+        'temp': '61°',
+        'condition': 'Partly cloudy',
+        'icon': 'partly_night'
+      },
+      {'label': '8PM', 'temp': '59°', 'condition': 'Cloudy', 'icon': 'cloudy'},
+      {'label': '9PM', 'temp': '58°', 'condition': 'Cloudy', 'icon': 'cloudy'},
+      {
+        'label': '10PM',
+        'temp': '57°',
+        'condition': 'Rain',
+        'icon': 'rain',
+        'precip': '30%'
+      },
+      {
+        'label': '11PM',
+        'temp': '56°',
+        'condition': 'Rain',
+        'icon': 'rain',
+        'precip': '55%'
+      },
+    ],
+    'daily': [
+      {
+        'label': 'Sun',
+        'hi': '66°',
+        'lo': '52°',
+        'condition': 'Rain',
+        'icon': 'rain',
+        'precip': '70%'
+      },
+      {
+        'label': 'Mon',
+        'hi': '61°',
+        'lo': '47°',
+        'condition': 'Storms',
+        'icon': 'storm',
+        'precip': '80%'
+      },
+      {
+        'label': 'Tue',
+        'hi': '64°',
+        'lo': '45°',
+        'condition': 'Clear',
+        'icon': 'clear'
+      },
+    ],
+  },
+  'reminders': [
+    {'text': 'Take out the bins', 'time': '8:00 PM', 'household': true},
+    {
+      'text': 'Call the pharmacy about the refill',
+      'time': '9:30 PM',
+      'household': false
+    },
+  ],
+};
+
 /// A realistic afternoon: the glance, two kitchen timers, a weather question
 /// answered with its card, and a live follow-up. [locked] is the wall
 /// tablet's usual rest — voice activation on, waiting for its name. [event]
-/// is the orb face's next event.
+/// is the orb face's next event. [board] adds the Today board's parts to the
+/// glance.
 void _furnish(VoiceController vc,
-    {bool locked = false, String event = 'Dinner with Mom'}) {
+    {bool locked = false,
+    String event = 'Dinner with Mom',
+    bool board = false}) {
   if (locked) vc.debugHandleMessage(_msg('locked', const {'locked': true}));
   vc.debugHandleMessage(_msg('glance', {
     'weather': const {
@@ -64,6 +174,7 @@ void _furnish(VoiceController vc,
       'icon': 'partly-day'
     },
     'next_event': {'title': event, 'time': '7:30 PM', 'day': 'Today'},
+    if (board) ...boardGlance,
   }));
   vc.debugHandleMessage(_msg('timers', const {
     'timers': [
@@ -140,34 +251,24 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
   }
 
+  /// [activity] stands in for `WallModeHost`'s: a wall at rest shows the
+  /// Today board. Null is a screen with no host at all.
   Future<VoiceController> mount(WidgetTester tester,
       {bool furnished = true,
       OrbState posed = OrbState.idle,
-      String event = 'Dinner with Mom'}) async {
+      String event = 'Dinner with Mom',
+      WallActivity? activity}) async {
     final vc = _WallStage(connection: conn, posed: posed);
     addTearDown(vc.dispose);
     if (furnished) {
-      _furnish(vc, locked: posed == OrbState.ambient, event: event);
+      _furnish(vc,
+          locked: posed == OrbState.ambient,
+          event: event,
+          board: activity != null);
     }
     // The orb follows the posed state, not the (socketless) turn.
     vc.orbFrame.state = posed;
-    await tester.pumpWidget(MaterialApp(
-      debugShowCheckedModeBanner: false,
-      // The app's own theme. The few strings that set no family (the
-      // "earlier" divider) take the platform font on a device; Inter stands in
-      // for it here so they render as words rather than test-font boxes.
-      theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: M.bg,
-        textTheme: ThemeData.dark().textTheme.apply(fontFamily: kBodyFamily),
-      ),
-      home: MeridianVoiceScreen(
-        controller: vc,
-        connection: conn,
-        userName: 'David',
-        appVersion: '0.9.0',
-        clock: () => DateTime(2026, 10, 10, 17, 42),
-      ),
-    ));
+    await tester.pumpWidget(_app(_hosted(activity, _screen(vc, conn))));
     await tester.pump();
     return vc;
   }
@@ -525,6 +626,209 @@ void main() {
     });
   });
 
+  group('the Today board', () {
+    late DateTime now;
+    late FakeWindow window;
+
+    setUp(() {
+      // An afternoon: the night dim stays out of it.
+      now = DateTime(2026, 10, 10, 15, 0);
+      window = FakeWindow();
+    });
+
+    /// The screen as the app builds it: inside the real [WallModeHost], whose
+    /// activity tracker decides when the board shows. [history] turns of
+    /// conversation, enough to scroll, replace the usual afternoon's.
+    Future<VoiceController> mountOnWall(WidgetTester tester,
+        {DeviceRole role = DeviceRole.wall, int history = 0}) async {
+      final vc = _WallStage(connection: conn);
+      addTearDown(vc.dispose);
+      if (history == 0) {
+        _furnish(vc, board: true);
+      } else {
+        vc.debugHandleMessage(_msg('glance', boardGlance));
+        vc.debugHandleMessage(_msg('history', {
+          'turns': [
+            for (var i = 0; i < history; i++)
+              {
+                'you': 'Question number $i, asked at some length so it wraps.',
+                'assistant': 'Answer number $i — long enough to take a couple '
+                    'of lines in the thread, so the history is worth scrolling.',
+              },
+          ],
+        }));
+      }
+      await tester.pumpWidget(_app(WallModeHost(
+        device: DeviceController.fixed(DeviceSettings(role: role)),
+        vc: vc,
+        window: window,
+        clock: () => now,
+        child: _screen(vc, conn),
+      )));
+      await tester.pump();
+      return vc;
+    }
+
+    /// Moves the wall clock on and lets the host's tick and the crossfade run.
+    Future<void> rest(WidgetTester tester, Duration d) async {
+      now = now.add(d);
+      await tester.pump(WallModeHost.tick);
+      await tester.pump(TodayBoard.fadeIn);
+    }
+
+    double opacity(WidgetTester tester, Key layer) =>
+        tester.widget<AnimatedOpacity>(find.byKey(layer)).opacity;
+
+    bool boardShows(WidgetTester tester) =>
+        opacity(tester, todayBoardLayerKey) == 1 &&
+        opacity(tester, threadLayerKey) == 0;
+
+    bool threadShows(WidgetTester tester) =>
+        opacity(tester, todayBoardLayerKey) == 0 &&
+        opacity(tester, threadLayerKey) == 1;
+
+    testWidgets(
+        'landscape: two minutes at rest, and the board takes the thread pane',
+        (tester) async {
+      lenovo(tester, portrait: false);
+      await mountOnWall(tester);
+      expect(threadShows(tester), isTrue);
+      expect(find.byType(Thread).hitTestable(), findsOneWidget);
+
+      await rest(tester, const Duration(seconds: 110));
+      expect(threadShows(tester), isTrue, reason: 'not yet two minutes');
+
+      await rest(tester, const Duration(seconds: 10));
+      expect(boardShows(tester), isTrue);
+      expect(
+          find.descendant(
+              of: find.byKey(wallThreadPaneKey),
+              matching: find.byType(TodayBoard)),
+          findsOneWidget);
+      expect(find.text('COMING UP'), findsOneWidget);
+      // The thread is still there — invisible, untouchable, out of the
+      // semantics tree — and the nav still works.
+      expect(find.byType(Thread), findsOneWidget);
+      expect(find.byType(Thread).hitTestable(), findsNothing);
+      expect(
+          tester
+              .widget<ExcludeSemantics>(find
+                  .ancestor(
+                      of: find.byKey(threadLayerKey),
+                      matching: find.byType(ExcludeSemantics))
+                  .first)
+              .excluding,
+          isTrue);
+      expect(find.byType(MeridianNav).hitTestable(), findsOneWidget);
+      // The timers keep their own strip, in the orb pane.
+      expect(find.text('PASTA'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('portrait: the board takes the slot under the orb',
+        (tester) async {
+      lenovo(tester, portrait: true);
+      await mountOnWall(tester);
+      final slot = tester.getRect(find.byType(Thread));
+
+      await rest(tester, const Duration(minutes: 2));
+      expect(boardShows(tester), isTrue);
+      final board = tester.getRect(find.byType(TodayBoard));
+      expect(board, slot, reason: "exactly the thread's place");
+      expect(board.top,
+          greaterThanOrEqualTo(tester.getRect(find.byType(TimerStrip)).bottom));
+      expect(find.byType(MeridianNav).hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a touch brings the thread straight back', (tester) async {
+      lenovo(tester, portrait: false);
+      await mountOnWall(tester);
+      await rest(tester, const Duration(minutes: 2));
+      expect(boardShows(tester), isTrue, reason: 'sanity: the board');
+
+      await tester.tapAt(tester.getCenter(find.byType(TodayBoard)));
+      await tester.pump();
+      expect(opacity(tester, threadLayerKey), 1,
+          reason: 'on its way back at once');
+      await tester.pump(TodayBoard.fadeOut);
+      expect(threadShows(tester), isTrue);
+      expect(find.byType(Thread).hitTestable(), findsOneWidget);
+
+      // And two more quiet minutes bring the board back.
+      await rest(tester, const Duration(minutes: 2));
+      expect(boardShows(tester), isTrue);
+    });
+
+    testWidgets('a turn brings the thread straight back', (tester) async {
+      lenovo(tester, portrait: true);
+      final vc = await mountOnWall(tester);
+      await rest(tester, const Duration(minutes: 2));
+      expect(boardShows(tester), isTrue, reason: 'sanity: the board');
+
+      vc.debugHandleMessage(_msg('thinking', const {}));
+      await tester.pump();
+      await tester.pump(TodayBoard.fadeOut);
+      expect(threadShows(tester), isTrue);
+
+      // Not while Henry is still at it.
+      await rest(tester, const Duration(minutes: 3));
+      expect(threadShows(tester), isTrue);
+    });
+
+    testWidgets('the thread keeps its place and its state under the board',
+        (tester) async {
+      lenovo(tester, portrait: false);
+      await mountOnWall(tester, history: 14);
+      final scroll =
+          tester.widget<Thread>(find.byType(Thread)).scrollController!;
+      // Scroll back through the history, away from the bottom.
+      await tester.drag(find.byType(Thread), const Offset(0, 300));
+      await tester.pump(const Duration(seconds: 1));
+      final offset = scroll.offset;
+      expect(offset, lessThan(scroll.position.maxScrollExtent - 100),
+          reason: 'sanity: scrolled up');
+      final element = tester.element(find.byType(Thread));
+      final position = scroll.position;
+      final scrollable = tester.state(find.descendant(
+          of: find.byType(Thread), matching: find.byType(Scrollable)));
+
+      await rest(tester, const Duration(minutes: 2));
+      expect(boardShows(tester), isTrue);
+      await tester.tapAt(tester.getCenter(find.byType(TodayBoard)));
+      await tester.pump();
+      await tester.pump(TodayBoard.fadeOut);
+      expect(threadShows(tester), isTrue);
+
+      expect(tester.element(find.byType(Thread)), same(element),
+          reason: 'never unmounted');
+      expect(
+          tester.state(find.descendant(
+              of: find.byType(Thread), matching: find.byType(Scrollable))),
+          same(scrollable));
+      expect(scroll.position, same(position));
+      expect(scroll.offset, offset, reason: 'right where it was left');
+    });
+
+    testWidgets('a personal tablet never shows it', (tester) async {
+      lenovo(tester, portrait: false);
+      await mountOnWall(tester, role: DeviceRole.personal);
+      await rest(tester, const Duration(minutes: 10));
+      expect(find.byType(TodayBoard), findsNothing);
+      expect(find.byKey(threadLayerKey), findsNothing,
+          reason: 'the thread laid out exactly as it always was');
+      expect(find.byType(Thread).hitTestable(), findsOneWidget);
+    });
+
+    testWidgets('a wall at phone width never shows it', (tester) async {
+      screen(tester, const Size(360, 800), dpr: 3);
+      await mountOnWall(tester);
+      await rest(tester, const Duration(minutes: 10));
+      expect(find.byType(TodayBoard), findsNothing);
+      expect(find.byType(Thread).hitTestable(), findsOneWidget);
+    });
+  });
+
   group('goldens', () {
     // The real orb shader, loaded up front so the first frame already has it.
     setUp(() async => OrbShaderProgram.load());
@@ -532,8 +836,9 @@ void main() {
     /// Mount on whatever screen the test has set, and shoot.
     Future<void> capture(WidgetTester tester, String name,
         {OrbState posed = OrbState.idle,
-        String event = 'Dinner with Mom'}) async {
-      await mount(tester, posed: posed, event: event);
+        String event = 'Dinner with Mom',
+        WallActivity? activity}) async {
+      await mount(tester, posed: posed, event: event, activity: activity);
       // The orb and the surface both animate; a fixed stretch of the fake
       // clock lands them on the same frame every run.
       for (var i = 0; i < 30; i++) {
@@ -578,5 +883,72 @@ void main() {
       await capture(tester, 'goldens/voice_wall_lenovo_landscape.png',
           posed: OrbState.ambient);
     });
+
+    // A wall whose board is NOT showing carries the crossfade's layers around
+    // its thread; they must not move a pixel. Shot against the two goldens
+    // above, unchanged.
+    for (final portrait in [true, false]) {
+      final shape = portrait ? 'portrait' : 'landscape';
+      testWidgets('the Lenovo in $shape: a wall before its board, unchanged',
+          (tester) async {
+        lenovo(tester, portrait: portrait);
+        final activity = WallActivity(wall: true, rested: false);
+        addTearDown(activity.dispose);
+        await capture(tester, 'goldens/voice_wall_lenovo_$shape.png',
+            posed: portrait ? OrbState.idle : OrbState.ambient,
+            event: portrait
+                ? 'Dinner with Mom and Dad at Trattoria Marcella'
+                : 'Dinner with Mom',
+            activity: activity);
+        expect(find.byKey(threadLayerKey), findsOneWidget,
+            reason: 'sanity: the layers are there');
+      });
+    }
+
+    // The same wall after two minutes at rest: the Today board has taken the
+    // thread's place — the right pane in landscape, under the orb in
+    // portrait — with the timers still on their strip.
+    for (final portrait in [false, true]) {
+      final shape = portrait ? 'portrait (711x1191)' : 'landscape (1191x711)';
+      testWidgets('the Lenovo in $shape: the Today board', (tester) async {
+        lenovo(tester, portrait: portrait);
+        final activity = WallActivity(wall: true, rested: true);
+        addTearDown(activity.dispose);
+        await capture(
+            tester,
+            portrait
+                ? 'goldens/voice_wall_lenovo_portrait_today.png'
+                : 'goldens/voice_wall_lenovo_landscape_today.png',
+            posed: OrbState.ambient,
+            activity: activity);
+        expect(find.byType(TodayBoard), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
   });
 }
+
+/// [screen] under a [WallActivityScope] when [activity] is given.
+Widget _hosted(WallActivity? activity, Widget screen) => activity == null
+    ? screen
+    : WallActivityScope(activity: activity, child: screen);
+
+/// The app's own theme around [home]. The few strings that set no family (the
+/// "earlier" divider) take the platform font on a device; Inter stands in for
+/// it here so they render as words rather than test-font boxes.
+Widget _app(Widget home) => MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: M.bg,
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: kBodyFamily),
+      ),
+      home: home,
+    );
+
+Widget _screen(VoiceController vc, AppConnection conn) => MeridianVoiceScreen(
+      controller: vc,
+      connection: conn,
+      userName: 'David',
+      appVersion: '0.9.0',
+      clock: () => DateTime(2026, 10, 10, 17, 42),
+    );

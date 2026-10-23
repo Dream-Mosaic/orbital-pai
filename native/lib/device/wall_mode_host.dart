@@ -7,6 +7,7 @@ import '../meridian/orb_state.dart';
 import '../voice/voice_controller.dart';
 import 'device_role.dart';
 import 'night_dim.dart';
+import 'wall_activity.dart';
 import 'window_control.dart';
 
 /// Applies this device's role to the window around the voice screen (spec
@@ -17,6 +18,10 @@ import 'window_control.dart';
 /// [kDimAfterRest], the window brightness drops to [kDimBrightness] and a
 /// black overlay fades the UI. A touch, a wake, a turn, a ringing timer or
 /// anything Henry says brings it back at once.
+///
+/// The same activity tracker tells the voice screen when a wall has been at
+/// rest for [kTodayAfterRest] (phase 3, the Today board), through a
+/// [WallActivityScope] around [child] — one notion of "at rest", not two.
 ///
 /// Touches are seen through a GLOBAL pointer route, not a `Listener` around
 /// [child]: the drawers (Settings, Books, …) are routes on the app's
@@ -68,6 +73,10 @@ class _WallModeHostState extends State<WallModeHost> {
   bool? _appliedWall;
   bool _dimmed = false;
   late DateTime _lastActivity;
+
+  /// What the voice screen reads: a wall, and whether it has rested long
+  /// enough for the Today board.
+  late final WallActivity _rest = WallActivity(wall: widget.device.isWall);
   late OrbState _lastOrb;
   Timer? _ticker;
 
@@ -104,6 +113,7 @@ class _WallModeHostState extends State<WallModeHost> {
   void dispose() {
     _ticker?.cancel();
     _ticker = null;
+    _rest.dispose();
     GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
     widget.device.removeListener(_onDevice);
     widget.vc.removeListener(_onVc);
@@ -141,11 +151,10 @@ class _WallModeHostState extends State<WallModeHost> {
     unawaited(widget.window.setBrightness(null));
   }
 
-  /// The ticker runs only while dimming is possible at all, so a phone (or a
-  /// wall with dim-at-night off) carries no periodic timer.
+  /// The ticker runs only on a wall — the Today board can come up at any
+  /// hour, dim-at-night or not — so a phone carries no periodic timer.
   void _syncTicker() {
-    final s = widget.device.settings;
-    final want = s.role == DeviceRole.wall && s.dimAtNight;
+    final want = widget.device.isWall;
     if (want && _ticker == null) {
       _ticker = Timer.periodic(WallModeHost.tick, (_) => _onTick());
     } else if (!want) {
@@ -177,16 +186,21 @@ class _WallModeHostState extends State<WallModeHost> {
   void _activity() {
     _lastActivity = _now();
     if (_dimmed) _setDimmed(false);
+    // At once, not at the next tick: a touch or a turn brings the thread
+    // straight back.
+    _rest.set(wall: widget.device.isWall, rested: false);
   }
 
   void _evaluate() {
     final now = _now();
-    final want = shouldDim(
-      localNow: now,
-      atRest: now.difference(_lastActivity),
-      settings: widget.device.settings,
-    );
+    final atRest = now.difference(_lastActivity);
+    final settings = widget.device.settings;
+    final want = shouldDim(localNow: now, atRest: atRest, settings: settings);
     if (want != _dimmed) _setDimmed(want);
+    _rest.set(
+      wall: widget.device.isWall,
+      rested: shouldShowToday(settings: settings, atRest: atRest),
+    );
   }
 
   void _setDimmed(bool dimmed) {
@@ -204,7 +218,7 @@ class _WallModeHostState extends State<WallModeHost> {
         // constraints it had before this widget wrapped it.
         fit: StackFit.passthrough,
         children: [
-          widget.child,
+          WallActivityScope(activity: _rest, child: widget.child),
           Positioned.fill(
             child: IgnorePointer(
               child: AnimatedOpacity(

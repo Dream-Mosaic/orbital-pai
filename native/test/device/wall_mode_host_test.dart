@@ -4,6 +4,7 @@ import 'package:orbital_pai/auth/device_id.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
 import 'package:orbital_pai/device/device_role.dart';
 import 'package:orbital_pai/device/night_dim.dart';
+import 'package:orbital_pai/device/wall_activity.dart';
 import 'package:orbital_pai/device/wall_mode_host.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
@@ -239,5 +240,136 @@ void main() {
     await tester.pumpWidget(const SizedBox());
 
     expect(window.calls, ['keepOn(false)', 'immersive(false)', 'brightness(null)']);
+  });
+
+  group('the Today board\'s rest', () {
+    /// The activity the host gives the screen it wraps, as that screen sees it.
+    WallActivity? seen;
+
+    Future<void> pumpWatched(WidgetTester tester, DeviceController device, VoiceController vc) {
+      seen = null;
+      return tester.pumpWidget(MaterialApp(
+        home: WallModeHost(
+          device: device,
+          vc: vc,
+          window: window,
+          clock: () => now,
+          child: Scaffold(
+            body: Builder(builder: (context) {
+              seen = WallActivityScope.maybeOf(context);
+              return const SizedBox.expand();
+            }),
+          ),
+        ),
+      ));
+    }
+
+    /// The afternoon: no night dim to muddle the picture.
+    setUp(() => now = DateTime(2026, 10, 23, 14, 0));
+
+    test('the policy: a wall, two minutes at rest', () {
+      expect(kTodayAfterRest, const Duration(minutes: 2));
+      expect(shouldShowToday(settings: _wall, atRest: const Duration(seconds: 119)), isFalse);
+      expect(shouldShowToday(settings: _wall, atRest: kTodayAfterRest), isTrue);
+      expect(shouldShowToday(settings: _personal, atRest: const Duration(hours: 3)), isFalse);
+    });
+
+    testWidgets('a wall rests after two minutes, at any hour, dim-at-night or not',
+        (tester) async {
+      await pumpWatched(
+          tester, DeviceController.fixed(_wall.copyWith(dimAtNight: false)), buildVc());
+      expect(seen!.wall, isTrue);
+      expect(seen!.rested, isFalse);
+
+      await advance(tester, const Duration(seconds: 115));
+      expect(seen!.rested, isFalse, reason: 'not yet two minutes');
+      await advance(tester, const Duration(seconds: 5));
+      expect(seen!.rested, isTrue);
+      expect(window.calls.where((c) => c.startsWith('brightness')), isEmpty,
+          reason: 'the board is not the dim');
+    });
+
+    testWidgets('a personal device never rests', (tester) async {
+      await pumpWatched(tester, DeviceController.fixed(_personal), buildVc());
+      expect(seen!.wall, isFalse);
+      await advance(tester, const Duration(minutes: 10));
+      expect(seen!.rested, isFalse);
+    });
+
+    testWidgets('a touch ends the rest at once, and it comes back two minutes later',
+        (tester) async {
+      await pumpWatched(tester, DeviceController.fixed(_wall), buildVc());
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue, reason: 'sanity: resting');
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pump();
+      expect(seen!.rested, isFalse, reason: 'no waiting for the next tick');
+
+      await advance(tester, const Duration(seconds: 115));
+      expect(seen!.rested, isFalse);
+      await advance(tester, const Duration(seconds: 5));
+      expect(seen!.rested, isTrue);
+    });
+
+    testWidgets('a turn ends it, and a long one holds it off', (tester) async {
+      final vc = buildVc();
+      await pumpWatched(tester, DeviceController.fixed(_wall), vc);
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue, reason: 'sanity: resting');
+
+      vc.debugHandleMessage(
+          const DecodedMessage(topic: 'voice:henry', event: 'thinking', json: {}));
+      await tester.pump();
+      expect(seen!.rested, isFalse);
+
+      await advance(tester, const Duration(minutes: 3));
+      expect(seen!.rested, isFalse, reason: 'still thinking is not rest');
+
+      vc.debugHandleMessage(
+          const DecodedMessage(topic: 'voice:henry', event: 'listening', json: {}));
+      await tester.pump();
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue);
+    });
+
+    testWidgets('a ringing timer holds it off', (tester) async {
+      final vc = buildVc();
+      await pumpWatched(tester, DeviceController.fixed(_wall), vc);
+      vc.debugHandleMessage(const DecodedMessage(topic: 'voice:henry', event: 'timers', json: {
+        'timers': [
+          {'id': 1, 'label': 'pasta', 'state': 'ringing', 'duration_ms': 600000, 'remaining_ms': 0},
+        ],
+      }));
+      await tester.pump();
+
+      await advance(tester, const Duration(minutes: 5));
+      expect(seen!.rested, isFalse);
+
+      // Dismissed: the controller's own countdown stops with it.
+      vc.debugHandleMessage(const DecodedMessage(
+          topic: 'voice:henry', event: 'timers', json: {'timers': []}));
+      await tester.pump();
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue);
+    });
+
+    testWidgets('becoming personal ends it; becoming a wall starts the clock', (tester) async {
+      final device = DeviceController.fixed(_wall);
+      await pumpWatched(tester, device, buildVc());
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue, reason: 'sanity: resting');
+
+      await device.setWall(false);
+      await tester.pump();
+      expect(seen!.wall, isFalse);
+      expect(seen!.rested, isFalse);
+
+      await device.setWall(true);
+      await tester.pump();
+      expect(seen!.wall, isTrue);
+      await advance(tester, const Duration(minutes: 2));
+      expect(seen!.rested, isTrue);
+    });
   });
 }

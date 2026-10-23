@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import '../connection/app_connection.dart';
+import '../device/wall_activity.dart';
 import '../panels/badges_client.dart';
+import '../voice/glance.dart';
 import '../voice/voice_controller.dart';
 import 'composer.dart';
 import 'header.dart';
@@ -14,6 +16,7 @@ import 'orb_face.dart';
 import 'palette.dart';
 import 'thread.dart';
 import 'timer_strip.dart';
+import 'today_board.dart';
 import 'tokens.dart';
 import 'wall_layout.dart';
 import 'wall_type.dart';
@@ -27,6 +30,12 @@ import 'wall_type.dart';
 /// (medium), and the wall display — orb pane left, thread right — for a
 /// landscape tablet or a wide desktop window (expanded). Every dimension is
 /// derived from the constraints.
+///
+/// On a wall (a [WallActivityScope] above says so) that has been at rest for
+/// a while, the thread's slot crossfades to the [TodayBoard] — in both wall
+/// layouts, never on a phone. The thread stays mounted underneath, invisible
+/// and untouchable, so its scroll position and history are exactly where
+/// they were when a touch or a turn brings it back.
 class MeridianVoiceScreen extends StatefulWidget {
   const MeridianVoiceScreen({
     super.key,
@@ -93,6 +102,11 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
   bool _dragging = false;
 
   bool _anchorScheduled = false;
+
+  /// The board, rebuilt only when the glance it shows changes: it stays
+  /// mounted (invisible) under a streaming answer, and the screen rebuilds
+  /// on every delta.
+  TodayBoard? _board;
 
   @override
   void initState() {
@@ -199,6 +213,14 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
           // The same width that picks the arrangement picks the type: a wall
           // is read from across the room, a phone from arm's length.
           final type = WallType.forLayout(layout);
+          // The Today board: null = this screen never shows one (not a wall,
+          // or a phone-width window), so the thread is laid out exactly as it
+          // always was; otherwise whether it shows now.
+          final activity = WallActivityScope.maybeOf(context);
+          final bool? board =
+              activity != null && activity.wall && layout != WallLayout.compact
+                  ? activity.rested
+                  : null;
           return WallTypeScope(
             type: type,
             child: MeridianSurface(
@@ -214,11 +236,11 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                 type: MaterialType.transparency,
                 child: SafeArea(
                   child: switch (layout) {
-                    WallLayout.compact =>
-                      _singleColumn(_ColumnSpec.compact, vc, glow, keyboard),
-                    WallLayout.medium =>
-                      _singleColumn(_ColumnSpec.medium, vc, glow, keyboard),
-                    WallLayout.expanded => _twoPanes(vc, glow, keyboard),
+                    WallLayout.compact => _singleColumn(
+                        _ColumnSpec.compact, vc, glow, keyboard, board),
+                    WallLayout.medium => _singleColumn(
+                        _ColumnSpec.medium, vc, glow, keyboard, board),
+                    WallLayout.expanded => _twoPanes(vc, glow, keyboard, board),
                   },
                 ),
               ),
@@ -238,8 +260,9 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
 
   /// The phone column (compact), or the same column sized for a portrait
   /// tablet (medium): header / orb pane / timers / thread / composer / nav.
-  Widget _singleColumn(
-      _ColumnSpec spec, VoiceController vc, Color glow, double keyboard) {
+  /// On a resting wall the board takes the thread's slot under the orb.
+  Widget _singleColumn(_ColumnSpec spec, VoiceController vc, Color glow,
+      double keyboard, bool? board) {
     final typing = keyboard > 0;
     return Center(
       child: ConstrainedBox(
@@ -253,11 +276,12 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
               const SizedBox(height: M.columnGap),
               _orbPane(spec, vc, glow,
                   maxDiameter: _orbRoom(spec,
-                      typing: typing, timers: vc.timers.isNotEmpty)),
+                      typing: typing, timers: vc.timers.isNotEmpty),
+                  board: board),
               const SizedBox(height: M.columnGap),
               // Zero height with no timers; carries its own gap below.
               _timers(vc, glow),
-              Expanded(child: _thread(vc, glow)),
+              Expanded(child: _threadSlot(vc, glow, board: board)),
               const SizedBox(height: M.columnGap),
               _composer(vc),
               if (!typing) ...[
@@ -274,8 +298,10 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
   /// The wall display (expanded): the orb pane on the left — header, the orb
   /// as the hero, the timers under it, the composer at its foot — and the
   /// thread on the right at full height, with the nav beneath it so the two
-  /// controls share one baseline.
-  Widget _twoPanes(VoiceController vc, Color glow, double keyboard) {
+  /// controls share one baseline. On a resting wall the board takes the
+  /// thread's place in the right pane; the nav stays.
+  Widget _twoPanes(
+      VoiceController vc, Color glow, double keyboard, bool? board) {
     final typing = keyboard > 0;
     final orbPane = Padding(
       // The composer rides the keyboard; the orb gives way above it.
@@ -298,7 +324,8 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(child: _thread(vc, glow, joinsAbove: false)),
+          Expanded(
+              child: _threadSlot(vc, glow, joinsAbove: false, board: board)),
           if (!typing) ...[
             const SizedBox(height: M.columnGap),
             _nav(),
@@ -366,6 +393,51 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         ),
       );
 
+  /// The thread, or — on a wall at rest — the Today board in its place.
+  ///
+  /// [board] null: the thread alone, the tree every phone has always had.
+  /// Otherwise both are mounted, one over the other, and crossfade: the
+  /// hidden one ignores touches and leaves the semantics tree, but the
+  /// thread is never unmounted, so nothing it holds is lost.
+  Widget _threadSlot(VoiceController vc, Color glow,
+      {bool joinsAbove = true, required bool? board}) {
+    final thread = _thread(vc, glow, joinsAbove: joinsAbove);
+    if (board == null) return thread;
+    final fade = board ? TodayBoard.fadeIn : TodayBoard.fadeOut;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _layer(threadLayerKey, visible: !board, fade: fade, child: thread),
+        _layer(todayBoardLayerKey,
+            visible: board, fade: fade, child: _todayBoard(vc.glance)),
+      ],
+    );
+  }
+
+  static Widget _layer(Key key,
+          {required bool visible,
+          required Duration fade,
+          required Widget child}) =>
+      IgnorePointer(
+        ignoring: !visible,
+        child: ExcludeSemantics(
+          excluding: !visible,
+          child: AnimatedOpacity(
+            key: key,
+            opacity: visible ? 1 : 0,
+            duration: fade,
+            curve: Curves.easeOut,
+            child: child,
+          ),
+        ),
+      );
+
+  TodayBoard _todayBoard(Glance glance) {
+    final cached = _board;
+    if (cached != null && identical(cached.glance, glance)) return cached;
+    return _board = TodayBoard(glance: glance);
+  }
+
   Widget _composer(VoiceController vc) => ComposerDock(
         key: _composerKey,
         pttEnabled: vc.pttEnabled,
@@ -412,9 +484,10 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
       );
 
   /// The single column's orb: the bezel, and the elbow that carries its light
-  /// down into the thread's spine.
+  /// down into the thread's spine — which fades with the thread when the
+  /// board takes its place, since the board has no spine to carry it into.
   Widget _orbPane(_ColumnSpec spec, VoiceController vc, Color glow,
-      {double? maxDiameter}) {
+      {double? maxDiameter, bool? board}) {
     return Center(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: spec.orbPaneMaxWidth),
@@ -435,7 +508,15 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
                   // The .elbow is 30px tall with margin-top: -6px; fold the
                   // negative margin into the box rather than translating it.
                   height: 24,
-                  child: CustomPaint(painter: ElbowPainter(glow: glow)),
+                  child: board == null
+                      ? CustomPaint(painter: ElbowPainter(glow: glow))
+                      : AnimatedOpacity(
+                          opacity: board ? 0 : 1,
+                          duration:
+                              board ? TodayBoard.fadeIn : TodayBoard.fadeOut,
+                          curve: Curves.easeOut,
+                          child: CustomPaint(painter: ElbowPainter(glow: glow)),
+                        ),
                 ),
               ],
             );
@@ -556,6 +637,11 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
 /// The wall display's two panes, for tests that need to tell them apart.
 const Key wallOrbPaneKey = ValueKey('wall-orb-pane');
 const Key wallThreadPaneKey = ValueKey('wall-thread-pane');
+
+/// The thread slot's two crossfading layers on a wall (their AnimatedOpacity),
+/// for tests that need to see which one shows.
+const Key threadLayerKey = ValueKey('thread-layer');
+const Key todayBoardLayerKey = ValueKey('today-board-layer');
 
 /// The single column's sizes: the phone's, verbatim from the CSS port, or the
 /// same column scaled for a portrait tablet.

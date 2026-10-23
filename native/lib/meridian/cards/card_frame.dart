@@ -276,25 +276,34 @@ class CardSource extends StatelessWidget {
 
 /// A tiny outlined tag for a category ("Household", "Follow-up").
 class CardTag extends StatelessWidget {
-  const CardTag(this.text, {super.key, required this.colour});
+  const CardTag(this.text, {super.key, required this.colour, this.size = _size});
 
   final String text;
   final Color colour;
 
+  /// The label's size; the padding and corner follow it. A card's is 6.6; the
+  /// wall's Today board draws its tags larger.
+  final double size;
+
+  static const double _size = 6.6;
+
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          color: colour.withValues(alpha: 0.08),
-          border: Border.all(color: colour.withValues(alpha: 0.28)),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          text.toUpperCase(),
-          maxLines: 1,
-          softWrap: false,
-          style: CardStyle.label(colour.withValues(alpha: 0.85), size: 6.6)
-              .copyWith(shadows: const []),
-        ),
-      );
+  Widget build(BuildContext context) {
+    final k = size / _size;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 5 * k, vertical: 2 * k),
+      decoration: BoxDecoration(
+        color: colour.withValues(alpha: 0.08),
+        border: Border.all(color: colour.withValues(alpha: 0.28)),
+        borderRadius: BorderRadius.circular(4 * k),
+      ),
+      child: Text(
+        text.toUpperCase(),
+        maxLines: 1,
+        softWrap: false,
+        style: CardStyle.label(colour.withValues(alpha: 0.85), size: size)
+            .copyWith(shadows: const []),
+      ),
+    );
+  }
 }
