@@ -111,6 +111,14 @@ defmodule App.Conversations.Conversation do
   """
   def snapshot(pid), do: :gen_statem.call(pid, :snapshot, 1_000)
 
+  @doc """
+  The exchanges this session holds that the DB does not have yet, oldest first, in the
+  `history` wire shape (`%{you:, assistant:}`, `assistant` nil while unanswered). A turn is
+  persisted only when it ends, and an interrupted unanswered request only with the turn that
+  finally answers it, so a client that reads history mid-turn needs these appended (#32).
+  """
+  def unsaved_turns(pid), do: :gen_statem.call(pid, :unsaved_turns, 1_000)
+
   @doc false
   def child_spec(opts) do
     %{
@@ -516,6 +524,9 @@ defmodule App.Conversations.Conversation do
     {:keep_state_and_data, [{:reply, from, reply}]}
   end
 
+  def handle_event({:call, from}, :unsaved_turns, _s, data),
+    do: {:keep_state_and_data, [{:reply, from, unsaved_turns_of(data)}]}
+
   # Only the CURRENTLY bound channel arms the linger — a stale channel (another device took
   # over via a join or a claim) terminating must not schedule the death of a session in use.
   def handle_event(:cast, {:client_disconnected, from}, _s, %{client: from} = data) do
@@ -794,11 +805,19 @@ defmodule App.Conversations.Conversation do
     end
   end
 
+  # brain_fallback is set, so this is the batch fallback's answer or a canned line. A BLANK one
+  # with nothing heard is a fallback that failed quietly — prod #32: the stream timed out, the
+  # batch brain answered 200 with no text, and the turn ended on the reflex. Say so instead.
   def handle_event(:info, {:brain_done, text}, _s, %{policy: %{phase: phase}} = data)
       when phase != :listening do
-    Logger.info("[turn] brain: #{App.LogText.said(text)}")
-    data = push_or_hold_answer(text, data)
-    feed(:brain_done, clear_brain(%{data | brain_text: text}))
+    if blank?(text) and is_nil(data.ttb) do
+      Logger.warning("[turn] batch fallback produced no answer text — speaking a graceful line")
+      {:keep_state, spawn_canned_brain(@brain_unreachable, clear_brain(data))}
+    else
+      Logger.info("[turn] brain: #{App.LogText.said(text)}")
+      data = push_or_hold_answer(text, data)
+      feed(:brain_done, clear_brain(%{data | brain_text: text}))
+    end
   end
 
   def handle_event(:info, {:brain_error, reason}, _s, %{policy: %{phase: phase}} = data)
@@ -1161,8 +1180,8 @@ defmodule App.Conversations.Conversation do
       case text_model().generate(transcript, ctx, opts) do
         {:ok, text} ->
           # TTS down too — still send the text so the UI shows the answer. A quiet (typed)
-          # turn is text only by design.
-          unless quiet?, do: speak_brain_audio(me, text, cfg)
+          # turn is text only by design. A blank answer has nothing to say (see :brain_done).
+          unless quiet? or blank?(text), do: speak_brain_audio(me, text, cfg)
           send(me, {:brain_done, text})
 
         {:error, _} ->
@@ -2518,6 +2537,32 @@ defmodule App.Conversations.Conversation do
     do: req <> " " <> t
 
   defp with_pending(_data, t), do: t
+
+  # What unsaved_turns/1 reports: an answered-then-interrupted turn still waiting on its
+  # `played` report, then the user turn in flight — or, between an interruption and the next
+  # utterance, the request carried forward. `transcript` already folds in any carried request,
+  # so these are the words the turn will be persisted under. Agenda turns aren't the user's words.
+  defp unsaved_turns_of(data) do
+    interrupted =
+      case data.pending_interrupt_persist do
+        {attrs, _reflex_ms, _brain_ms} -> [%{you: attrs.user_text, assistant: attrs.brain_text}]
+        nil -> []
+      end
+
+    interrupted ++ in_flight_turn(data)
+  end
+
+  defp in_flight_turn(%{agenda_turn: nil, policy: %{phase: phase}, transcript: t} = data)
+       when phase != :listening and is_binary(t) and t != "" do
+    answer = if blank?(data.brain_text), do: nil, else: data.brain_text
+    [%{you: t, assistant: answer}]
+  end
+
+  defp in_flight_turn(%{agenda_turn: nil, policy: %{phase: :listening}, pending_request: req})
+       when is_binary(req) and req != "",
+       do: [%{you: req, assistant: nil}]
+
+  defp in_flight_turn(_data), do: []
 
   # The user barged after the brain answered. Persisting immediately would record the FULL
   # answer even if they heard three words — so stash the attrs, ask time for the client's
