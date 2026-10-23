@@ -231,40 +231,53 @@ class _OrbFaceState extends State<OrbFace> {
                 ],
                 if (next != null) ...[
                   SizedBox(height: body * 0.5),
+                  // The title gets two lines before it ellipsizes ("Poke the
+                  // …" told nobody anything), and its second line hangs under
+                  // its first. The dot and the time stay on the FIRST line:
+                  // they are a row of their own, centred on each other exactly
+                  // as the one-line row centred them, and top-aligned with the
+                  // title, so a title that fits one line lays out as before.
                   Row(
                     key: const ValueKey('face-next'),
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: M.henry.withValues(alpha: 0.85),
-                          boxShadow: [
-                            BoxShadow(
-                                color: M.henry.withValues(alpha: 0.6),
-                                blurRadius: 6),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: body * 0.5),
-                      Text(
-                        next.day.isEmpty || next.day == 'Today'
-                            ? next.time
-                            : '${next.day} ${next.time}',
-                        style: TextStyle(
-                          fontFamily: kBodyFamily,
-                          fontSize: body * 0.92,
-                          fontWeight: FontWeight.w600,
-                          color: M.henry.withValues(alpha: 0.85),
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: M.henry.withValues(alpha: 0.85),
+                              boxShadow: [
+                                BoxShadow(
+                                    color: M.henry.withValues(alpha: 0.6),
+                                    blurRadius: 6),
+                              ],
+                            ),
+                          ),
+                          SizedBox(width: body * 0.5),
+                          Text(
+                            next.day.isEmpty || next.day == 'Today'
+                                ? next.time
+                                : '${next.day} ${next.time}',
+                            style: TextStyle(
+                              fontFamily: kBodyFamily,
+                              fontSize: body * 0.92,
+                              fontWeight: FontWeight.w600,
+                              color: M.henry.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
                       ),
                       SizedBox(width: body * 0.45),
                       Flexible(
                         child: Text(
                           next.title,
-                          maxLines: 1,
+                          key: const ValueKey('face-next-title'),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: kBodyFamily,
