@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'cards/card_view.dart';
 import 'thread_model.dart';
@@ -28,6 +30,7 @@ class Thread extends StatelessWidget {
     this.onAck,
     this.onStartTimer,
     this.startedPills,
+    this.photoFor,
     this.joinsAbove = true,
   });
 
@@ -44,6 +47,9 @@ class Thread extends StatelessWidget {
 
   /// Pill keys already started this session (owned by the controller).
   final Set<String>? startedPills;
+
+  /// A photo card's snapshot by `capture_id`, while this device holds it.
+  final Uint8List? Function(String captureId)? photoFor;
 
   /// Whether something above lights the spine — the single column's elbow
   /// (and the timer strip's rail segment) bridging down from the orb. Then
@@ -168,7 +174,11 @@ class Thread extends StatelessWidget {
               left: rail + 18,
               right: math.max(0.0, row - (rail + 18) - maxCardWidth),
             ),
-            child: ThreadCardView(card: item, onStartTimer: onStartTimer, startedPills: startedPills),
+            child: ThreadCardView(
+                card: item,
+                onStartTimer: onStartTimer,
+                startedPills: startedPills,
+                photoFor: photoFor),
           ),
       };
 

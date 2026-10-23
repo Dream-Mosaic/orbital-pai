@@ -10,6 +10,7 @@ import 'composer.dart';
 import 'header.dart';
 import 'meridian_surface.dart';
 import 'nav.dart';
+import 'camera_face.dart';
 import 'orb_bezel.dart';
 import 'cards/weather_glyph.dart';
 import 'orb_face.dart';
@@ -396,6 +397,7 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
           onAck: vc.ackReminder,
           onStartTimer: vc.startTimer,
           startedPills: vc.startedPills,
+          photoFor: vc.snapshotFor,
           joinsAbove: joinsAbove,
         ),
       );
@@ -459,7 +461,8 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         onTap: (tab) => widget.onOpenPanel?.call(tab),
       );
 
-  /// The machined bezel at diameter [d], with the resting face in its glass.
+  /// The machined bezel at diameter [d], with the face in its glass: the
+  /// camera while a capture is live, else the resting clock when at rest.
   Widget _bezel(VoiceController vc, Color glow, double d) => SizedBox(
         width: d,
         height: d,
@@ -476,21 +479,38 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
           onClear: _confirmClear,
           onPtt: vc.setPtt,
           onAbi: vc.setAllowInterruptions,
-          face: vc.orbAtRest
-              ? (w, h) => OrbFace(
-                    width: w,
-                    height: h,
-                    glance: vc.glance,
-                    hint: vc.restingHint,
-                    dimmed: !vc.micOn,
-                    lit: const {OrbState.listening, OrbState.speaking, OrbState.thinking}
-                        .contains(vc.orbState),
-                    glyph: (icon, size, _) => WeatherGlyph(icon, size: size),
-                    clock: widget.clock ?? DateTime.now,
-                  )
-              : null,
+          face: _face(vc),
         ),
       );
+
+  /// What the glass shows in place of the caption. ONE place for both
+  /// layouts: "Henry, look at this" takes the glass from everything else,
+  /// the resting clock included, for as long as its capture is live.
+  Widget Function(double, double)? _face(VoiceController vc) {
+    final shot = vc.camera;
+    if (shot != null) {
+      return (w, h) => CameraFace(
+            key: cameraFaceKey,
+            width: w,
+            height: h,
+            shot: shot,
+            preview: vc.cameraPreview,
+          );
+    }
+    return vc.orbAtRest
+        ? (w, h) => OrbFace(
+              width: w,
+              height: h,
+              glance: vc.glance,
+              hint: vc.restingHint,
+              dimmed: !vc.micOn,
+              lit: const {OrbState.listening, OrbState.speaking, OrbState.thinking}
+                  .contains(vc.orbState),
+              glyph: (icon, size, _) => WeatherGlyph(icon, size: size),
+              clock: widget.clock ?? DateTime.now,
+            )
+        : null;
+  }
 
   /// The single column's orb: the bezel, and the elbow that carries its light
   /// down into the thread's spine — which fades with the thread when the
@@ -642,6 +662,9 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
     }
   }
 }
+
+/// The camera's face in the orb (its own key, so it crossfades with the clock).
+const Key cameraFaceKey = ValueKey('camera-face');
 
 /// The wall display's two panes, for tests that need to tell them apart.
 const Key wallOrbPaneKey = ValueKey('wall-orb-pane');

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 /// chip falls back to a raw function name.
 const Map<String, String> kToolLabels = {
   'get_weather': 'checking the weather',
+  'look': 'taking a look',
   'get_calendar_events': 'checking your calendar',
   'create_event': 'adding to your calendar',
   'create_reminder': 'setting a reminder',
@@ -238,6 +239,7 @@ class ThreadCard extends ThreadItem {
     'coin',
     'pick',
     'scoreboard',
+    'photo',
   };
 
   /// A card as the channel sends it (the live `card` push and each history

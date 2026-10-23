@@ -64,7 +64,9 @@ class OrbBezel extends StatelessWidget {
 
   /// The ambient face shown in the caption's box while the orb is at rest, or
   /// null for the bare caption. Built at the box's size; crossfades with the
-  /// caption so your first word replaces the clock without a jump.
+  /// caption so your first word replaces the clock without a jump. A face
+  /// built with a key of its own (the camera's) crossfades with the others
+  /// too, rather than cutting in under the same one.
   final Widget Function(double width, double height)? face;
 
   /// False until the socket has actually joined. See OrbDetent.enabled.
@@ -101,10 +103,7 @@ class OrbBezel extends StatelessWidget {
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 260),
           child: face != null
-              ? KeyedSubtree(
-                  key: const ValueKey('orb-face'),
-                  child: face!(halfW * 2, halfH * 2),
-                )
+              ? _keyed(face!(halfW * 2, halfH * 2))
               : LiveCaption(
                   key: const ValueKey('orb-caption'),
                   text: caption,
@@ -116,6 +115,11 @@ class OrbBezel extends StatelessWidget {
       ),
     );
   }
+
+  static Widget _keyed(Widget built) => KeyedSubtree(
+        key: built.key ?? const ValueKey('orb-face'),
+        child: built,
+      );
 
   @override
   Widget build(BuildContext context) {

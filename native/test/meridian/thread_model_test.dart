@@ -24,7 +24,7 @@ void main() {
     expect(toolLabel('file_issue'), 'filing an issue');
     // index.js:578 — name.replace(/_/g, " ")
     expect(toolLabel('some_new_tool'), 'some new tool');
-    expect(kToolLabels, hasLength(55));
+    expect(kToolLabels, hasLength(56));
   });
 
   test('every registered server tool has a friendly label', () {
@@ -61,7 +61,7 @@ void main() {
     expect(card.data['title'], 'Groceries');
     expect(ThreadCard.knownTypes, {
       'weather', 'agenda', 'list', 'reminders', 'email', //
-      'tracker', 'tracker_logged', 'recipe', 'cook_step', //
+      'tracker', 'tracker_logged', 'recipe', 'cook_step', 'photo', //
       'dice', 'coin', 'pick', 'scoreboard',
     });
   });
