@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../tokens.dart';
 import 'card_frame.dart';
+import 'forecast_strip.dart';
 import 'weather_glyph.dart';
 
 /// `get_weather` as a glance: the headline temperature and sky, today's range,
@@ -32,16 +33,28 @@ class WeatherCard extends StatelessWidget {
           ],
           if (hourly.isNotEmpty) ...[
             const CardRule(vertical: 7),
-            _Strip(entries: hourly, daily: false),
+            ForecastStrip(columns: _columns(hourly, daily: false), daily: false),
           ],
           if (daily.isNotEmpty) ...[
             const CardRule(vertical: 7),
-            _Strip(entries: daily, daily: true),
+            ForecastStrip(columns: _columns(daily, daily: true), daily: true),
           ],
         ],
       ),
     );
   }
+
+  /// The card's rows as strip columns; a missing field renders as absent.
+  static List<ForecastColumn> _columns(List<Map<String, dynamic>> rows, {required bool daily}) => [
+        for (final e in rows)
+          ForecastColumn(
+            label: e.str('label') ?? '',
+            value: e.str(daily ? 'hi' : 'temp') ?? '',
+            icon: e.str('icon'),
+            low: e.str('lo') ?? '',
+            precip: e.str('precip'),
+          ),
+      ];
 
   Widget _headline() {
     final temp = data.str('temp');
@@ -141,72 +154,6 @@ class WeatherCard extends StatelessWidget {
                   overflow: TextOverflow.fade,
                   style: CardStyle.numeral(11, colour: M.ink.withValues(alpha: 0.86)),
                 ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// Six hours or five days, one column each, every row aligned across columns
-/// (a missing precip leaves its slot empty rather than shifting the rest up).
-class _Strip extends StatelessWidget {
-  const _Strip({required this.entries, required this.daily});
-
-  final List<Map<String, dynamic>> entries;
-  final bool daily;
-
-  static const Color _rain = Color(0xFF6CC8F2);
-
-  @override
-  Widget build(BuildContext context) {
-    final anyPrecip = entries.any((e) => e.str('precip') != null);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final e in entries)
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  e.str('label') ?? '',
-                  maxLines: 1,
-                  softWrap: false,
-                  style: CardStyle.numeral(
-                    8.8,
-                    colour: M.inkDim.withValues(alpha: 0.72),
-                    weight: 520,
-                  ).copyWith(letterSpacing: 0.2),
-                ),
-                const SizedBox(height: 4),
-                WeatherGlyph(e.str('icon'), size: 17),
-                const SizedBox(height: 4),
-                Text(
-                  e.str(daily ? 'hi' : 'temp') ?? '',
-                  maxLines: 1,
-                  softWrap: false,
-                  style: CardStyle.numeral(11.5, colour: M.ink.withValues(alpha: 0.92)),
-                ),
-                if (daily) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    e.str('lo') ?? '',
-                    maxLines: 1,
-                    softWrap: false,
-                    style: CardStyle.numeral(10.5, colour: M.inkDim.withValues(alpha: 0.58)),
-                  ),
-                ],
-                if (anyPrecip) ...[
-                  const SizedBox(height: 2.5),
-                  Text(
-                    e.str('precip') ?? '',
-                    maxLines: 1,
-                    softWrap: false,
-                    style: CardStyle.numeral(8.6, colour: _rain, weight: 560),
-                  ),
-                ],
               ],
             ),
           ),
