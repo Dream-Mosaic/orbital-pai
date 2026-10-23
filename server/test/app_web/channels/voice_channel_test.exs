@@ -77,6 +77,14 @@ defmodule AppWeb.VoiceChannelTest do
     assert_push "state", %{default_abi: true, default_ptt: true}
   end
 
+  test "the state snapshot carries the signed-in user's name", %{bob: bob} do
+    # The app's header used to hard-code "David", so every other household member's phone
+    # said DAVID.
+    name = bob.name
+    {:ok, _reply, _socket} = join_voice(bob)
+    assert_push "state", %{user_name: ^name}
+  end
+
   test "the state snapshot carries defaults that are OFF as false, not as absence", %{
     alice: _alice
   } do

@@ -528,7 +528,8 @@ class _HenryHomeState extends State<HenryHome> {
         controller: vc,
         connection: conn,
         badges: _badges,
-        userName: 'David',
+        // Blank until the server's `state` snapshot names who is signed in.
+        userName: '',
         appVersion: kAppVersion,
         onOpenPanel: _openPanel,
       ),

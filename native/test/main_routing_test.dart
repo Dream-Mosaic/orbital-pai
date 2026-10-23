@@ -652,7 +652,11 @@ void main() {
         (tester) async {
       phone(tester);
       FlutterSecureStoragePlatform.instance = TestFlutterSecureStoragePlatform(<String, String>{});
-      final fake = FakeSocket();
+      // The header's name comes from the server's snapshot, not the app.
+      final fake = FakeSocket(joinPushes: const {
+        'voice:henry': '[null,null,"voice:henry","state",'
+            '{"phase":"listening","locked":false,"bound":true,"user_name":"David"}]',
+      });
       final conn = AppConnection(
         connector: () async => fake.socket,
         rejoinBackoff: const [Duration(days: 1)],

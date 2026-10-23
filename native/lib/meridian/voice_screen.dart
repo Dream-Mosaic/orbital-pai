@@ -365,7 +365,9 @@ class _MeridianVoiceScreenState extends State<MeridianVoiceScreen> {
         assistantName: VoiceController.assistantName,
         status: widget.connection.connStatus,
         version: widget.appVersion,
-        userName: widget.userName,
+        // The server's name for who is signed in; the widget's only until
+        // the first snapshot lands.
+        userName: widget.controller.userName ?? widget.userName,
         // From the controller, not the device settings: the header names the
         // household exactly when the join says `shared`, so the two can never
         // disagree.

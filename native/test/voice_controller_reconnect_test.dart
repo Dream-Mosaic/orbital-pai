@@ -1114,6 +1114,24 @@ void main() {
     expect(pushesOf(fake, 'allow_interruptions').last['enabled'], isTrue);
   });
 
+  test('the snapshot names who is signed in', () async {
+    // The header used to hard-code one name, so every other household
+    // member's phone said DAVID.
+    final fake = FakeSocket(joinPushes: const [
+      '[null,null,"voice:henry","state",'
+          '{"phase":"listening","locked":false,"bound":true,"user_name":"Tanya"}]'
+    ]);
+    final b = build(connector: () async => fake.socket);
+    addTearDown(b.vc.dispose);
+    addTearDown(b.conn.dispose);
+    expect(b.vc.userName, isNull, reason: 'unknown until the server says');
+
+    await b.conn.connect();
+    await settle();
+
+    expect(b.vc.userName, 'Tanya');
+  });
+
   test('a wall starts hands-free whatever the account\'s Default PTT says',
       () async {
     // PTT closes the mic to everything but the held button, so a wall that

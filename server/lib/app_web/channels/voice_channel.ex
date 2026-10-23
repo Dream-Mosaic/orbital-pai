@@ -478,8 +478,12 @@ defmodule AppWeb.VoiceChannel do
   # user must not read as "both defaults off".
   defp voice_defaults(user_id) do
     case App.Users.get(user_id) do
-      nil -> %{}
-      user -> %{default_abi: user.default_abi, default_ptt: user.default_ptt}
+      nil ->
+        %{}
+
+      # user_name: the app's header names who is signed in (it used to hard-code one name)
+      user ->
+        %{default_abi: user.default_abi, default_ptt: user.default_ptt, user_name: user.name}
     end
   end
 

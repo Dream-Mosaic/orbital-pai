@@ -115,6 +115,12 @@ class VoiceController extends ChangeNotifier {
   /// never report itself shared.
   bool get household => _kiosk && _shared;
 
+  /// Who is signed in, as the server's `state` snapshot names them; null
+  /// until the first snapshot. The header shows it (it used to hard-code one
+  /// name, so every other household member's phone said DAVID).
+  String? get userName => _userName;
+  String? _userName;
+
   /// The role as the server sees it, both keys together.
   ({bool kiosk, bool shared}) get _role => (kiosk: _kiosk, shared: household);
 
@@ -1284,6 +1290,9 @@ class VoiceController extends ChangeNotifier {
         // the Settings channel the app used to learn them from is joined only
         // while that drawer is open, so at launch nothing knew them.
         _applyStoredDefaults(p);
+        // Absent (an older server) keeps what we know, like every key here.
+        final name = p['user_name'];
+        if (name is String && name.isNotEmpty) _userName = name;
         _setCaption(_restingCaption);
         // index.js:268 — a (re)binding client re-derives its turn state from the
         // snapshot's phase, so a reconnect mid-turn can't hold a stale colour.
