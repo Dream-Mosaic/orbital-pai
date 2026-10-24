@@ -134,6 +134,12 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   device's household/personal scope); native `lib/device/` (device role, `henry/window`
   channel, `WallModeHost` + `WallActivityScope`), `lib/meridian/wall_type.dart` (the wall type
   floor), `lib/meridian/today_board.dart` (the at-rest board; `App.Glance` feeds it).
+- Game night (2026-10-23): `lib/app/camera.ex` (+ `App.Camera.Registry`; one photo from the
+  bound device), `tools/look.ex` (`look`: the photo + one multimodal call,
+  `Gemini.describe_image/3`), `tools/games.ex` + `lib/app/games*` (dice, coins, picks, the
+  in-memory scoreboard), `cards/games.ex`; native `lib/camera/` (`CameraService`, the
+  `henry/jpeg` channel), `lib/meridian/camera_face.dart` (the viewfinder in the orb's glass),
+  `cards/photo_card.dart` and the dice/coin/pick/scoreboard cards.
 - `lib/app_web/` — `VoiceChannel` (binary mic in from the app; speak_start/audio/etc. out),
   `ConversationLive` (the read-only admin dashboard: live mirror + inspector),
   `AppWeb.DashboardPanels`, `AppWeb.Dashboard.Mirror`, `GoogleAuthController`.
@@ -513,6 +519,17 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   test on the wall. A rejected parameter shows up as `[stt] Ink error`. Speech onset
   (`turn.start`) re-arms the idle relock, as a partial does; without that, a relock landing just
   as the user started talking closed the wall's mic on their first words.
+
+- **"Look at this" is a contract like dispatch:** `camera_capture` {id, facing, countdown_ms} →
+  `camera_frame` {id, jpeg | error} → `camera_done` {id}. The camera never takes audio
+  (`enableAudio: false`) and never touches `AudioRouteOwner`; the conversation's mic keeps
+  streaming. The image is never stored or logged. The brain round's per-tool backstop (30 s)
+  must stay ABOVE the largest `Tool.timeout/1` (`look` is 25 s), and `look` counts as a read,
+  so an interrupted "what am I holding?" looks again rather than answering blind. The first
+  capture on a device needs its CAMERA permission; a prompt left unanswered for 12 s is a
+  timeout ("The camera didn't answer").
+- **Game-night scores live in memory** (per user, gone on restart): a deploy during a game wipes
+  the scoreboard. Rolls, flips and picks come from the tool; the prompt forbids inventing them.
 
 ## Testing patterns
 
