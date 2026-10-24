@@ -186,6 +186,15 @@ defmodule App.Tools.GamesTest do
       assert Jason.encode!(show)
     end
 
+    test "every result carries its board's version, newer for each later call" do
+      c = ctx()
+      add = %{"action" => "add", "player" => "Sam", "points" => 1}
+      {:ok, %{version: v1}} = Tool.execute("keep_score", add, c)
+      {:ok, %{version: v2}} = Tool.execute("keep_score", %{"action" => "show"}, c)
+      {:ok, %{version: v3}} = Tool.execute("keep_score", %{"action" => "reset"}, c)
+      assert v1 < v2 and v2 < v3
+    end
+
     test "a tie at the top names every leader" do
       c = ctx()
       Tool.execute("keep_score", %{"action" => "add", "player" => "Sam", "points" => 2}, c)

@@ -65,6 +65,22 @@ defmodule App.Games.ScoresTest do
     assert {:ok, %{score: 2}} = Scores.add(o, "p1", 1)
   end
 
+  test "a snapshot's version orders boards: a higher one saw every earlier write" do
+    o = owner()
+    Scores.add(o, "Sam", 3)
+    {board, v1} = Scores.snapshot(o)
+    assert board == [%{name: "Sam", score: 3}]
+    Scores.add(o, "Ana", 5)
+    {board, v2} = Scores.snapshot(o)
+    assert board == [%{name: "Ana", score: 5}, %{name: "Sam", score: 3}]
+    assert is_integer(v1) and v2 > v1
+
+    # a reset board is still newer than the one before it
+    Scores.reset(o)
+    assert {[], v3} = Scores.snapshot(o)
+    assert v3 > v2
+  end
+
   test "concurrent adds (parallel tool calls) all land" do
     o = owner()
 

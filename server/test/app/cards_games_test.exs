@@ -138,6 +138,7 @@ defmodule App.CardsGamesTest do
 
       assert card("keep_score", %{"action" => "add"}, r) == %{
                type: "scoreboard",
+               slot: "scoreboard",
                title: "Scoreboard",
                trailing: "4 players",
                rows: [
@@ -201,6 +202,116 @@ defmodule App.CardsGamesTest do
       c = card("keep_score", %{}, r)
       assert [%{name: "Sam", points: "2", delta: "+2", leader: true}] = c.rows
       assert Jason.encode!(c)
+    end
+  end
+
+  describe "one scoreboard a turn (App.Cards.fold/3)" do
+    # A turn's keep_score results, in arrival order, folded the way the Conversation does.
+    defp fold_all(results), do: Enum.reduce(results, nil, &Cards.fold("keep_score", &2, &1))
+
+    defp board(version, scores),
+      do: %{scores: for({p, s} <- scores, do: %{player: p, score: s}), version: version}
+
+    defp add(version, player, points, scores),
+      do: Map.merge(board(version, scores), %{action: "add", player: player, points: points})
+
+    defp deltas(card), do: Map.new(card.rows, &{&1.name, &1[:delta]})
+
+    test "only the scoreboard has a slot" do
+      assert Cards.slot("keep_score") == "scoreboard"
+      assert Cards.slot("roll_dice") == nil
+      assert Cards.slot("read_list") == nil
+    end
+
+    test "parallel adds make one board, the freshest, with every player's change on it" do
+      # The 02:17 game: four adds in one round, each result reading the board after its own
+      # write, so the earlier results hold only part of the round.
+      results = [
+        add(1, "Sam", 3, [{"Sam", 3}]),
+        add(2, "Ana", 2, [{"Sam", 3}, {"Ana", 2}]),
+        add(3, "Joe", 5, [{"Joe", 5}, {"Sam", 3}, {"Ana", 2}]),
+        add(4, "Kim", 1, [{"Joe", 5}, {"Sam", 3}, {"Ana", 2}, {"Kim", 1}])
+      ]
+
+      c = card("keep_score", %{}, fold_all(results))
+      assert c.slot == "scoreboard"
+      assert Enum.map(c.rows, & &1.name) == ~w(Joe Sam Ana Kim)
+      assert deltas(c) == %{"Joe" => "+5", "Sam" => "+3", "Ana" => "+2", "Kim" => "+1"}
+    end
+
+    test "a result that lands late with an older board doesn't put the old board back" do
+      results = [
+        add(2, "Ana", 2, [{"Sam", 3}, {"Ana", 2}]),
+        # read before Ana's write, delivered after it
+        add(1, "Sam", 3, [{"Sam", 3}])
+      ]
+
+      c = card("keep_score", %{}, fold_all(results))
+      assert Enum.map(c.rows, &{&1.name, &1.points}) == [{"Sam", "3"}, {"Ana", "2"}]
+      assert deltas(c) == %{"Sam" => "+3", "Ana" => "+2"}
+    end
+
+    test "two adds to one player show their sum; a net zero shows nothing" do
+      c =
+        card(
+          "keep_score",
+          %{},
+          fold_all([
+            add(1, "Sam", 3, [{"Sam", 3}, {"Ana", 0}]),
+            add(2, "Sam", 2, [{"Sam", 5}, {"Ana", 0}]),
+            add(3, "Ana", 4, [{"Sam", 5}, {"Ana", 4}]),
+            add(4, "Ana", -4, [{"Sam", 5}, {"Ana", 0}])
+          ])
+        )
+
+      assert deltas(c) == %{"Sam" => "+5", "Ana" => nil}
+    end
+
+    test "a set clears that player's change; a show changes nothing; a reset starts over" do
+      set = Map.merge(board(2, [{"Sam", 10}, {"Ana", 2}]), %{action: "set", player: "Sam"})
+      show = Map.put(board(3, [{"Sam", 10}, {"Ana", 2}]), :action, "show")
+
+      c =
+        card(
+          "keep_score",
+          %{},
+          fold_all([add(1, "Sam", 3, [{"Sam", 3}, {"Ana", 2}]), set, show])
+        )
+
+      assert deltas(c) == %{"Sam" => nil, "Ana" => nil}
+
+      sam = add(1, "Sam", 3, [{"Sam", 3}])
+      reset = Map.put(board(2, []), :action, "reset")
+      assert card("keep_score", %{}, fold_all([sam, reset])) == nil
+      ana = add(3, "Ana", 1, [{"Ana", 1}])
+      assert deltas(card("keep_score", %{}, fold_all([sam, reset, ana]))) == %{"Ana" => "+1"}
+    end
+
+    test "a show on its own (a later turn's print) marks no change from earlier turns" do
+      show = Map.put(board(9, [{"Sam", 3}, {"Ana", 2}]), :action, "show")
+      assert deltas(card("keep_score", %{}, fold_all([show]))) == %{"Sam" => nil, "Ana" => nil}
+    end
+
+    test "from real parallel calls, however their results land" do
+      ctx = %{session_id: "s", user_id: System.unique_integer([:positive]), seed: 1}
+
+      results =
+        [{"Sam", 3}, {"Ana", 2}, {"Joe", 5}, {"Kim", 1}]
+        |> Task.async_stream(fn {p, n} ->
+          run("keep_score", %{"action" => "add", "player" => p, "points" => n}, ctx)
+        end)
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      for order <- [results, Enum.reverse(results)] do
+        c = card("keep_score", %{}, fold_all(order))
+        assert Enum.map(c.rows, & &1.name) == ~w(Joe Sam Ana Kim)
+        assert deltas(c) == %{"Joe" => "+5", "Sam" => "+3", "Ana" => "+2", "Kim" => "+1"}
+      end
+    end
+
+    test "a malformed result never raises" do
+      assert Cards.fold("keep_score", nil, :garbage) == :garbage
+      assert Cards.fold("read_list", nil, %{items: []}) == %{items: []}
     end
   end
 

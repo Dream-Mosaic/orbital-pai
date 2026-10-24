@@ -161,6 +161,98 @@ defmodule App.Conversations.ConversationCardsPersistTest do
     stop_session(pid)
   end
 
+  # keep_score results as the tool returns them: each holds the board it read after its own
+  # write, and the version that orders those reads (App.Games.Scores.snapshot/1).
+  defp score_add(version, player, points, scores) do
+    %{
+      action: "add",
+      player: player,
+      points: points,
+      score: points,
+      scores: for({p, n} <- scores, do: %{player: p, score: n}),
+      leaders: [],
+      version: version
+    }
+  end
+
+  defp deltas(card), do: for(%{name: n} = row <- card.rows, into: %{}, do: {n, row[:delta]})
+
+  @round [
+    {"Sam", 3, [{"Sam", 3}]},
+    {"Ana", 2, [{"Sam", 3}, {"Ana", 2}]},
+    {"Joe", 5, [{"Joe", 5}, {"Sam", 3}, {"Ana", 2}]},
+    {"Kim", 1, [{"Joe", 5}, {"Sam", 3}, {"Ana", 2}, {"Kim", 1}]}
+  ]
+
+  test "parallel score writes show ONE scoreboard: each push replaces the last, one persists" do
+    Application.put_env(:app, :fake_brain_done_ms, 300)
+    user = test_user()
+    pid = start_session(user)
+
+    Conversation.endpoint(pid, "three to Sam, two to Ana, five to Joe, one to Kim")
+    assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+
+    for {{player, points, scores}, v} <- Enum.with_index(@round, 1) do
+      send(pid, {:brain_tool_result, "keep_score", %{}, score_add(v, player, points, scores)})
+    end
+
+    pushes = for _ <- 1..4, do: assert_receive({:to_client, {:card, card}}, 500) && card
+    # every push names its slot, so the app swaps the board in place instead of stacking it
+    assert Enum.all?(pushes, &(&1.slot == "scoreboard"))
+    last = List.last(pushes)
+    assert deltas(last) == %{"Joe" => "+5", "Sam" => "+3", "Ana" => "+2", "Kim" => "+1"}
+
+    turn = persisted(user, "three to Sam, two to Ana, five to Joe, one to Kim")
+    assert [card] = turn.cards
+    assert card == last |> Jason.encode!() |> Jason.decode!()
+    stop_session(pid)
+  end
+
+  test "scoreboards held behind the reflex are released as one" do
+    Application.put_env(:app, :fake_brain_done_ms, 600)
+
+    stub(App.TextModelMock, :generate, fn _t, _c, _o ->
+      Process.sleep(250)
+      {:ok, "huh"}
+    end)
+
+    user = test_user()
+    pid = start_session(user)
+
+    Conversation.endpoint(pid, "three to Sam, two to Ana, five to Joe, one to Kim")
+
+    for {{player, points, scores}, v} <- Enum.with_index(@round, 1) do
+      send(pid, {:brain_tool_result, "keep_score", %{}, score_add(v, player, points, scores)})
+    end
+
+    assert_receive {:to_client, {:card, %{type: "scoreboard"} = card}}, 1500
+    refute_receive {:to_client, {:card, _}}, 300
+    assert deltas(card) == %{"Joe" => "+5", "Sam" => "+3", "Ana" => "+2", "Kim" => "+1"}
+    assert [_] = persisted(user, "three to Sam, two to Ana, five to Joe, one to Kim").cards
+    stop_session(pid)
+  end
+
+  test "the next turn's scoreboard carries none of this turn's changes" do
+    Application.put_env(:app, :fake_brain_done_ms, 300)
+    user = test_user()
+    pid = start_session(user)
+
+    Conversation.endpoint(pid, "three to Sam")
+    assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+    send(pid, {:brain_tool_result, "keep_score", %{}, score_add(1, "Sam", 3, [{"Sam", 3}])})
+    assert_receive {:to_client, {:card, %{type: "scoreboard"} = first}}, 500
+    assert deltas(first) == %{"Sam" => "+3"}
+    assert [_] = persisted(user, "three to Sam").cards
+
+    Conversation.endpoint(pid, "what's the score")
+    assert_receive {:to_client, {:audio, :reflex, _}}, 1000
+    show = %{action: "show", scores: [%{player: "Sam", score: 3}], leaders: ["Sam"], version: 2}
+    send(pid, {:brain_tool_result, "keep_score", %{}, show})
+    assert_receive {:to_client, {:card, %{type: "scoreboard"} = second}}, 500
+    assert deltas(second) == %{"Sam" => nil}
+    stop_session(pid)
+  end
+
   # Interrupted turns, documented behaviour:
   #   * answered, then barged (the row persists, its answer truncated to what was heard): the
   #     cards were on screen, so the row KEEPS them.

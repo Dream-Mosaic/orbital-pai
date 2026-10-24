@@ -180,7 +180,7 @@ defmodule App.Tools.Games do
       "reset" ->
         :ok = Scores.reset(owner)
         Logger.info("[games] scoreboard reset")
-        {:ok, %{action: "reset", scores: [], leaders: [], note: "scoreboard cleared"}}
+        {:ok, Map.merge(%{action: "reset", note: "scoreboard cleared"}, board(owner))}
 
       _ ->
         {:error, "keep_score's action must be add, set, show or reset."}
@@ -242,13 +242,15 @@ defmodule App.Tools.Games do
 
   # ---- results ----
 
+  # `version` orders boards read by parallel calls, so their one card shows the freshest.
   defp board(owner) do
-    scores = Scores.board(owner)
+    {scores, version} = Scores.snapshot(owner)
     top = scores |> Enum.map(& &1.score) |> Enum.max(fn -> nil end)
 
     %{
       scores: Enum.map(scores, &%{player: &1.name, score: &1.score}),
-      leaders: for(%{name: n, score: ^top} <- scores, do: n)
+      leaders: for(%{name: n, score: ^top} <- scores, do: n),
+      version: version
     }
   end
 
