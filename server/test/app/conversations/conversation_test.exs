@@ -113,6 +113,35 @@ defmodule App.Conversations.ConversationTest do
       assert_receive {:to_client, {:locked, true}}, 400
     end
 
+    # #42: Ink's turn.start lands at speech onset, a beat before the first turn.update. A relock
+    # due in that gap locked mid-word, the device's wake gate closed the mic on the user's
+    # opening words, and the utterance was dropped (`[wake] relocked (idle)`, then
+    # `[wake] locked drop` 0.6 s later in prod).
+    test "speech onset (turn.start) resets the idle relock before any partial lands" do
+      Application.put_env(:app, :relock_ms, 200)
+      on_exit(fn -> Application.delete_env(:app, :relock_ms) end)
+      stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
+      pid = start_conv()
+      Conversation.set_voice_activation(pid, true)
+      assert_receive {:to_client, {:locked, true}}, 500
+
+      Conversation.endpoint(pid, "Henry hello")
+      assert_receive {:to_client, {:locked, false}}, 500
+      assert_receive {:to_client, {:speak_start, :reflex, _}}, 1000
+      assert_receive {:to_client, {:speak_start, :brain, _}}, 1000
+      assert_receive {:to_client, :listening}, 1000
+
+      # the user starts talking ~120ms into the 200ms window; no transcript yet
+      Process.sleep(120)
+      Conversation.turn_start(pid)
+
+      # without the reset, the timer armed at :listening fires ~80ms from now
+      refute_receive {:to_client, {:locked, true}}, 120
+
+      # silence past a fresh window still locks
+      assert_receive {:to_client, {:locked, true}}, 400
+    end
+
     test "with voice activation OFF (default), a no-name utterance is answered (no regression)" do
       stub(App.TextModelMock, :generate, fn _t, _c, _o -> {:ok, "the answer"} end)
       pid = start_conv()
