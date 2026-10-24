@@ -379,6 +379,9 @@ class VoiceController extends ChangeNotifier {
   int? _metricsIndex;
   int? _thinkingIndex;
   final List<int> _toolChipIndexes = <int>[];
+  // Where this turn's card in each slot sits (a card sent with a `slot`, like
+  // the scoreboard), so a later one replaces it instead of stacking another.
+  final Map<String, int> _slotIndexes = <String, int>{};
   bool _historyBackfilled = false;
 
   bool _pttEnabled = false;
@@ -675,6 +678,7 @@ class VoiceController extends ChangeNotifier {
     for (var i = 0; i < _toolChipIndexes.length; i++) {
       if (_toolChipIndexes[i] > removed) _toolChipIndexes[i] -= 1;
     }
+    _slotIndexes.updateAll((_, i) => i > removed ? i - 1 : i);
   }
 
   void _endTurn() {
@@ -683,6 +687,7 @@ class VoiceController extends ChangeNotifier {
     _brainIndex = null;
     _brainFinalized = false;
     _metricsIndex = null;
+    _slotIndexes.clear();
     // A `partial` that never reached `transcript` — a barge-in, an endpoint the
     // server resolved another way — would otherwise leave your half-finished
     // words on screen for the whole of the next turn. Harmless until the orb's
@@ -722,6 +727,7 @@ class VoiceController extends ChangeNotifier {
     _metricsIndex = null;
     _thinkingIndex = null;
     _toolChipIndexes.clear();
+    _slotIndexes.clear();
     _safeNotify();
   }
 
@@ -1171,6 +1177,7 @@ class VoiceController extends ChangeNotifier {
           _metricsIndex = null;
           _thinkingIndex = null;
           _toolChipIndexes.clear();
+          _slotIndexes.clear();
           for (final t in turns) {
             _addHistoryTurn((t as Map).cast<String, dynamic>());
           }
@@ -1247,11 +1254,20 @@ class VoiceController extends ChangeNotifier {
         _thread.add(ThreadToolChip(name: (p['name'] as String?) ?? 'tool'));
         _toolChipIndexes.add(_thread.length - 1);
       case 'card':
-        // A visual answer (App.Cards), appended in arrival order. It holds no
-        // handle, so the index bookkeeping above is untouched. Unknown types
-        // are dropped rather than guessed at.
+        // A visual answer (App.Cards), appended in arrival order. Unknown types
+        // are dropped rather than guessed at. A card with a slot (the
+        // scoreboard) replaces this turn's earlier card in that slot, where it
+        // was: four parallel score writes are one board, not four.
         final card = ThreadCard.fromWire(p['card']);
-        if (card != null) _thread.add(card);
+        if (card == null) break;
+        final slot = card.slot;
+        final at = slot == null ? null : _slotIndexes[slot];
+        if (at != null && at < _thread.length && _thread[at] is ThreadCard) {
+          _thread[at] = card;
+        } else {
+          _thread.add(card);
+          if (slot != null) _slotIndexes[slot] = _thread.length - 1;
+        }
       case 'metrics':
         final metrics = ThreadMetrics(
           ttfaMs: (p['ttfa'] as num?)?.round(),
