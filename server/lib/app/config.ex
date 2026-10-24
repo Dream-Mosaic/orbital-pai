@@ -46,6 +46,14 @@ defmodule App.Config do
             stt_sample_rate: 16_000,
             # Cartesia Ink-2 STT model (native semantic turn detection).
             stt_model: "ink-2",
+            # How sure Ink must be that you're done before it sends turn.end (`turn_end_threshold`,
+            # 0.05–0.5, on the hands-free socket only; lower waits longer). Ink's default 0.3 ended
+            # turns on mid-sentence pauses: Henry answered half a sentence and talked over the rest
+            # (#42). 0.1 is the end threshold of Cartesia's "Patient" preset, for people who pause
+            # to think. turn.eager_end stays at Ink's 0.6, so the reflex is still pre-computed
+            # early and only speaks on turn.end. nil = omit (Ink's default). SMOKE-GATED: a lower
+            # value costs some latency at the end of every turn.
+            stt_turn_end_threshold: 0.1,
             # TTS output + browser playback. 44.1k is full-fidelity; drop to 24_000/16_000 to trade
             # quality for bandwidth. Must match the client playback rate (wired from this in the LiveView).
             tts_sample_rate: 24_000,

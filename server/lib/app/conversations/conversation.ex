@@ -343,7 +343,8 @@ defmodule App.Conversations.Conversation do
             mode: mode,
             sample_rate: config.stt_sample_rate,
             model: config.stt_model,
-            version: config.cartesia_version
+            version: config.cartesia_version,
+            turn_end_threshold: config.stt_turn_end_threshold
           )
 
         {mod, pid}
@@ -411,7 +412,9 @@ defmodule App.Conversations.Conversation do
   def handle_event(:cast, {:stt_endpoint, t}, _s, data), do: handle_endpoint(t, data)
   def handle_event(:cast, {:stt_eager_end, t}, _s, data), do: handle_eager_end(t, data)
   def handle_event(:cast, {:stt_resume}, _s, data), do: handle_resume(data)
-  def handle_event(:cast, {:stt_turn_start}, _s, data), do: handle_turn_start(mark_ring(data))
+
+  def handle_event(:cast, {:stt_turn_start}, _s, data),
+    do: data |> mark_ring() |> handle_turn_start() |> hold_relock()
 
   def handle_event(:cast, :barge_in, _s, data) do
     Logger.info("[turn] ⏹ barge_in (during #{data.policy.phase})")
@@ -688,7 +691,10 @@ defmodule App.Conversations.Conversation do
   def handle_event(:info, {:stt_endpoint, t}, _s, data), do: handle_endpoint(t, data)
   def handle_event(:info, {:stt_eager_end, t}, _s, data), do: handle_eager_end(t, data)
   def handle_event(:info, {:stt_resume}, _s, data), do: handle_resume(data)
-  def handle_event(:info, {:stt_turn_start}, _s, data), do: handle_turn_start(mark_ring(data))
+
+  def handle_event(:info, {:stt_turn_start}, _s, data),
+    do: data |> mark_ring() |> handle_turn_start() |> hold_relock()
+
   def handle_event(:info, :stt_ready, _s, data), do: {:keep_state, data}
   def handle_event(:info, {:stt_error, _reason}, _s, data), do: {:keep_state, data}
 
@@ -1901,6 +1907,21 @@ defmodule App.Conversations.Conversation do
     Logger.info("[turn] ◉ turn.start during #{data.policy.phase}")
     {:keep_state, data}
   end
+
+  # Speech onset is activity, exactly as a live partial is: re-arm the idle relock. Ink sends
+  # turn.start a beat before the first turn.update, and a relock that came due in that gap
+  # locked on the user's first words — the device's wake gate then closed the mic mid-sentence
+  # and the utterance was dropped (#42). Mid-turn the relock defers itself; locked, there is
+  # nothing to re-arm.
+  defp hold_relock({:keep_state, data}), do: hold_relock({:keep_state, data, []})
+
+  defp hold_relock(
+         {:keep_state,
+          %{voice_activation: true, locked: false, policy: %{phase: :listening}} = data, actions}
+       ),
+       do: {:keep_state, data, [relock_action(data) | actions]}
+
+  defp hold_relock(result), do: result
 
   # Mirrors buffer_audio's lazy-creation guard: if this is the very first turn.start of a
   # gated session (no mic audio has streamed yet, so the ring doesn't exist), create it AND

@@ -506,6 +506,13 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   wakes reconnect. The adapter HOLDS frames pushed while connecting (capped 8 s) and flushes them
   on the 101; dropping them clipped the first words of nearly every wake (`[stt] socket up;
   sending N frames held during the connect`).
+- **Ink's turn-end sensitivity is ours to set** (`App.Config :stt_turn_end_threshold`, sent as
+  `turn_end_threshold` on the hands-free socket only). At Ink's default 0.3 a mid-sentence
+  pause ended the turn, so Henry answered half a sentence and talked over the rest (#42); it is
+  0.1 (Cartesia's "Patient" end threshold). Don't raise it back for latency without a listening
+  test on the wall. A rejected parameter shows up as `[stt] Ink error`. Speech onset
+  (`turn.start`) re-arms the idle relock, as a partial does; without that, a relock landing just
+  as the user started talking closed the wall's mic on their first words.
 
 ## Testing patterns
 
