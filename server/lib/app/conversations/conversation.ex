@@ -343,7 +343,8 @@ defmodule App.Conversations.Conversation do
             mode: mode,
             sample_rate: config.stt_sample_rate,
             model: config.stt_model,
-            version: config.cartesia_version
+            version: config.cartesia_version,
+            turn_end_threshold: config.stt_turn_end_threshold
           )
 
         {mod, pid}

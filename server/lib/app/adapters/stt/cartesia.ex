@@ -14,6 +14,11 @@ defmodule App.Adapters.Stt.Cartesia do
 
   The PTT toggle reconnects the STT socket in the matching mode.
 
+  The auto socket is opened with `:turn_end_threshold` (`App.Config :stt_turn_end_threshold`)
+  when set: how sure Ink must be that the user is done before it sends `turn.end`. The manual
+  socket has no turn detection, so it never gets the parameter. An Ink `error` event (a
+  rejected parameter, say) is logged as `[stt] Ink error` and passed on as `{:stt_error, _}`.
+
   No keepalive: unlike Deepgram, Ink has no KeepAlive message. An idle socket clean-closes
   (Ink's ~3-min idle timeout); that stops this process `:normal` and the Conversation
   reconnects on the next mic frame — so an idle PTT gap is recovered, not fatal.
@@ -60,6 +65,8 @@ defmodule App.Adapters.Stt.Cartesia do
       sample_rate: sample_rate,
       model: Keyword.get(opts, :model, "ink-2"),
       version: Keyword.get(opts, :version, "2026-06-24"),
+      # auto only; nil = Ink's default
+      turn_end_threshold: Keyword.get(opts, :turn_end_threshold),
       conn: nil,
       websocket: nil,
       request_ref: nil,
@@ -189,6 +196,15 @@ defmodule App.Adapters.Stt.Cartesia do
 
   defp handle_frame({:text, text}, state) do
     {msg, acc} = route(text, state.acc)
+
+    case msg do
+      {:stt_error, {:ink, status, detail}} ->
+        Logger.warning("[stt] Ink error #{status}: #{detail}")
+
+      _ ->
+        :ok
+    end
+
     if msg, do: send(state.owner, msg)
     %{state | acc: acc}
   end
@@ -271,6 +287,7 @@ defmodule App.Adapters.Stt.Cartesia do
     * `transcript` is_final=false (manual interim) → preview committed + this
     * `transcript` is_final=true (manual segment) → commit + preview the running total
     * `flush_done` (manual, release ack) → `{:stt_endpoint, whole hold}`
+    * `error` (either) → `{:stt_error, {:ink, status_code, "title: message"}}` (acc untouched)
 
   Returns `{message | nil, acc}`.
   """
@@ -288,6 +305,7 @@ defmodule App.Adapters.Stt.Cartesia do
       {:transcript, t, false} -> on_interim(t, acc)
       {:transcript, t, true} -> on_commit(t, acc)
       :flush_done -> on_flush(acc)
+      {:error, status, detail} -> {{:stt_error, {:ink, status, detail}}, acc}
       :ignore -> {nil, acc}
     end
   end
@@ -333,6 +351,9 @@ defmodule App.Adapters.Stt.Cartesia do
       {:ok, %{"type" => "flush_done"}} ->
         :flush_done
 
+      {:ok, %{"type" => "error"} = m} ->
+        {:error, m["status_code"], Enum.map_join(["title", "message"], ": ", &(m[&1] || "?"))}
+
       _ ->
         :ignore
     end
@@ -345,5 +366,11 @@ defmodule App.Adapters.Stt.Cartesia do
       encoding: "pcm_s16le",
       sample_rate: state.sample_rate
     }
+    |> put_turn_end_threshold(state)
   end
+
+  defp put_turn_end_threshold(params, %{mode: :auto, turn_end_threshold: t}) when is_number(t),
+    do: Map.put(params, :turn_end_threshold, t)
+
+  defp put_turn_end_threshold(params, _state), do: params
 end

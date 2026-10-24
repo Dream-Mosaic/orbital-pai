@@ -127,4 +127,54 @@ defmodule App.Adapters.Stt.CartesiaTest do
     assert p.encoding == "pcm_s16le"
     assert p.sample_rate == 16_000
   end
+
+  # #42: Ink's default end threshold (0.3) ended turns on mid-sentence pauses.
+  test "query_params: the hands-free turns endpoint carries the turn-end threshold" do
+    p =
+      Cartesia.query_params(%{
+        sample_rate: 16_000,
+        model: "ink-2",
+        mode: :auto,
+        turn_end_threshold: 0.1
+      })
+
+    assert p.turn_end_threshold == 0.1
+  end
+
+  test "query_params: a nil turn-end threshold is omitted (Ink's own default)" do
+    p =
+      Cartesia.query_params(%{
+        sample_rate: 16_000,
+        model: "ink-2",
+        mode: :auto,
+        turn_end_threshold: nil
+      })
+
+    refute Map.has_key?(p, :turn_end_threshold)
+  end
+
+  test "query_params: the PTT endpoint has no turn detection, so it never gets the threshold" do
+    p =
+      Cartesia.query_params(%{
+        sample_rate: 16_000,
+        model: "ink-2",
+        mode: :manual,
+        turn_end_threshold: 0.1
+      })
+
+    refute Map.has_key?(p, :turn_end_threshold)
+  end
+
+  test "an Ink error event surfaces as :stt_error, accumulator untouched" do
+    err =
+      ev(%{
+        "type" => "error",
+        "status_code" => 400,
+        "title" => "Invalid parameter",
+        "message" => "turn_end_threshold out of range"
+      })
+
+    assert {{:stt_error, {:ink, 400, "Invalid parameter: turn_end_threshold out of range"}},
+            {["x"], "y"}} = Cartesia.route(err, {["x"], "y"})
+  end
 end

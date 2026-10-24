@@ -35,6 +35,7 @@ defmodule App.Adapters.Stt.CartesiaSocketTest do
     def init(opts), do: opts
 
     def call(%{request_path: "/stt/" <> _} = conn, st) do
+      send(st.test, {:fake_ink_upgrade, conn.request_path, URI.decode_query(conn.query_string)})
       Process.sleep(st.delay_ms)
       conn |> WebSockAdapter.upgrade(FakeInk, st, timeout: 60_000) |> halt()
     end
@@ -113,5 +114,20 @@ defmodule App.Adapters.Stt.CartesiaSocketTest do
     assert_receive {:fake_ink, :binary, ^b}, 1_000
     assert_receive {:fake_ink, :binary, ^c}, 1_000
     refute_received {:fake_ink, :binary, ^a}
+  end
+
+  test "the hands-free socket asks Ink for the configured turn-end threshold", %{url: url} do
+    start_stt(url, mode: :auto, turn_end_threshold: 0.1)
+
+    assert_receive {:fake_ink_upgrade, "/stt/turns/websocket", query}, 2_000
+    assert query["turn_end_threshold"] == "0.1"
+    assert query["model"] == "ink-2"
+  end
+
+  test "the PTT socket is opened without turn parameters", %{url: url} do
+    start_stt(url, mode: :manual, turn_end_threshold: 0.1)
+
+    assert_receive {:fake_ink_upgrade, "/stt/websocket", query}, 2_000
+    refute Map.has_key?(query, "turn_end_threshold")
   end
 end
