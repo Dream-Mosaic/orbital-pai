@@ -71,9 +71,23 @@ class _OrbViewState extends State<OrbView> with SingleTickerProviderStateMixin {
     _syncTicker();
   }
 
+  /// The state the frame was last settled on under reduced motion; null when
+  /// the clock runs. Settling notifies, which lands back here, so this is what
+  /// stops it settling again for the same state.
+  OrbState? _settled;
+
   void _syncTicker() {
     final ticker = _ticker;
     if (ticker == null) return;
+    if (_reduceMotion) {
+      final state = widget.frame.state;
+      if (state != _settled) {
+        _settled = state;
+        widget.frame.settle();
+      }
+    } else {
+      _settled = null;
+    }
     final shouldRun = !_reduceMotion && widget.frame.state != OrbState.off;
     if (shouldRun && !ticker.isActive) {
       _last = Duration.zero;

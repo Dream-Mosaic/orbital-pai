@@ -46,6 +46,40 @@ void main() {
     frame.dispose();
   });
 
+  // #43: the Lenovo has Developer options' animation scales at 0, which
+  // Flutter reports as reduced motion. With the clock stopped the line's
+  // presence never rose, so Henry spoke into a blank orb. Still no clock, but
+  // the frame settles on each state change: a still line while he speaks.
+  testWidgets('reduced motion still shows a still line while Henry speaks', (tester) async {
+    final frame = OrbFrame();
+    frame.state = OrbState.listening;
+
+    await tester.pumpWidget(MaterialApp(
+      home: MediaQuery(
+        data: const MediaQueryData(disableAnimations: true),
+        child: SizedBox(width: 200, height: 200, child: OrbView(frame: frame)),
+      ),
+    ));
+    await tester.pump();
+    expect(frame.presence, 0.0);
+
+    frame.state = OrbState.speaking;
+    await tester.pump();
+    expect(frame.presence, 1.0, reason: 'the line is there at once, without a clock');
+    expect(tester.binding.transientCallbackCount, 0, reason: 'and nothing animates');
+
+    frame.audioTarget = 0.8;
+    await tester.pump();
+    expect(frame.level, 0.0, reason: 'the line stays still: no level-driven motion');
+
+    frame.state = OrbState.listening;
+    await tester.pump();
+    expect(frame.presence, 0.0, reason: 'and it leaves with the turn');
+
+    await tester.pumpWidget(const SizedBox());
+    frame.dispose();
+  });
+
   testWidgets('survives UNBOUNDED constraints instead of asserting', (tester) async {
     // M-T3e: `size: Size.infinite` asserts under unbounded constraints, which is
     // a live trap now that A2 lays the orb out inside real chrome.

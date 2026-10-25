@@ -240,6 +240,19 @@ class OrbFrame extends ChangeNotifier {
   ///     every other state targets 0, so the level decays instead of sticking;
   ///   * reactive states quicken with loudness, `thinking` keeps a steady
   ///     confident cadence, `off` is frozen.
+  /// Reduced motion: no clock at all, but the frame still says what state it
+  /// is in. Snaps the line's presence to its target, so a still line shows
+  /// while Henry speaks or thinks and leaves with the turn, at its resting
+  /// amplitude: no level, no phase drift, no breathing. Without this, a device
+  /// whose animation scales are 0 (the Lenovo wall, #43) spoke into a blank orb.
+  void settle() {
+    _smoother.reset();
+    _transient.reset();
+    _shapeLevel = 0.0;
+    _presence = _lineWanted ? 1.0 : 0.0;
+    notifyListeners();
+  }
+
   void advance(double dt) {
     if (_state == OrbState.off) {
       // Frozen: no clock and no repaint — this is the state a wall device shows
