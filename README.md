@@ -4,6 +4,7 @@
 
 [![Elixir](https://img.shields.io/badge/Elixir-4B275F?style=for-the-badge&logo=elixir&logoColor=white)](https://elixir-lang.org/)
 [![Phoenix Framework](https://img.shields.io/badge/Phoenix_Framework-FD4F00?style=for-the-badge&logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org/)
+[![Flutter](https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white)](https://flutter.dev/)
 [![Status](https://img.shields.io/badge/Status-Active_Development-orange?style=for-the-badge)](https://github.com/)
 
 </div>
@@ -16,102 +17,132 @@
 
 # Orbital P.A.I — a naturally-responsive voice assistant
 
-Orbital (I named mine Henry) is a low-latency, voice-first personal assistant built in **Elixir/Phoenix**. You talk; it
-answers out loud — fast — and it can actually *do things* (calendar, email, reminders, weather, web
-search) through a tool-calling brain. It remembers what matters about you across conversations, works
-as an installable PWA, and has a "kiosk" wall mode.
+Orbital (I named mine **Henry**) is a low-latency, voice-first personal assistant. You say "Henry",
+you talk, and it answers out loud, fast. It can actually *do things*: your calendar and email,
+reminders and timers, the lights and the music, lists and recipes, even looking at what you hold up
+to the camera. It remembers what matters about you across conversations.
+
+The brain is an **Elixir/Phoenix** server. You talk to it through a **Flutter** app: on your phone,
+or on a tablet that lives on the wall as the household's Henry. The web is the admin dashboard.
 
 ## Screenshots
 
-| Conversation (phone) | Kiosk / wall mode | Powered off |
-|---|---|---|
-| ![phone](docs/screenshots/pai_phone_henry_user_02.png) | ![kiosk](docs/screenshots/pai_kiosk_henry_01.png) | ![off](docs/screenshots/pai_phone_henry_off_03.png) |
+The wall tablet, in landscape:
 
-The orb is the light source: it glows **amber** while you speak, **green** while the AI speaks, and the
-whole surface breathes with the live audio. Your turns run down an amber rail, the AI's down a green one.
+| Henry speaking | Game night |
+|---|---|
+| ![Henry answering a weather question, his line in the orb and the forecast card beside it](docs/screenshots/wall_speaking_weather.png) | ![A scoreboard and a dice card on the wall](docs/screenshots/wall_game_night.png) |
+| **"Henry, look at this"** | **Today, at rest** |
+| ![The orb turned into a camera viewfinder mid-countdown](docs/screenshots/wall_camera.png) | ![The Today board: coming up and the weather](docs/screenshots/wall_today.png) |
 
-## How it works (the pipeline)
+The orb is the light source. It glows **amber** while you speak and **green** while Henry speaks,
+and a line moves across the glass with his voice. At rest it's a clock with the weather and your
+next event. After a couple of quiet minutes the conversation gives way to a **Today** board.
+
+## What Henry can do
+
+- **Talk naturally.** Hands-free with the "Henry" wake word (spotted on the device; no audio leaves
+  it until it hears its name), or push-to-talk. Interrupt him mid-sentence and he stops. Pause to
+  think and he waits.
+- **Answer fast.** An instant "reflex" line masks the wait while the "brain" streams the real answer,
+  word by word, into speech and onto the screen.
+- **Do things, with cards to show for it:** weather, reminders, timers (with an alarm on the device),
+  Google **Calendar** and **Gmail**, web search, lists, a garden log, trackers, routines and
+  recipes (with a step-by-step cook mode), and a household intercom.
+- **Run the house** through **Home Assistant**: lights, scenes and media players, by the names you
+  use. Locks, alarms and garage doors are view-only on purpose.
+- **See.** "Henry, what am I holding?" turns the orb into a viewfinder, takes one photo, and answers
+  about it. The photo is never stored.
+- **Game night.** Dice ("roll 2d6", "d20"), coin flips, "pick who goes first", and a running
+  scoreboard, each as a big card on the wall.
+- **Remember.** Durable profile facts and a rolling summary, searchable memory over your mail and
+  calendar, all visible and editable.
+- **Speak up on his own.** Reminders, timers, calendar heads-ups, rain alerts and an optional morning
+  briefing, timed so he doesn't talk over you.
+- **Live on the wall.** A tablet becomes a wall display: screen held on, no system bars, readable
+  across the room, dimmed at night. Marked as **shared**, it's the household's: "remind me" there
+  goes to everyone.
+- **Hand work to Claude.** "Henry, have Claude look at issue 42" dispatches a coding agent to work a
+  repo issue and open a pull request, then tells you when it's done (optional; see `docs/`).
+- **Two-user ready.** Sign-in goes through your identity provider (Authentik/OIDC) and an allowlist;
+  each person sees only their own memory, reminders and accounts.
+
+## How it works
 
 ```
-mic → Cartesia Ink-2 STT → Conversation (gen_statem) ──► reflex  (instant ~1s filler, Gemini minimal)
-                                                     └─► brain   (streaming Gemini → Cartesia TTS → audio)
-                                                            └─ tools: weather · reminders · calendar · email · web search
+app: wake word (on device) → mic ──► Phoenix channel ──► Cartesia Ink-2 STT → Conversation (gen_statem)
+                                                              ├─► reflex  (instant filler, Gemini)
+                                                              └─► brain   (streaming Gemini → Cartesia Sonic TTS → app)
+                                                                     └─ tools · toolkits (home, repos) · cards
 ```
 
-- **One vendor for voice** — Cartesia **Ink-2** for speech-to-text (native semantic turn detection)
-  and **Sonic** for text-to-speech, over one `CARTESIA_API_KEY`.
-- **Reflex + brain split** — an instant short "reflex" masks latency while the streaming "brain"
-  composes the real answer (Gemini SSE → Cartesia WebSocket → gapless audio). The reflex even gets a
-  **head-start** from Ink's `turn.eager_end` prediction, and the brain's answer text **streams to the
-  UI live** (a caption that fills word-by-word, then snaps to formatted markdown).
-- **Tools** — the brain calls functions (`App.Tools.*`) inline mid-turn: weather (Open-Meteo),
-  reminders (SQLite + scheduler), Google **Calendar** (read + create), **Gmail** (search + read +
-  send), and **web search** (Gemini grounding).
-- **Memory** — durable profile facts + a rolling summary, auto-extracted, shown/editable in the UI.
-- **Turn-taking** — Ink-2's **native semantic endpointing** (a mid-thought pause doesn't cut you off),
-  a **push-to-talk** mode (hold a button, via Ink's manual finalize), and **barge-in** ("allow
-  interruptions" — talk over the AI and they yields, driven by Ink's `turn.start`).
-- **Proactive** — a generic *agenda* system delivers self-initiated turns; reminders fire as spoken,
-  polite interjections (speak when idle, queue mid-turn, interject at the next breath).
-- **Multi-user** — sign-in is gated by an allowlist; each user sees only their own memory, reminders,
-  and connected accounts.
+- **One vendor for voice:** Cartesia **Ink-2** for speech-to-text (semantic turn detection, so a
+  thinking pause doesn't end your turn) and **Sonic** for text-to-speech.
+- **Gemini** for the reflex, the brain and the vision call; tools run inline mid-turn and return
+  cards the app draws.
+- **The app** (`native/`) owns the microphone, the wake word, echo cancellation and playback. The
+  server owns everything else.
 
 ## Run it (dev)
 
-Needs Elixir/Erlang, Node (for asset deps), and API keys.
+Needs Elixir/Erlang (versions in `.tool-versions`), Node (asset deps), Flutter for the app, and API
+keys.
 
 ```bash
-cd server                # the Phoenix app lives here (the Flutter client is in native/)
-cp .env.example .env     # fill in GOOGLE_API_KEY, CARTESIA_API_KEY (STT + TTS), Google OAuth,
-                         # and ALLOWED_USERS (the sign-in allowlist — set it to your own account)
-mix setup                # deps, DB, assets, npm
-cd .. && ./dev.sh        # loads server/.env, runs the server, tees to server/log/companion.log
+cd server
+cp .env.example .env     # GOOGLE_API_KEY, CARTESIA_API_KEY, the OIDC_* sign-in settings,
+                         # and ALLOWED_USERS (the sign-in allowlist: set it to your own account)
+mix setup                # deps, DB, assets
+cd .. && ./dev.sh        # runs the server on PORT (8787), tees to server/log/companion.log
+
+cd native && ./run-dev.sh --local   # the app on an attached Android device, pointed at your Mac
 ```
 
-Optional: `docker compose -f docker-compose.dev.yml up -d` starts Qdrant (semantic memory) on
-`localhost:6333`. Without it the server still runs; the embedder just logs a retry warning.
+Optional: `docker compose -f docker-compose.dev.yml up -d` starts Qdrant (semantic memory). Without
+it the server still runs.
 
-Open the URL it prints (default `http://localhost:8787`, from `PORT` in `.env`), tap the **power**
-button, allow the mic, and speak. (Chrome recommended for Web Audio.)
-
-- **Secrets + config** live in `.env` (gitignored) — never commit them. `ALLOWED_USERS` is JSON; see
-  `.env.example` for the format.
-- **Google Calendar / Gmail** are optional and need a one-time setup of your *own* Google Cloud
-  project (OAuth client + enabling the APIs). See **[docs/connectors.md](docs/connectors.md)** for the
-  full walkthrough, then connect accounts from the Connectors panel.
+- **Secrets and config** live in `.env` (gitignored). Never commit them.
+- **Google Calendar / Gmail** need your *own* Google Cloud project; see
+  **[docs/connectors.md](docs/connectors.md)**. **Home Assistant** needs `HOME_ASSISTANT_URL` and a
+  token.
+- `native/README.md` covers the app's build scripts (`run-dev.sh`, `run-profile.sh`, `run-build.sh`).
 
 ## Deploy
 
-Orbital P.A.I ships as a Docker image and runs behind any reverse proxy / tunnel that supports WebSockets
-(e.g. a Cloudflare Tunnel). All secrets + host come from environment variables — nothing is baked into
-the image. See `docker-compose.yml` and `docs/deploy-coolify.md` for a reference deployment (SQLite on
-a persistent volume, `SECRET_KEY_BASE`, `PHX_HOST`, `ALLOWED_USERS`, etc.).
+The server ships as a Docker image behind any reverse proxy or tunnel that supports WebSockets (e.g.
+a Cloudflare Tunnel). Secrets and the host come from environment variables; nothing is baked into
+the image. See `docker-compose.yml` and **[docs/deploy-coolify.md](docs/deploy-coolify.md)** for a
+reference deployment (SQLite on a persistent volume).
 
 ## Project layout
 
-The repo is a monorepo: **`server/`** (Phoenix — brain, tools, memory, channels + the web UI) and
-**`native/`** (one Flutter project targeting Android phone/tablet, desktop, and later iOS).
-The paths below are relative to `server/`.
+A monorepo: **`server/`** (Phoenix: the brain, tools, memory, channels and the admin dashboard) and
+**`native/`** (one Flutter project: Android phone and tablet today; desktop and iOS later).
 
-- `lib/app/conversations/` — the turn engine: `Conversation` (gen_statem), `Policy`, `BrainStream`, `Sessions`.
-- `lib/app/adapters/` — external services: `Stt.Cartesia` (Ink-2), `TextModel.Gemini`, `Tts.Cartesia` (Sonic).
-- `lib/app/agenda*` — generic self-initiated ("agenda") turns; `lib/app/reminders/` — the reminder producer.
-- `lib/app/tools/` — the brain's callable tools (`Tool` behaviour + registry).
-- `lib/app/google/` — OAuth + Calendar + Gmail; `lib/app/memory/` — facts/summary/turns.
-- `lib/app_web/` — `VoiceChannel`, `ConversationLive`, `GoogleAuthController`.
-- `assets/js/voice/` — the `Voice` hook (mic capture, gapless playback, the live orb + caption, push-to-talk).
+- `server/lib/app/conversations/`: the turn engine (`Conversation`, `Policy`, `BrainStream`).
+- `server/lib/app/adapters/`: Cartesia STT/TTS and Gemini.
+- `server/lib/app/tools/` and `toolkits/`: what the brain can call, and the kits it opens per turn.
+- `server/lib/app_web/`: the voice and panel channels, and the dashboard.
+- `native/lib/voice/`, `audio/`, `meridian/`: the controller, the audio path and the UI.
+- `docs/architecture.md`: the longer tour.
 
 ## Cloud LLM vs Local LLMs
-his project leans on a handful of paid API keys — Gemini (the LLM), Cartesia (speech-to-text and text-to-speech), and Voyage (embeddings). They cost money, but they get the infrastructure out of the way so I can focus on building features and iterate quickly.
 
-It's not all cloud, though: one model already runs locally, the speaker verifier behind Voice Lock, a small ONNX speaker-embedding model that runs in-process on the CPU. The long-term goal is to bring the heavier pieces local too, especially the LLMs, which would cut costs dramatically.
+This project leans on a handful of paid API keys: Gemini (the LLM), Cartesia (speech-to-text and
+text-to-speech) and Voyage (embeddings). They cost money, but they get the infrastructure out of the
+way so I can focus on building features and iterate quickly.
 
-I don't have enough usage data yet to give a monthly cost estimate with current apis.
+It's not all cloud, though: the wake word runs on the device, and the speaker verifier behind Voice
+Lock is a small ONNX model that runs in-process on the server's CPU. The long-term goal is to bring
+the heavier pieces local too, especially the LLMs, which would cut costs dramatically.
+
+I don't have enough usage data yet to give a monthly cost estimate with current APIs.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test gate
-(`mix precommit`), and conventions. Framework idioms live in `AGENTS.md`.
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test gates
+(`mix precommit`; `flutter test` and `flutter analyze`), and conventions. Framework idioms live in
+`AGENTS.md`.
 
 ## License
 
