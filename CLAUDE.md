@@ -367,6 +367,12 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
   result also gets a `display` note in its functionResponse (`Gemini.with_card_note/4`) so the
   brain gives the takeaway instead of reciting what the card already shows — without it, a weather
   card came with a seven-day monologue underneath.
+- **A slotted card is ONE per turn** (`App.Cards.slot/1`; today only `keep_score` → `scoreboard`).
+  "Three to Sam, two to Ana…" is parallel calls, and each used to push its own board (#39). The
+  Conversation folds the turn's results (`App.Cards.fold/3`: freshest board, every change this turn
+  as the deltas) and the card carries `slot`, so `card_buffer`, `turn_cards` and the app's thread
+  all REPLACE the turn's earlier card in place. Parallel results land out of order, so each
+  `keep_score` result carries the `version` its board was read at (`Scores.snapshot/1`).
 - **Routine hop refund.** `@max_tool_hops` is 3 and `run_routine` spends a hop before any step
   runs; the FIRST `run_routine` of a turn refunds itself plus `@routine_bonus_hops` (once per turn,
   so re-calling it can't loop).

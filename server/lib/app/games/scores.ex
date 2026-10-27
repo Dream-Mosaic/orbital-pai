@@ -6,7 +6,8 @@ defmodule App.Games.Scores do
   Players match case-insensitively ("SAM" scores for "Sam") and keep the spelling they were
   first given. The board reads leader first; equal scores keep the order the players joined.
   Every write goes through this one process, so parallel tool calls ("two points each to Sam
-  and Ana") can't lose an update.
+  and Ana") can't lose an update. The same process stamps each read (`snapshot/1`), so of two
+  boards the one with the higher version is the fresher.
   """
   use Agent
 
@@ -28,12 +29,25 @@ defmodule App.Games.Scores do
 
   @doc "The owner's board, leader first. `[]` when there's no game."
   @spec board(term()) :: board()
-  def board(owner) do
-    __MODULE__
-    |> Agent.get(&Map.get(&1, owner, %{}))
-    |> Map.values()
-    |> Enum.sort_by(&{-&1.score, &1.seq})
-    |> Enum.map(&Map.take(&1, [:name, :score]))
+  def board(owner), do: owner |> snapshot() |> elem(0)
+
+  @doc """
+  The owner's board and its version: a number taken as this process reads the board, so a
+  higher version saw every write a lower one did. Parallel calls' results can land out of
+  order; the version is how their card keeps the freshest board (`App.Cards.Games`).
+  """
+  @spec snapshot(term()) :: {board(), pos_integer()}
+  def snapshot(owner) do
+    Agent.get(__MODULE__, fn all ->
+      board =
+        all
+        |> Map.get(owner, %{})
+        |> Map.values()
+        |> Enum.sort_by(&{-&1.score, &1.seq})
+        |> Enum.map(&Map.take(&1, [:name, :score]))
+
+      {board, System.unique_integer([:positive, :monotonic])}
+    end)
   end
 
   @doc "Clears the owner's board."

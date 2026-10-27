@@ -218,8 +218,12 @@ defmodule App.Conversations.Conversation do
       card_buffer: [],
       # Every card this turn actually SHOWED (collected at emit time, so a held card counts
       # once :flush_brain releases it and one dropped with an aborted turn never does), newest
-      # first. Persisted with the turn for history replay; reset with the turn fields.
+      # first. Persisted with the turn for history replay; reset with the turn fields. A card
+      # with a slot (the scoreboard) replaces the one before it here, in card_buffer and on screen.
       turn_cards: [],
+      # Each card slot's tool results this turn, folded into one (App.Cards.fold/3), so parallel
+      # keep_score calls make ONE scoreboard marking every change this turn made.
+      turn_slots: %{},
       # Tools that SUCCEEDED this turn, newest first: {name, args}. If the turn is aborted before
       # it answers, its request is carried forward — and without this the next brain would run
       # them again (interrupt "set a pasta timer" and two timers ring).
@@ -825,6 +829,8 @@ defmodule App.Conversations.Conversation do
         do: data,
         else: %{data | turn_actions: [{name, args} | data.turn_actions]}
 
+    {result, data} = fold_slot(data, name, result)
+
     case App.Cards.from_tool(name, args, result) do
       nil ->
         {:keep_state, data}
@@ -833,7 +839,7 @@ defmodule App.Conversations.Conversation do
         if data.policy.reflex_sent do
           {:keep_state, emit_card(data, card)}
         else
-          {:keep_state, %{data | card_buffer: [card | data.card_buffer]}}
+          {:keep_state, %{data | card_buffer: put_card(data.card_buffer, card)}}
         end
     end
   end
@@ -2257,6 +2263,7 @@ defmodule App.Conversations.Conversation do
          caption_buffer: [],
          card_buffer: [],
          turn_cards: [],
+         turn_slots: %{},
          turn_actions: [],
          pending_answer: nil,
          agenda_turn: nil,
@@ -2620,8 +2627,31 @@ defmodule App.Conversations.Conversation do
   # Show a card, and remember it for the turn's persisted row: what replays is what was seen.
   defp emit_card(data, card) do
     emit(data, {:card, card})
-    %{data | turn_cards: [card | data.turn_cards]}
+    %{data | turn_cards: put_card(data.turn_cards, card)}
   end
+
+  # A slot tool's result (App.Cards.slot/1, the scoreboard) folded into the turn's earlier ones,
+  # so the card built from it is the whole turn's.
+  defp fold_slot(data, name, result) do
+    case App.Cards.slot(name) do
+      nil ->
+        {result, data}
+
+      slot ->
+        folded = App.Cards.fold(name, data.turn_slots[slot], result)
+        {folded, %{data | turn_slots: Map.put(data.turn_slots, slot, folded)}}
+    end
+  end
+
+  # Adds a card to a newest-first list (card_buffer, turn_cards). One with a slot takes the
+  # place of the card already in it: the turn shows one scoreboard, where the first one was.
+  defp put_card(cards, %{slot: slot} = card) do
+    if Enum.any?(cards, &(&1[:slot] == slot)),
+      do: Enum.map(cards, &if(&1[:slot] == slot, do: card, else: &1)),
+      else: [card | cards]
+  end
+
+  defp put_card(cards, card), do: [card | cards]
 
   # The cards the turn showed, oldest first and capped for the row (App.Cards.for_history/1).
   defp shown_cards(data), do: data.turn_cards |> Enum.reverse() |> App.Cards.for_history()
@@ -2778,6 +2808,7 @@ defmodule App.Conversations.Conversation do
         caption_buffer: [],
         card_buffer: [],
         turn_cards: [],
+        turn_slots: %{},
         turn_actions: [],
         pending_answer: nil,
         audio_until: nil,

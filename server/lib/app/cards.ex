@@ -36,6 +36,9 @@ defmodule App.Cards do
   @steps_cap 8
   # Cook mode's "Next: …" is a glance ahead, not the step.
   @preview_words 5
+  # Tools whose every result shows the SAME thing (slot/1): the game's scoreboard. Parallel
+  # calls ("three to Sam, two to Ana") must not stack four boards on screen.
+  @slots %{"keep_score" => "scoreboard"}
 
   @doc """
   The card for one tool result, or nil. `opts`: `:now` (UTC `DateTime`) and `:tz` (IANA zone)
@@ -48,12 +51,43 @@ defmodule App.Cards do
       tz: Keyword.get_lazy(opts, :tz, &App.Config.timezone/0)
     }
 
-    build(name, args || %{}, result, ctx)
+    case build(name, args || %{}, result, ctx) do
+      %{} = card when is_map_key(@slots, name) -> Map.put(card, :slot, @slots[name])
+      card -> card
+    end
   rescue
     e ->
       Logger.debug("[cards] #{name} result is not card-shaped: #{Exception.message(e)}")
       nil
   end
+
+  # ---- slots: one card a turn ----
+
+  @doc """
+  The slot a tool's card fills, or nil for a card that stands alone (two lists are two
+  cards). A turn shows one card per slot: the Conversation folds the turn's results for it
+  (`fold/3`), and each card it builds carries `slot`, so the app and the turn's history put it
+  where the slot's earlier card was instead of adding another.
+  """
+  @spec slot(String.t()) :: String.t() | nil
+  def slot(name), do: @slots[name]
+
+  @doc """
+  A slot tool's `result` folded into the turn's earlier results for that slot (`prev`, nil for
+  the first), so the card is the whole turn's: the scoreboard's freshest board, with every
+  change made this turn marked. Any other tool's result is returned as it is, and so is one
+  that won't fold — like a card, a fold must never cost the turn.
+  """
+  @spec fold(String.t(), term(), term()) :: term()
+  def fold("keep_score", prev, result) do
+    App.Cards.Games.fold_scores(prev, result)
+  rescue
+    e ->
+      Logger.debug("[cards] keep_score result does not fold: #{Exception.message(e)}")
+      result
+  end
+
+  def fold(_name, _prev, result), do: result
 
   defp build("get_weather", _args, %{current: %{} = cur} = r, _ctx), do: weather(r, cur)
 

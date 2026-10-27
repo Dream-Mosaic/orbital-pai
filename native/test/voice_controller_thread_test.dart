@@ -224,6 +224,73 @@ void main() {
     expect((vc.thread.last as ThreadLine).text, 'Sunny, 72. Nice.');
   });
 
+  Map<String, dynamic> scoreboard(String delta) => {
+        'card': {
+          'type': 'scoreboard',
+          'slot': 'scoreboard',
+          'title': 'Scoreboard',
+          'rows': [
+            {'rank': '1', 'name': 'Sam', 'points': '3', 'delta': delta},
+          ],
+        },
+      };
+
+  test('a card with a slot replaces the turn\'s earlier one in place, not stacked', () {
+    // Four parallel keep_score calls: the server pushes the board after each, and the
+    // thread keeps ONE, where the first landed, ahead of the answer.
+    vc.debugHandleMessage(msg('transcript', const {'text': 'three to Sam'}));
+    vc.debugHandleMessage(msg('tool_call', const {'name': 'keep_score'}));
+    vc.debugHandleMessage(msg('card', scoreboard('+1')));
+    vc.debugHandleMessage(msg('card', const {
+      'card': {'type': 'weather', 'temp': '72°', 'location': 'Belleville, IL'},
+    }));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'Sam has 3.'}));
+    vc.debugHandleMessage(msg('card', scoreboard('+3')));
+
+    expect(vc.thread.map((i) => i.runtimeType).toList(),
+        [ThreadLine, ThreadToolChip, ThreadCard, ThreadCard, ThreadLine]);
+    final boards = vc.thread.whereType<ThreadCard>().where((c) => c.type == 'scoreboard');
+    expect(boards, hasLength(1));
+    expect((boards.single.data['rows'] as List).single['delta'], '+3');
+    expect(vc.thread[2], same(boards.single), reason: 'where the first board was');
+
+    // and the answer line is still the one a later delta lands on
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': ' Nice.'}));
+    expect((vc.thread.last as ThreadLine).text, 'Sam has 3. Nice.');
+  });
+
+  test('the next turn\'s slotted card is its own, not a replacement', () {
+    vc.debugHandleMessage(msg('card', scoreboard('+3')));
+    vc.debugHandleMessage(msg('listening', const {}));
+    vc.debugHandleMessage(msg('transcript', const {'text': "what's the score"}));
+    vc.debugHandleMessage(msg('card', scoreboard('+2')));
+
+    final boards = vc.thread.whereType<ThreadCard>().toList();
+    expect(boards.map((c) => (c.data['rows'] as List).single['delta']), ['+3', '+2']);
+  });
+
+  test('cards without a slot still stack', () {
+    for (final t in ['72°', '68°']) {
+      vc.debugHandleMessage(msg('card', {
+        'card': {'type': 'weather', 'temp': t, 'location': 'Belleville, IL'},
+      }));
+    }
+    expect(vc.thread.whereType<ThreadCard>(), hasLength(2));
+  });
+
+  test('a slotted card keeps its place when a line before it is removed', () {
+    // _clearThinking removes the "thinking…" line from above the board: the slot's
+    // handle must slide down with it, or the replacement lands on the wrong item.
+    vc.debugHandleMessage(msg('thinking', const {}));
+    vc.debugHandleMessage(msg('card', scoreboard('+1')));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'Sam has 3.'}));
+    vc.debugHandleMessage(msg('card', scoreboard('+3')));
+
+    expect(vc.thread.map((i) => i.runtimeType).toList(), [ThreadCard, ThreadLine]);
+    expect(((vc.thread.first as ThreadCard).data['rows'] as List).single['delta'], '+3');
+    expect((vc.thread.last as ThreadLine).text, 'Sam has 3.');
+  });
+
   test('a card of an unknown type (or with no map) is skipped, never guessed', () {
     vc.debugHandleMessage(msg('card', const {
       'card': {'type': 'hologram', 'x': 1},

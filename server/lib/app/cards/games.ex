@@ -5,6 +5,10 @@ defmodule App.Cards.Games do
   among the options, or a numbered turn order) and `scoreboard` (rank, name, points, leader
   lit). `App.Cards.from_tool/4` routes here; like every card, the strings are made here and the
   client only lays them out.
+
+  A turn shows ONE scoreboard however many `keep_score` calls it made ("three to Sam, two to
+  Ana" is two parallel calls): `fold_scores/2` folds the turn's results into one, and its card
+  replaces the earlier one in the `scoreboard` slot (`App.Cards.slot/1`).
   """
 
   @scoreboard_cap 10
@@ -98,6 +102,7 @@ defmodule App.Cards.Games do
     # Everyone level (and more than one of them) is nobody's lead.
     lead? = length(scores) == 1 or Enum.any?(scores, &(&1.score != top))
     ranks = ranks(scores)
+    changes = changes(r)
 
     rows =
       scores
@@ -109,7 +114,7 @@ defmodule App.Cards.Games do
           name: s.player,
           points: signed_plain(s.score),
           leader: lead? and s.score == top,
-          delta: delta(r, s.player)
+          delta: delta(changes, s.player)
         })
       end)
 
@@ -139,9 +144,45 @@ defmodule App.Cards.Games do
     ranks
   end
 
-  # The points just added, beside the player they went to ("+3"); a set or a show has none.
-  defp delta(%{action: "add", player: player, points: points}, player), do: signed(points)
-  defp delta(_r, _player), do: nil
+  # The points this turn added, beside the player they went to ("+3"); none when they net to 0.
+  defp delta(changes, player) do
+    case Map.get(changes, player, 0) do
+      0 -> nil
+      n -> signed(n)
+    end
+  end
+
+  @doc false
+  # The turn's keep_score results so far (`prev`, nil for the first) folded with the next one:
+  # the freshest board, by `version` — results of parallel calls land in any order, each with
+  # the board it read after its own write — and `changes`, the points each player gained or
+  # lost THIS turn. So the turn's one card marks every move made in it, and a later turn's
+  # board (a fresh fold) marks none of them.
+  def fold_scores(prev, %{} = r) do
+    board = if older?(r, prev), do: prev, else: r
+
+    board
+    |> Map.take([:scores, :leaders, :version])
+    |> Map.put(:changes, changes(changes(prev), r))
+  end
+
+  defp older?(_r, nil), do: false
+  defp older?(%{version: v}, %{version: p}) when is_integer(v) and is_integer(p), do: v < p
+  defp older?(_r, _prev), do: false
+
+  defp changes(nil), do: %{}
+  defp changes(%{changes: %{} = changes}), do: changes
+  defp changes(r), do: changes(%{}, r)
+
+  # An add counts toward its player; a set says what the score IS, so it drops what that player
+  # was added; a reset is a new game.
+  defp changes(_changes, %{action: "reset"}), do: %{}
+
+  defp changes(changes, %{action: "add", player: p, points: n}) when is_integer(n),
+    do: Map.update(changes, p, n, &(&1 + n))
+
+  defp changes(changes, %{action: "set", player: p}), do: Map.delete(changes, p)
+  defp changes(changes, _r), do: changes
 
   defp signed(n) when n >= 0, do: "+" <> group(n)
   defp signed(n), do: @minus <> group(-n)

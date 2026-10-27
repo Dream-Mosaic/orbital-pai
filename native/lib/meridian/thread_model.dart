@@ -223,6 +223,14 @@ class ThreadCard extends ThreadItem {
   final String type;
   final Map<String, dynamic> data;
 
+  /// The slot this card fills (`App.Cards.slot/1`), or null for a card that
+  /// stands alone. A turn shows one card per slot: the scoreboard after four
+  /// parallel `keep_score` calls replaces the one before it, where it was.
+  String? get slot {
+    final s = data['slot'];
+    return s is String ? s : null;
+  }
+
   /// The card types this build can lay out. Anything else is skipped at the
   /// router, never rendered as a guess.
   static const Set<String> knownTypes = {

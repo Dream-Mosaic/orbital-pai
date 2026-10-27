@@ -95,6 +95,7 @@ const Map<String, dynamic> turnOrderCard = {
 
 const Map<String, dynamic> scoreboardCard = {
   'type': 'scoreboard',
+  'slot': 'scoreboard',
   'title': 'Scoreboard',
   'trailing': '4 players',
   'rows': [
