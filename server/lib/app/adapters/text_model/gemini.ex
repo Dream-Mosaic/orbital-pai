@@ -715,7 +715,7 @@ defmodule App.Adapters.TextModel.Gemini do
   defp max_output_tokens(:memory), do: 1024
   # Generous: the brain THINKS (thinking tokens count here) AND may run a tool round before its
   # spoken answer; 512 occasionally got eaten by thinking → MAX_TOKENS → empty reply. 4096 since
-  # the brain moved to `medium` thinking.
+  # the brain moved to `medium` thinking; kept at `low` (#51) so raising it again stays safe.
   defp max_output_tokens(_brain), do: 4096
 
   defp system_for(:reflex, cfg, _ctx), do: reflex_prompt(cfg.name)

@@ -221,11 +221,16 @@ Semantic memory needs Qdrant: `docker compose -f docker-compose.dev.yml up -d` (
 - **SQLite single-writer:** DB-touching tests are `async: false`; `conversation_test` uses a shared
   Ecto sandbox so background persist tasks don't `OwnershipError`. A residual intermittent
   `App.Google.AccountsTest` **"Database busy"** flake exists (passes on re-run) — not a regression.
-- **Model IDs:** per-tier Gemini (`App.Config :model_brain` = `gemini-3.8-flash` @ `medium`,
+- **Model IDs:** per-tier Gemini (`App.Config :model_brain` = `gemini-3.8-flash` @ `low`,
   `:model_reflex` = `gemini-3.6-flash` @ `minimal`), Cartesia STT `ink-2` (`:stt_model`), Cartesia
   TTS Sonic (`:tts_model`). **3.7+/3.8 Flash reject `minimal` thinking (400)** — the reflex must stay
   on a model that accepts it; at `low` those models think 0–500 tokens (2–3.5s tail, blows the
   24-token reflex cap). Probed 2026-09-11.
+- **A slow answer is the brain's Gemini rounds, not tools or TTS** (#51). At `medium` thinking a
+  round took p50 5.4 s / p90 9.9 s in prod (tools: ms; context + TTS pre-warm: < 0.3 s; Cartesia's
+  first audio: ~0.2 s after the text), and a tool turn is two rounds, so the brain moved to `low`.
+  Each `[gemini] round:` line ends with its profile: `in Nms (first output at Nms),
+  thinking=<level> N tok, prompt N tok (N cached), out N tok`. Read it before blaming anything else.
 - **Two-user model:** `App.Users` + `:allowed_users` allowlist (each entry = canonical `email` +
   optional `aliases`, all log into one instance, keyed by canonical email).
   Per-user scoping by `user_id` across turns/reminders/profile_facts/summary/google_accounts.
