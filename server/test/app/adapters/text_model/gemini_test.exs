@@ -326,6 +326,81 @@ defmodule App.Adapters.TextModel.GeminiTest do
     assert Gemini.extract_calls(decoded) == []
   end
 
+  describe "the round's latency profile (#51)" do
+    defp chunk(parts, extra \\ %{}) do
+      Map.merge(%{"candidates" => [%{"content" => %{"parts" => parts}}]}, extra)
+    end
+
+    @usage %{
+      "usageMetadata" => %{
+        "promptTokenCount" => 14_210,
+        "cachedContentTokenCount" => 12_288,
+        "candidatesTokenCount" => 41,
+        "thoughtsTokenCount" => 1_830
+      }
+    }
+
+    test "track_chunk stamps the first output once, on text or a call, never on a bare chunk" do
+      stats = Gemini.track_chunk(Gemini.new_round_stats(), %{"usageMetadata" => %{}}, 900)
+      assert stats.first_ms == nil
+
+      stats = Gemini.track_chunk(stats, chunk([%{"text" => "Sure"}]), 6_610)
+      stats = Gemini.track_chunk(stats, chunk([%{"text" => " thing."}]), 6_700)
+      assert stats.first_ms == 6_610
+
+      call_chunk = chunk([%{"functionCall" => %{"name" => "get_weather", "args" => %{}}}])
+      assert Gemini.track_chunk(Gemini.new_round_stats(), call_chunk, 4_200).first_ms == 4_200
+    end
+
+    test "track_chunk keeps the latest usage (Gemini's last chunk carries the totals)" do
+      stats =
+        Gemini.new_round_stats()
+        |> Gemini.track_chunk(
+          chunk([%{"text" => "a"}], %{"usageMetadata" => %{"promptTokenCount" => 14_210}}),
+          10
+        )
+        |> Gemini.track_chunk(chunk([%{"text" => "b"}], @usage), 20)
+
+      assert stats.usage == %{prompt: 14_210, cached: 12_288, thoughts: 1_830, out: 41}
+    end
+
+    test "track_chunk counts the server-side web searches a grounded round ran" do
+      grounded =
+        %{
+          "candidates" => [
+            %{
+              "content" => %{"parts" => [%{"text" => "It's 72."}]},
+              "groundingMetadata" => %{"webSearchQueries" => ["a", "b"]}
+            }
+          ]
+        }
+
+      assert Gemini.track_chunk(Gemini.new_round_stats(), grounded, 5).searches == 2
+      assert Gemini.track_chunk(Gemini.new_round_stats(), chunk([]), 5).searches == 0
+    end
+
+    test "round_profile says where the time went: total, first output, thinking, prompt, cache" do
+      stats =
+        Gemini.new_round_stats()
+        |> Gemini.track_chunk(chunk([%{"text" => "Sure."}], @usage), 6_610)
+
+      assert Gemini.round_profile(stats, 6_812, "medium") ==
+               "in 6812ms (first output at 6610ms), thinking=medium 1830 tok, " <>
+                 "prompt 14210 tok (12288 cached), out 41 tok"
+    end
+
+    test "round_profile names the web searches only when a round ran some" do
+      stats = %{Gemini.new_round_stats() | first_ms: 3_000, searches: 2}
+      assert Gemini.round_profile(stats, 3_100, "low") =~ ", 2 web searches"
+      refute Gemini.round_profile(%{stats | searches: 0}, 3_100, "low") =~ "search"
+    end
+
+    test "round_profile is honest about a round that reported nothing" do
+      assert Gemini.round_profile(Gemini.new_round_stats(), 30_000, "low") ==
+               "in 30000ms (no output), thinking=low, no usage reported"
+    end
+  end
+
   test "model_call_parts echoes the thought_signature back (Gemini 3 requires it)" do
     calls = [call("get_weather", %{args: %{"location" => "STL"}, sig: "sig-abc"})]
 

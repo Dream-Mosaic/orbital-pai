@@ -8,7 +8,13 @@ defmodule App.Config do
             model_brain: "gemini-3.8-flash",
             model_reflex: "gemini-3.6-flash",
             reflex_thinking: "minimal",
-            brain_thinking: "medium",
+            # `low`, not `medium` (#51): a brain round is the slow part of every turn. Prod logs
+            # 2026-10-27..11-03 at `medium`: the first round p50 5.4 s / p90 9.9 s, the round
+            # after a tool p50 4.4 s, while tools, context and TTS together add well under a
+            # second — and a tool turn is two rounds. The `[gemini] round:` line logs each
+            # round's time and thinking tokens; compare before raising it. SMOKE-GATED: watch
+            # tool choice and computed times (reminders, events) on a live session.
+            brain_thinking: "low",
             # "Henry, look at this" (App.Tools.Look): one multimodal call per photo. nil = the
             # brain model. `low`, not `minimal` — 3.7+/3.8 Flash reject `minimal` (400).
             model_vision: nil,

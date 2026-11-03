@@ -414,6 +414,9 @@ defmodule App.Adapters.TextModel.Gemini do
     Process.put(:sse_calls, [])
     Process.put(:sse_finish, nil)
     Process.put(:sse_text_len, 0)
+    Process.put(:sse_stats, new_round_stats())
+    started = System.monotonic_time(:millisecond)
+    Process.put(:sse_started, started)
 
     result =
       Req.post(url,
@@ -436,10 +439,16 @@ defmodule App.Adapters.TextModel.Gemini do
 
     # Per-round outcome — proves what each brain round produced: spoken text vs. tool calls vs.
     # an empty round (0 calls + 0 chars = the model returned nothing). `tools=false` marks the
-    # forced final answer round (B1).
+    # forced final answer round (B1). The profile after it says where the round's time went
+    # (round_profile/3): nearly all of a slow turn is spent here, not in tools or TTS (#51).
     Logger.info(
       "[gemini] round: #{length(calls)} calls, #{Process.get(:sse_text_len, 0)} chars, " <>
-        "tools=#{tools?}, finish=#{inspect(Process.get(:sse_finish))}"
+        "tools=#{tools?}, finish=#{inspect(Process.get(:sse_finish))}, " <>
+        round_profile(
+          Process.get(:sse_stats),
+          System.monotonic_time(:millisecond) - started,
+          thinking
+        )
     )
 
     case result do
@@ -560,6 +569,9 @@ defmodule App.Adapters.TextModel.Gemini do
 
       if fr = finish_reason(decoded), do: Process.put(:sse_finish, fr)
 
+      elapsed = System.monotonic_time(:millisecond) - Process.get(:sse_started)
+      Process.put(:sse_stats, track_chunk(Process.get(:sse_stats), decoded, elapsed))
+
       case extract_calls(decoded) do
         [] -> :ok
         calls -> Process.put(:sse_calls, Process.get(:sse_calls, []) ++ calls)
@@ -570,6 +582,71 @@ defmodule App.Adapters.TextModel.Gemini do
   end
 
   defp emit_line(_line, _target), do: :ok
+
+  @doc false
+  # A round's latency profile (#51), folded chunk by chunk: when its first output (text or a
+  # call) arrived, Gemini's token usage (the last chunk carries the totals; it omits a count
+  # that is zero) and how many server-side web searches a grounded round ran.
+  def new_round_stats, do: %{first_ms: nil, usage: nil, searches: 0}
+
+  @doc false
+  def track_chunk(stats, decoded, elapsed_ms) do
+    stats
+    |> stamp_first_output(decoded, elapsed_ms)
+    |> put_usage(decoded)
+    |> put_searches(decoded)
+  end
+
+  defp stamp_first_output(%{first_ms: nil} = stats, decoded, elapsed_ms) do
+    if raw_text(decoded) != "" or extract_calls(decoded) != [],
+      do: %{stats | first_ms: elapsed_ms},
+      else: stats
+  end
+
+  defp stamp_first_output(stats, _decoded, _elapsed_ms), do: stats
+
+  defp put_usage(stats, %{"usageMetadata" => usage}) when is_map(usage) and map_size(usage) > 0 do
+    %{
+      stats
+      | usage: %{
+          prompt: Map.get(usage, "promptTokenCount", 0),
+          cached: Map.get(usage, "cachedContentTokenCount", 0),
+          thoughts: Map.get(usage, "thoughtsTokenCount", 0),
+          out: Map.get(usage, "candidatesTokenCount", 0)
+        }
+    }
+  end
+
+  defp put_usage(stats, _decoded), do: stats
+
+  defp put_searches(stats, %{
+         "candidates" => [%{"groundingMetadata" => %{"webSearchQueries" => queries}} | _]
+       })
+       when is_list(queries),
+       do: %{stats | searches: max(stats.searches, length(queries))}
+
+  defp put_searches(stats, _decoded), do: stats
+
+  @doc false
+  # The tail of the `[gemini] round:` line. "first output" is the time to the first text or
+  # call: the request, prompt processing and all of the thinking. Counts and durations only,
+  # never content, so it is safe in production logs.
+  def round_profile(stats, elapsed_ms, thinking) do
+    first =
+      if stats.first_ms, do: "first output at #{stats.first_ms}ms", else: "no output"
+
+    "in #{elapsed_ms}ms (#{first}), thinking=#{thinking}" <>
+      usage_note(stats.usage) <> searches_note(stats.searches)
+  end
+
+  defp usage_note(nil), do: ", no usage reported"
+
+  defp usage_note(u),
+    do: " #{u.thoughts} tok, prompt #{u.prompt} tok (#{u.cached} cached), out #{u.out} tok"
+
+  defp searches_note(0), do: ""
+  defp searches_note(1), do: ", 1 web search"
+  defp searches_note(n), do: ", #{n} web searches"
 
   @doc false
   # Gemini puts the round's stop cause on the first candidate (only on the final chunk).
@@ -638,7 +715,7 @@ defmodule App.Adapters.TextModel.Gemini do
   defp max_output_tokens(:memory), do: 1024
   # Generous: the brain THINKS (thinking tokens count here) AND may run a tool round before its
   # spoken answer; 512 occasionally got eaten by thinking → MAX_TOKENS → empty reply. 4096 since
-  # the brain moved to `medium` thinking.
+  # the brain moved to `medium` thinking; kept at `low` (#51) so raising it again stays safe.
   defp max_output_tokens(_brain), do: 4096
 
   defp system_for(:reflex, cfg, _ctx), do: reflex_prompt(cfg.name)

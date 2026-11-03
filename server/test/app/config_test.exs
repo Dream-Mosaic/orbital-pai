@@ -5,7 +5,9 @@ defmodule App.ConfigTest do
   test "default/0 has distinct thinking per tier and sane audio defaults" do
     c = Config.default()
     assert c.reflex_thinking == "minimal"
-    assert c.brain_thinking == "medium"
+    # `low`, not `medium`: the brain's rounds ARE the slow part of a turn (#51), and a voice
+    # answer is a sentence or two. Smoke-gated — see App.Config.
+    assert c.brain_thinking == "low"
     # 3.7+/3.8 Flash reject "minimal" (400), so the reflex must stay on a model that accepts it.
     assert c.model_reflex == "gemini-3.6-flash"
     assert c.model_brain == "gemini-3.8-flash"
