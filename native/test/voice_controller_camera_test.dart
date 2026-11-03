@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbital_pai/connection/app_connection.dart';
+import 'package:orbital_pai/meridian/thread_model.dart';
 import 'package:orbital_pai/phoenix/decoded_message.dart';
 import 'package:orbital_pai/voice/camera_relay.dart';
 import 'package:orbital_pai/voice/voice_controller.dart';
@@ -280,6 +281,39 @@ void main() {
     vc.addListener(() => notified++);
     captureReq('c1');
     expect(notified, greaterThan(0));
+  });
+
+  // #47: a look turn left the faint "Henry: thinking…" placeholder behind,
+  // between your words and the reflex, while weather/dice/score turns cleared
+  // it. The whole turn as the server sends it, camera exchange included.
+  test('a look turn ends with no thinking placeholder in the thread', () async {
+    vc.debugHandleMessage(msg('speaking', const {}));
+    vc.debugHandleMessage(msg('transcript', const {'text': 'take a look. What do you see?'}));
+    vc.debugHandleMessage(msg('thinking', const {}));
+    vc.debugHandleMessage(msg('speak_start', const {'source': 'reflex', 'text': 'Well.'}));
+    vc.debugHandleMessage(msg('metrics', const {'ttfa': 188}));
+    vc.debugHandleMessage(msg('tool_call', const {'name': 'look'}));
+    vc.debugHandleMessage(msg('metrics', const {'ttfa': 188, 'ttb': 2481}));
+    captureReq('c1');
+    await settle();
+    expect(frames().single['id'], 'c1');
+    doneFor('c1');
+    vc.debugHandleMessage(msg('card', const {
+      'card': {'type': 'photo', 'capture_id': 'c1', 'caption': 'What do you see?'},
+    }));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'A mug, '}));
+    vc.debugHandleMessage(msg('brain_delta', const {'delta': 'and it says Henry.'}));
+    vc.debugHandleMessage(
+        msg('speak_start', const {'source': 'brain', 'text': 'A mug, and it says Henry.'}));
+    vc.debugHandleMessage(msg('listening', const {}));
+
+    final lines = vc.thread.whereType<ThreadLine>();
+    expect(lines.where((l) => l.thinking), isEmpty);
+    expect(lines.map((l) => l.text),
+        ['take a look. What do you see?', 'Well.', 'A mug, and it says Henry.']);
+    expect(vc.thread.whereType<ThreadCard>().single.type, 'photo');
+    expect(vc.thread.whereType<ThreadToolChip>().single.resolved, isTrue,
+        reason: 'the look chip resolves with the answer, it is not left at "…"');
   });
 
   test('dispose mid-capture closes the camera', () async {

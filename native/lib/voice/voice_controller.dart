@@ -370,15 +370,19 @@ class VoiceController extends ChangeNotifier {
   final List<ThreadItem> _thread = <ThreadItem>[];
 
   // Turn-scoped handles, all reset on `listening`/`state` exactly as index.js
-  // resets brainEl / metricsEl / toolChips / thinkingEl.
+  // resets brainEl / metricsEl.
   int? _brainIndex;
   // The line `_brainIndex` points at holds the turn's FINAL answer (a speak_start landed on
   // it), so nothing more may be appended to it and no second brain line may be opened for
   // this turn. Cleared with `_brainIndex`, on exactly the same events.
   bool _brainFinalized = false;
   int? _metricsIndex;
-  int? _thinkingIndex;
-  final List<int> _toolChipIndexes = <int>[];
+  // The "thinking…" placeholder and the tool chips hold NO handle: they are
+  // found by what they are (#47, where the placeholder and an unresolved chip
+  // outlived Henry's answer on the wall). A stored index is only as right as
+  // every insert and removal before it. Every placeholder and every
+  // unresolved chip belongs to the live turn — the end of a turn clears the
+  // one and drops the others — so a scan finds exactly the right items.
   // Where this turn's card in each slot sits (a card sent with a `slot`, like
   // the scoreboard), so a later one replaces it instead of stacking another.
   final Map<String, int> _slotIndexes = <String, int>{};
@@ -626,57 +630,50 @@ class VoiceController extends ChangeNotifier {
     if (assistant != null) _addLine('brain', assistant);
   }
 
+  static bool _isThinking(ThreadItem item) => item is ThreadLine && item.thinking;
+
+  static bool _isUnresolvedChip(ThreadItem item) =>
+      item is ThreadToolChip && !item.resolved;
+
+  /// One placeholder at most: a second `thinking` while one shows is the same
+  /// wait, not a new one.
   void _showThinking() {
-    if (_thinkingIndex != null) return;
+    if (_thread.any(_isThinking)) return;
     _thread.add(const ThreadLine(
       kind: LineKind.brain,
       label: assistantName,
       text: '$assistantName: thinking…',
       thinking: true,
     ));
-    _thinkingIndex = _thread.length - 1;
   }
 
-  void _clearThinking() {
-    final i = _thinkingIndex;
-    _thinkingIndex = null;
-    if (i == null || i >= _thread.length) return;
-    _thread.removeAt(i);
-    _shiftHandlesAfter(i);
-  }
+  void _clearThinking() => _removeWhere(_isThinking);
 
   void _resolveToolChips() {
-    for (final i in _toolChipIndexes) {
-      if (i < _thread.length && _thread[i] is ThreadToolChip) {
-        _thread[i] = (_thread[i] as ThreadToolChip).resolve();
-      }
+    for (var i = 0; i < _thread.length; i++) {
+      final item = _thread[i];
+      if (item is ThreadToolChip && !item.resolved) _thread[i] = item.resolve();
     }
-    _toolChipIndexes.clear();
   }
 
   /// A turn barged mid-tool-call: drop the chips that never resolved. Resolved ✓
-  /// chips are already out of the list and stay in the log as the turn's story.
-  void _dropUnresolvedToolChips() {
-    final doomed = _toolChipIndexes.toList()..sort((a, b) => b.compareTo(a));
-    for (final i in doomed) {
-      if (i < _thread.length && _thread[i] is ThreadToolChip) {
-        _thread.removeAt(i);
-        _shiftHandlesAfter(i);
-      }
+  /// chips stay in the log as the turn's story.
+  void _dropUnresolvedToolChips() => _removeWhere(_isUnresolvedChip);
+
+  /// Remove every item [test] matches, sliding the turn handles after each.
+  /// Back to front, so an index not yet visited is never one that moved.
+  void _removeWhere(bool Function(ThreadItem) test) {
+    for (var i = _thread.length - 1; i >= 0; i--) {
+      if (!test(_thread[i])) continue;
+      _thread.removeAt(i);
+      _shiftHandlesAfter(i);
     }
-    _toolChipIndexes.clear();
   }
 
   void _shiftHandlesAfter(int removed) {
     if (_brainIndex != null && _brainIndex! > removed) _brainIndex = _brainIndex! - 1;
     if (_metricsIndex != null && _metricsIndex! > removed) {
       _metricsIndex = _metricsIndex! - 1;
-    }
-    if (_thinkingIndex != null && _thinkingIndex! > removed) {
-      _thinkingIndex = _thinkingIndex! - 1;
-    }
-    for (var i = 0; i < _toolChipIndexes.length; i++) {
-      if (_toolChipIndexes[i] > removed) _toolChipIndexes[i] -= 1;
     }
     _slotIndexes.updateAll((_, i) => i > removed ? i - 1 : i);
   }
@@ -725,8 +722,6 @@ class VoiceController extends ChangeNotifier {
     _brainIndex = null;
     _brainFinalized = false;
     _metricsIndex = null;
-    _thinkingIndex = null;
-    _toolChipIndexes.clear();
     _slotIndexes.clear();
     _safeNotify();
   }
@@ -1175,8 +1170,6 @@ class VoiceController extends ChangeNotifier {
           _brainIndex = null;
           _brainFinalized = false;
           _metricsIndex = null;
-          _thinkingIndex = null;
-          _toolChipIndexes.clear();
           _slotIndexes.clear();
           for (final t in turns) {
             _addHistoryTurn((t as Map).cast<String, dynamic>());
@@ -1252,7 +1245,6 @@ class VoiceController extends ChangeNotifier {
         _thread[i] = line.copyWith(text: line.text + delta);
       case 'tool_call':
         _thread.add(ThreadToolChip(name: (p['name'] as String?) ?? 'tool'));
-        _toolChipIndexes.add(_thread.length - 1);
       case 'card':
         // A visual answer (App.Cards), appended in arrival order. Unknown types
         // are dropped rather than guessed at. A card with a slot (the

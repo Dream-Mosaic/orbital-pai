@@ -190,6 +190,21 @@ void main() {
     expect(line.thinking, isFalse);
   });
 
+  test('one thinking placeholder at most, and the answer takes it away', () {
+    vc.debugHandleMessage(msg('transcript', const {'text': 'what do you see'}));
+    vc.debugHandleMessage(msg('thinking', const {}));
+    vc.debugHandleMessage(msg('speak_start', const {'source': 'reflex', 'text': 'Well.'}));
+    vc.debugHandleMessage(msg('thinking', const {}));
+    expect(vc.thread.whereType<ThreadLine>().where((l) => l.thinking), hasLength(1),
+        reason: 'a second `thinking` is the same wait, not a new line');
+
+    vc.debugHandleMessage(msg('tool_call', const {'name': 'look'}));
+    vc.debugHandleMessage(msg('speak_start', const {'source': 'brain', 'text': 'A mug.'}));
+    expect(vc.thread.whereType<ThreadLine>().map((l) => l.text),
+        ['what do you see', 'Well.', 'A mug.']);
+    expect(vc.thread.whereType<ThreadToolChip>().single.resolved, isTrue);
+  });
+
   test('tool chips resolve when the answer starts and vanish on listening', () {
     vc.debugHandleMessage(msg('tool_call', const {'name': 'get_weather'}));
     vc.debugHandleMessage(msg('tool_call', const {'name': 'unknown_tool'}));
