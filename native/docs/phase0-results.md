@@ -1,5 +1,10 @@
 # Phase 0 Spike Results
 
+> **Not measured.** The cells below were never filled in; the spike was overtaken by the
+> Ink-2 server-side barge-in design (server `turn.start`, confirmed by real words), which does
+> not depend on a device AEC verdict. Treat every TBD as "unknown", not "passed". Re-run the
+> procedure on a target tablet if open-mic barge-in on speaker output ever misbehaves.
+
 ## Binary Phoenix Channels from Dart
 - Codec unit tests: TBD
 - Live join to voice:henry: TBD
